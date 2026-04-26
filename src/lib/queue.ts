@@ -20,9 +20,9 @@ function parseRedisConnection(): ConnectionOptions {
 export const redisConnection = parseRedisConnection();
 
 // ─── Queue names ──────────────────────────────────────────────────────────────
-export const QUEUE_BULK = 'continuum:bulk';
-export const QUEUE_MONITOR = 'continuum:monitor';
-export const QUEUE_WEBHOOK = 'continuum:webhooks';
+export const QUEUE_BULK = 'continuum-bulk';
+export const QUEUE_MONITOR = 'continuum-monitor';
+export const QUEUE_WEBHOOK = 'continuum-webhooks';
 
 // ─── Queue instances ──────────────────────────────────────────────────────────
 // Queues are lightweight producers — instantiated in the API server.
