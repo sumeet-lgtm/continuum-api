@@ -195,7 +195,7 @@ async function processMonitor(monitor: MonitorRecord): Promise<void> {
         monitorId:      monitor.id,
         verificationId: result.id,
         statusChanged,
-        previousStatus: previousStatus ?? undefined,
+        previousStatus: (previousStatus ?? undefined) as never,
         newStatus,
         source:         monitor.source,
         checkedAt,

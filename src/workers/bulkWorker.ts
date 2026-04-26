@@ -188,7 +188,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
         continue;
       }
 
-      const { row, result, error } = settled.value;
+      const { row, result, error } = (settled as PromiseFulfilledResult<typeof settled extends PromiseFulfilledResult<infer T> ? T : never>).value;
       processedCount++;
 
       if (error || !result) {

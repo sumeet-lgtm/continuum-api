@@ -396,13 +396,10 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
         webhookId:          string;
         delivered?:         boolean;
         failedPermanently?: boolean;
-        event?:             string;
+        event?:             never; // filtered in JS after fetch
       };
 
-      const where: DeliveryWhere = { webhookId: webhook.id };
-      if (delivered         !== undefined) where.delivered         = delivered;
-      if (failedPermanently !== undefined) where.failedPermanently = failedPermanently;
-      if (event             !== undefined) where.event             = event;
+      const where = { webhookId: webhook.id, ...(delivered !== undefined && { delivered }), ...(failedPermanently !== undefined && { failedPermanently }) };
 
       const [deliveries, total] = await Promise.all([
         prisma.webhookDelivery.findMany({
