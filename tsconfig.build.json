@@ -5,7 +5,8 @@
     "sourceMap": false,
     "declarationMap": false,
     "skipLibCheck": true,
-    "strict": true
+    "strict": true,
+    "exactOptionalPropertyTypes": false
   },
   "include": [
     "src/**/*"
