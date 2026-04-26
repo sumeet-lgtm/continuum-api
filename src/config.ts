@@ -1,0 +1,69 @@
+import { z } from 'zod';
+
+const envSchema = z.object({
+  // Server
+  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  HOST: z.string().default('0.0.0.0'),
+
+  // Database
+  DATABASE_URL: z.string().url('DATABASE_URL must be a valid PostgreSQL connection string'),
+
+  // Redis
+  REDIS_URL: z.string().min(1, 'REDIS_URL is required'),
+
+  // Supabase
+  SUPABASE_URL: z.string().url('SUPABASE_URL must be a valid URL'),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, 'SUPABASE_SERVICE_ROLE_KEY is required'),
+
+  // Storage
+  STORAGE_BUCKET_UPLOADS: z.string().default('continuum-uploads'),
+  STORAGE_BUCKET_EXPORTS: z.string().default('continuum-exports'),
+
+  // SMTP verification
+  SMTP_CHECK_ENABLED: z
+    .string()
+    .transform((v) => v.toLowerCase() === 'true')
+    .default('true'),
+  SMTP_CHECK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(5000),
+  SMTP_HELO_DOMAIN: z
+    .string()
+    .min(1, 'SMTP_HELO_DOMAIN is required when SMTP_CHECK_ENABLED=true')
+    .default('localhost'),
+
+  // Rate limiting
+  DEFAULT_RATE_LIMIT_RPM: z.coerce.number().int().min(1).max(100000).default(1000),
+
+  // Webhook delivery
+  WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
+  WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
+
+  // Internal
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  API_KEY_SALT: z
+    .string()
+    .min(16, 'API_KEY_SALT must be at least 16 characters')
+    .default('dev-salt-change-in-production'),
+});
+
+export type Config = z.infer<typeof envSchema>;
+
+function loadConfig(): Config {
+  const result = envSchema.safeParse(process.env);
+
+  if (!result.success) {
+    const formatted = result.error.issues
+      .map((issue) => `  ${issue.path.join('.')}: ${issue.message}`)
+      .join('\n');
+    throw new Error(`Environment configuration is invalid:\n${formatted}`);
+  }
+
+  return result.data;
+}
+
+// Singleton — loaded once at startup, throws immediately if invalid
+export const config = loadConfig();
+
+export const isDev = config.NODE_ENV === 'development';
+export const isProd = config.NODE_ENV === 'production';
+export const isTest = config.NODE_ENV === 'test';

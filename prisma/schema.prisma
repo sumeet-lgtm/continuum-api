@@ -1,0 +1,280 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── API Keys ────────────────────────────────────────────────────────────────
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  keyHash     String    @unique // SHA-256(salt + raw_key)
+  keyPrefix   String    // first 8 chars of raw key for display/support
+  label       String?
+  ownerId     String? // external user/org ID from the calling system
+  rateLimit   Int       @default(1000) // requests per minute ceiling
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  verifications Verification[]
+  bulkJobs      BulkJob[]
+  monitors      Monitor[]
+  webhooks      Webhook[]
+
+  @@map("api_keys")
+}
+
+// ─── Verification Results ────────────────────────────────────────────────────
+
+model Verification {
+  id              String             @id @default(cuid())
+  email           String
+  domain          String
+  status          VerificationStatus
+  subStatus       String? // granular reason: smtp_timeout, catch_all, dns_error, etc.
+  syntaxValid     Boolean
+  mxFound         Boolean
+  mxRecords       String[]
+  isDisposable    Boolean
+  isRoleAccount   Boolean
+  smtpChecked     Boolean
+  smtpReachable   Boolean? // null when smtpChecked = false
+  smtpRawResponse String?
+  isCatchAll      Boolean?
+  greylisted      Boolean  @default(false) // 4xx RCPT TO — address may exist, retry later
+  score           Int // 0-100 internal confidence
+  durationMs      Int
+  checkedAt       DateTime @default(now())
+  apiKeyId        String
+  bulkJobId       String?
+  sourceIp        String?
+
+  apiKey  ApiKey   @relation(fields: [apiKeyId], references: [id])
+  bulkJob BulkJob? @relation(fields: [bulkJobId], references: [id])
+
+  @@index([email])
+  @@index([apiKeyId])
+  @@index([checkedAt])
+  @@index([bulkJobId])
+  @@map("verifications")
+}
+
+enum VerificationStatus {
+  valid
+  invalid
+  risky
+  unknown
+}
+
+// ─── Bulk CSV Jobs ────────────────────────────────────────────────────────────
+
+model BulkJob {
+  id             String        @id @default(cuid())
+  apiKeyId       String
+  fileName       String // original filename from upload
+  storagePath    String // Supabase Storage object path in uploads bucket
+  totalEmails    Int
+  processedCount Int           @default(0)
+  validCount     Int           @default(0)
+  invalidCount   Int           @default(0)
+  riskyCount     Int           @default(0)
+  unknownCount   Int           @default(0)
+  duplicateCount Int           @default(0) // rows skipped as duplicates of earlier rows
+  errorCount     Int           @default(0) // rows where the engine threw unexpectedly
+  status         BulkJobStatus @default(pending)
+  errorMessage   String?
+  exportPath     String? // Supabase Storage path in exports bucket (optional — results also in DB)
+  createdAt      DateTime      @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  cancelledAt    DateTime?
+  webhookSent    Boolean       @default(false)
+
+  apiKey        ApiKey          @relation(fields: [apiKeyId], references: [id])
+  verifications Verification[]
+  emailRows     BulkJobEmail[]
+
+  @@index([apiKeyId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("bulk_jobs")
+}
+
+// ─── Per-row result tracking ──────────────────────────────────────────────────
+
+model BulkJobEmail {
+  id             String    @id @default(cuid())
+  bulkJobId      String
+  email          String
+  rowIndex       Int       // 0-based position in the original CSV (after header strip)
+  isDuplicate    Boolean   @default(false)
+
+  // Populated after verification completes (null while pending/duplicate)
+  status         String?
+  subStatus      String?
+  score          Int?
+  domain         String?
+  isDisposable   Boolean?
+  isRoleAccount  Boolean?
+  mxFound        Boolean?
+  smtpChecked    Boolean?
+  smtpReachable  Boolean?
+  isCatchAll     Boolean?
+  greylisted     Boolean   @default(false)
+  durationMs     Int?
+  verificationId String?   // FK to Verification.id — nullable because engine may fail
+  errorMessage   String?   // set only if engine threw an unexpected error
+  processedAt    DateTime?
+
+  bulkJob BulkJob @relation(fields: [bulkJobId], references: [id], onDelete: Cascade)
+
+  @@index([bulkJobId])
+  @@index([bulkJobId, status])
+  @@index([bulkJobId, rowIndex])
+  @@map("bulk_job_emails")
+}
+
+enum BulkJobStatus {
+  pending
+  processing
+  completed
+  failed
+}
+
+// ─── Monitored Emails ─────────────────────────────────────────────────────────
+
+model Monitor {
+  id                   String              @id @default(cuid())
+  apiKeyId             String
+  email                String
+  intervalHours        Int                 @default(24)
+  isActive             Boolean             @default(true)
+  lastCheckedAt        DateTime?
+  nextCheckAt          DateTime
+  lastStatus           VerificationStatus?
+  consecutiveFailures  Int                 @default(0) // incremented on engine error, reset on success
+  pausedAt             DateTime?           // set when consecutiveFailures >= MAX_FAILURES
+  failureReason        String?             // last error message when paused
+  tags                 String[]            // caller-defined labels for filtering
+  notifyOnAnyChange    Boolean             @default(true) // fire webhook on every status change
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  apiKey ApiKey         @relation(fields: [apiKeyId], references: [id])
+  checks MonitorCheck[]
+
+  @@unique([apiKeyId, email])
+  @@index([nextCheckAt])
+  @@index([isActive, nextCheckAt])
+  @@map("monitors")
+}
+
+// ─── Monitor Check History ────────────────────────────────────────────────────
+
+model MonitorCheck {
+  id             String              @id @default(cuid())
+  monitorId      String
+  verificationId String
+  statusChanged  Boolean
+  previousStatus VerificationStatus?
+  newStatus      VerificationStatus
+  source         String              @default("scheduled") // "scheduled" | "manual_recheck"
+  checkedAt      DateTime            @default(now())
+  durationMs     Int?                // total wall time for this check in ms
+  webhookSent    Boolean             @default(false)
+
+  monitor Monitor @relation(fields: [monitorId], references: [id])
+
+  @@index([monitorId])
+  @@index([monitorId, checkedAt])
+  @@index([checkedAt])
+  @@map("monitor_checks")
+}
+
+// ─── Webhook Endpoints ────────────────────────────────────────────────────────
+
+model Webhook {
+  id              String         @id @default(cuid())
+  apiKeyId        String
+  url             String
+  secret          String         // random 32-byte hex; used for HMAC-SHA256 signature
+  events          WebhookEvent[]
+  label           String?        // human-readable name for the endpoint
+  description     String?        // optional description
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  lastPingAt      DateTime?
+  lastPingOk      Boolean?
+  // Aggregate delivery stats — updated on each attempt
+  totalDeliveries Int            @default(0)
+  successCount    Int            @default(0)
+  failureCount    Int            @default(0)
+
+  apiKey     ApiKey            @relation(fields: [apiKeyId], references: [id])
+  deliveries WebhookDelivery[]
+
+  @@index([apiKeyId])
+  @@map("webhooks")
+}
+
+enum WebhookEvent {
+  // Phase 5 canonical names (stored as underscore in DB; dot-style is API-only)
+  verification_complete    // emitted as "verification.completed" in payloads
+  bulk_job_complete        // emitted as "bulk_job.completed" in payloads
+  monitor_status_change    // emitted as "email.status_changed" in payloads
+}
+
+// ─── Webhook Delivery Log ─────────────────────────────────────────────────────
+
+model WebhookDelivery {
+  id                String       @id @default(cuid())
+  webhookId         String
+  event             WebhookEvent
+  eventId           String?      // idempotency key: "<event>:<sourceId>"
+  payload           Json
+  attempts          Int          @default(0)
+  maxAttempts       Int          @default(5)
+  nextRetryAt       DateTime?
+  lastAttemptAt     DateTime?
+  statusCode        Int?
+  responseBody      String?
+  errorMessage      String?      // last failure reason in human-readable form
+  delivered         Boolean      @default(false)
+  failedPermanently Boolean      @default(false) // true when maxAttempts exhausted
+  createdAt         DateTime     @default(now())
+
+  webhook  Webhook          @relation(fields: [webhookId], references: [id])
+  attempts_ WebhookAttempt[] @relation("DeliveryAttempts")
+
+  @@index([delivered, nextRetryAt])
+  @@index([webhookId])
+  @@index([eventId])
+  @@map("webhook_deliveries")
+}
+
+// ─── Per-attempt HTTP log ─────────────────────────────────────────────────────
+
+model WebhookAttempt {
+  id            String    @id @default(cuid())
+  deliveryId    String
+  attemptNumber Int
+  requestedAt   DateTime
+  respondedAt   DateTime?
+  durationMs    Int?
+  statusCode    Int?
+  responseBody  String?
+  // Structured error classification
+  errorType     String?   // "timeout" | "connection_refused" | "http_error" | "network_error"
+  errorMessage  String?
+  success       Boolean   @default(false)
+
+  delivery WebhookDelivery @relation("DeliveryAttempts", fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId])
+  @@index([deliveryId, attemptNumber])
+  @@map("webhook_attempts")
+}

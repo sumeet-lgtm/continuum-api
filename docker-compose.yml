@@ -1,0 +1,169 @@
+version: '3.9'
+
+services:
+  # ─── API ───────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: continuum-api
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql://continuum:continuum@postgres:5432/continuum
+      REDIS_URL: redis://redis:6379
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      STORAGE_BUCKET_UPLOADS: continuum-uploads
+      STORAGE_BUCKET_EXPORTS: continuum-exports
+      SMTP_CHECK_ENABLED: 'true'
+      SMTP_CHECK_TIMEOUT_MS: '5000'
+      SMTP_HELO_DOMAIN: ${SMTP_HELO_DOMAIN:-localhost}
+      DEFAULT_RATE_LIMIT_RPM: '1000'
+      WEBHOOK_MAX_ATTEMPTS: '5'
+      WEBHOOK_TIMEOUT_MS: '10000'
+      LOG_LEVEL: debug
+      API_KEY_SALT: ${API_KEY_SALT:-dev-salt-only-change-for-prod}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - continuum
+
+  # ─── Bulk Worker ───────────────────────────────────────────────────────────
+  worker-bulk:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: continuum-worker-bulk
+    command: ['node', 'dist/workers/bulkWorker.js']
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://continuum:continuum@postgres:5432/continuum
+      REDIS_URL: redis://redis:6379
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      STORAGE_BUCKET_UPLOADS: continuum-uploads
+      STORAGE_BUCKET_EXPORTS: continuum-exports
+      SMTP_CHECK_ENABLED: 'true'
+      SMTP_CHECK_TIMEOUT_MS: '5000'
+      SMTP_HELO_DOMAIN: ${SMTP_HELO_DOMAIN:-localhost}
+      LOG_LEVEL: debug
+      API_KEY_SALT: ${API_KEY_SALT:-dev-salt-only-change-for-prod}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - continuum
+
+  # ─── Monitor Worker ────────────────────────────────────────────────────────
+  worker-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: continuum-worker-monitor
+    command: ['node', 'dist/workers/monitorWorker.js']
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://continuum:continuum@postgres:5432/continuum
+      REDIS_URL: redis://redis:6379
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      SMTP_CHECK_ENABLED: 'true'
+      SMTP_CHECK_TIMEOUT_MS: '5000'
+      SMTP_HELO_DOMAIN: ${SMTP_HELO_DOMAIN:-localhost}
+      LOG_LEVEL: debug
+      API_KEY_SALT: ${API_KEY_SALT:-dev-salt-only-change-for-prod}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - continuum
+
+  # ─── Webhook Worker ────────────────────────────────────────────────────────
+  worker-webhook:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: continuum-worker-webhook
+    command: ['node', 'dist/workers/webhookWorker.js']
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://continuum:continuum@postgres:5432/continuum
+      REDIS_URL: redis://redis:6379
+      WEBHOOK_MAX_ATTEMPTS: '5'
+      WEBHOOK_TIMEOUT_MS: '10000'
+      LOG_LEVEL: debug
+      API_KEY_SALT: ${API_KEY_SALT:-dev-salt-only-change-for-prod}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - continuum
+
+  # ─── Postgres ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: continuum-postgres
+    environment:
+      POSTGRES_USER: continuum
+      POSTGRES_PASSWORD: continuum
+      POSTGRES_DB: continuum
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - '5432:5432' # Expose for local Prisma Studio / migrations
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U continuum -d continuum']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - continuum
+
+  # ─── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: continuum-redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save ""
+    ports:
+      - '6379:6379' # Expose for local inspection with redis-cli
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - continuum
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  continuum:
+    driver: bridge

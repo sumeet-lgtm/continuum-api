@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+dist-scripts/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Prisma
+prisma/migrations/*/migration.sql
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+coverage/
+
+# Docker
+.dockerignore
+
+# Data (large files tracked separately if needed)
+# Keep data/disposable-domains.txt in git as seed file
+# Add large auto-generated versions here if needed:
+# data/disposable-domains.large.txt
