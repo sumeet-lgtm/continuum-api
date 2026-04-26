@@ -3,8 +3,18 @@
   "compilerOptions": {
     "incremental": false,
     "sourceMap": false,
-    "declarationMap": false
+    "declarationMap": false,
+    "skipLibCheck": true,
+    "strict": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "scripts", "**/*.test.ts", "**/*.spec.ts"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "scripts",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ]
 }

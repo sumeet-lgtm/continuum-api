@@ -6,6 +6,7 @@ import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { uploadToStorage, createSignedUrl } from '../../lib/supabase.js';
 import { bulkQueue } from '../../lib/queue.js';
 import { prisma } from '../../lib/prisma.js';
+import type { Prisma } from '@prisma/client';
 import { config } from '../../config.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
@@ -103,7 +104,7 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
       const duplicateCount  = parsed.filter((r) => r.isDuplicate).length;
 
       // Create the BulkJob record and pre-create BulkJobEmail rows in one transaction
-      const bulkJob = await prisma.$transaction(async (tx: typeof prisma) => {
+      const bulkJob = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const job = await tx.bulkJob.create({
           data: {
             id:             jobId,
