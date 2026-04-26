@@ -19,7 +19,7 @@ const API_KEY_SALT     = '7f3a9b2c1d8e4f6a0b5c7d9e2f4a8b1c3d5e7f9a0b2c4d6e8f0a1b
 const RESEND_API_KEY   = process.env['RESEND_API_KEY'] ?? '';
 const FROM_EMAIL       = 'Continuum API <sumeet@continuumapi.com>';
 const NOTIFY_EMAIL     = 'sumeet@continuumapi.com';
-const API_URL          = 'https://api.continuumapi.com';
+const API_URL          = 'https://web-production-354247.up.railway.app';
 
 // ─── Parse args ───────────────────────────────────────────────────────────────
 
