@@ -20,11 +20,8 @@ function parseUpstashConfig(redisUrl: string): { url: string; token: string } {
   const parsed = new URL(redisUrl);
   const token = parsed.password ? decodeURIComponent(parsed.password) : 'local';
   const protocol = redisUrl.startsWith('rediss://') ? 'https' : 'http';
-  const port = parsed.port && parsed.port !== '443' && parsed.port !== '80'
-    ? `:${parsed.port}`
-    : '';
   return {
-    url: `${protocol}://${parsed.hostname}${port}`,
+    url: `${protocol}://${parsed.hostname}`,
     token,
   };
 }
