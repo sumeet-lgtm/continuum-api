@@ -155,7 +155,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
       where:  { id: jobId },
       select: { status: true, cancelledAt: true },
     });
-    if (fresh?.status === 'cancelled' || fresh?.cancelledAt) {
+    if ((fresh?.status as string) === 'cancelled' || fresh?.cancelledAt) {
       log.info('Job cancelled — stopping processing');
       return;
     }

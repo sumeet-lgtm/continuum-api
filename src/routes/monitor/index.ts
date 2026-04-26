@@ -282,6 +282,7 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
         where: { id: request.params.id },
         select: {
           ...MONITOR_SELECT,
+          apiKeyId: true,
           checks: {
             select: {
               id:             true,

@@ -55,21 +55,14 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
       const skip = (page - 1) * limit;
 
       // ── Build WHERE clause ───────────────────────────────────────────────────
-      type VerificationWhere = {
-        email:     string;
-        apiKeyId:  string;
-        status?:   string;
-        bulkJobId?: null | { not: null };
-        checkedAt?: { gte?: Date; lte?: Date };
-      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const where: any = { email, apiKeyId: request.apiKey.id };
 
-      const where: VerificationWhere = { email, apiKeyId: request.apiKey.id };
-
-      if (status)       where.status    = status;
+      if (status) where.status = status;
       if (since || until) {
-        where.checkedAt = {};
-        if (since) where.checkedAt.gte  = new Date(since);
-        if (until) where.checkedAt.lte  = new Date(until);
+        where['checkedAt'] = {};
+        if (since) where['checkedAt'].gte = new Date(since);
+        if (until) where['checkedAt'].lte = new Date(until);
       }
 
       // fromMonitor=true means the Verification was linked to a MonitorCheck
