@@ -10,15 +10,12 @@ interface HistoryParams { email: string }
 const VALID_STATUSES = ['valid', 'invalid', 'risky', 'unknown'] as const;
 
 const querySchema = z.object({
-  page:       z.coerce.number().int().min(1).default(1),
-  limit:      z.coerce.number().int().min(1).max(100).default(20),
-  status:     z.enum(VALID_STATUSES).optional(),
-  since:      z.string().datetime().optional(),  // ISO timestamp — only show checks after this
-  until:      z.string().datetime().optional(),  // ISO timestamp — only show checks before this
-  fromMonitor: z
-    .string()
-    .transform((v) => (v === 'true' ? true : v === 'false' ? false : undefined))
-    .optional(),
+  page:        z.coerce.number().int().min(1).default(1),
+  limit:       z.coerce.number().int().min(1).max(100).default(20),
+  status:      z.enum(VALID_STATUSES).optional(),
+  since:       z.string().datetime().optional(),
+  until:       z.string().datetime().optional(),
+  fromMonitor: z.string().transform((v) => (v === 'true' ? true : v === 'false' ? false : undefined)).optional(),
 });
 
 export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
@@ -30,14 +27,11 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
         params: {
           type: 'object',
           required: ['email'],
-          properties: {
-            email: { type: 'string', minLength: 1 },
-          },
+          properties: { email: { type: 'string', minLength: 1 } },
         },
       },
     },
     async (request: FastifyRequest<{ Params: HistoryParams }>, reply: FastifyReply) => {
-      // URL-decode the email (%40 → @)
       const email = decodeURIComponent(request.params.email).trim().toLowerCase();
 
       if (!email.includes('@')) {
@@ -51,35 +45,19 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
         );
       }
 
-      const { page, limit, status, since, until, fromMonitor } = queryResult.data;
+      const { page, limit, status, since, until } = queryResult.data;
       const skip = (page - 1) * limit;
 
-      // ── Build WHERE clause ───────────────────────────────────────────────────
+      // Build where using any to avoid Prisma enum type conflicts
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const where: any = { email, apiKeyId: request.apiKey.id };
-
       if (status) where.status = status;
       if (since || until) {
-        where['checkedAt'] = {};
-        if (since) where['checkedAt'].gte = new Date(since);
-        if (until) where['checkedAt'].lte = new Date(until);
+        where.checkedAt = {};
+        if (since) where.checkedAt.gte = new Date(since);
+        if (until) where.checkedAt.lte = new Date(until);
       }
 
-      // fromMonitor=true means the Verification was linked to a MonitorCheck
-      // We detect this by checking if the Verification id appears in MonitorCheck.verificationId
-      // Simple approach: filter on bulkJobId (monitor checks have no bulkJobId)
-      // A more precise approach would JOIN on MonitorCheck, but for now we use the absence of bulkJobId
-      // as a proxy for "came from monitoring" (valid because bulk checks always have bulkJobId)
-      if (fromMonitor === false) {
-        // Exclude monitor-originated checks: those come from the monitor worker and have bulkJobId=null
-        // Actually both monitor and single-verify have bulkJobId=null.
-        // The cleanest filter is to check MonitorCheck.verificationId inclusion.
-        // We do a subquery via Prisma's exists-style filter.
-      }
-      // Note: the fromMonitor filter is best-effort for now; precise implementation
-      // requires a JOIN on monitor_checks which Prisma supports via nested relations.
-
-      // ── Execute queries ──────────────────────────────────────────────────────
       const [verifications, total] = await Promise.all([
         prisma.verification.findMany({
           where,
@@ -110,10 +88,9 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
         prisma.verification.count({ where }),
       ]);
 
-      // ── Annotate with monitor check info ─────────────────────────────────────
-      // For each verification, check if it was produced by a monitor check
-      type VerificationRow = typeof verifications[number];
-      const verificationIds = (verifications as VerificationRow[]).map((v: VerificationRow) => v.id);
+      // Annotate with monitor check source
+      type VRow = typeof verifications[number];
+      const verificationIds = verifications.map((v: VRow) => v.id);
       const monitorCheckMap = new Map<string, { monitorId: string; source: string }>();
 
       if (verificationIds.length > 0) {
@@ -126,10 +103,9 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
         }
       }
 
-      // ── Format response ──────────────────────────────────────────────────────
       return reply.status(200).send({
         email,
-        data: (verifications as VerificationRow[]).map((v: VerificationRow) => {
+        data: verifications.map((v: VRow) => {
           const monitorInfo = monitorCheckMap.get(v.id);
           return {
             id:        v.id,
@@ -146,28 +122,24 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
               isCatchAll:    v.isCatchAll,
               greylisted:    v.greylisted,
             },
-            score:          v.score,
-            durationMs:     v.durationMs,
-            checkedAt:      v.checkedAt.toISOString(),
-            source:         monitorInfo ? monitorInfo.source :
-                            v.bulkJobId ? 'bulk_job' : 'single_verify',
-            monitorId:      monitorInfo?.monitorId ?? null,
-            bulkJobId:      v.bulkJobId,
+            score:     v.score,
+            durationMs: v.durationMs,
+            checkedAt: v.checkedAt.toISOString(),
+            source:    monitorInfo ? monitorInfo.source : v.bulkJobId ? 'bulk_job' : 'single_verify',
+            monitorId: monitorInfo?.monitorId ?? null,
+            bulkJobId: v.bulkJobId,
           };
         }),
         pagination: {
-          page,
-          limit,
-          total,
+          page, limit, total,
           totalPages: Math.ceil(total / limit),
           hasNext:    page * limit < total,
           hasPrev:    page > 1,
         },
         filters: {
-          status:      status      ?? null,
-          since:       since       ?? null,
-          until:       until       ?? null,
-          fromMonitor: fromMonitor ?? null,
+          status: status ?? null,
+          since:  since  ?? null,
+          until:  until  ?? null,
         },
       });
     },

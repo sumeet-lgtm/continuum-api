@@ -142,7 +142,7 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
           apiKeyId:    request.apiKey.id,
           url,
           secret,
-          events:      events as never,
+          events:      events as unknown as never,
           label:       label       ?? null,
           description: description ?? null,
           isActive:    true,
@@ -255,7 +255,7 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
 
       const data: UpdateData = {};
       if (url         !== undefined) data.url         = url;
-      if (events      !== undefined) data.events      = events as never;
+      if (events      !== undefined) data.events = events as unknown as never;
       if (label       !== undefined) data.label       = label ?? null;
       if (description !== undefined) data.description = description ?? null;
       if (isActive    !== undefined) data.isActive    = isActive;
@@ -391,14 +391,6 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
 
       const { page, limit, delivered, failedPermanently, event } = qr.data;
       const skip = (page - 1) * limit;
-
-      type DeliveryWhere = {
-        webhookId:          string;
-        delivered?:         boolean;
-        failedPermanently?: boolean;
-        event?:             never; // filtered in JS after fetch
-      };
-
       const where = { webhookId: webhook.id, ...(delivered !== undefined && { delivered }), ...(failedPermanently !== undefined && { failedPermanently }) };
 
       const [deliveries, total] = await Promise.all([

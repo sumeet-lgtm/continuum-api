@@ -289,13 +289,8 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       // ── Build Prisma where clause ──────────────────────────────────────────
-      type WhereClause = {
-        bulkJobId:   string;
-        status?:     string;
-        isDuplicate?: boolean;
-      };
-
-      const where: WhereClause = { bulkJobId: job.id };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const where: any = { bulkJobId: job.id };
       if (status    !== undefined) where.status     = status;
       if (isDuplicate !== undefined) where.isDuplicate = isDuplicate;
 

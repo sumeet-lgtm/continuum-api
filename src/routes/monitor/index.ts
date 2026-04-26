@@ -226,7 +226,7 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
         email?:    { contains: string; mode: 'insensitive' };
       };
 
-      const where: WhereClause = { apiKeyId: request.apiKey.id };
+      const where: any = { apiKeyId: request.apiKey.id };
       if (isActive !== undefined) where.isActive = isActive;
       if (isPaused === true)      where.pausedAt = { not: null };
       if (isPaused === false)     where.pausedAt = null;
@@ -521,12 +521,7 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
       if (!monitor || monitor.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Monitor');
       }
-
-      type CheckWhere = {
-        monitorId:     string;
-        statusChanged?: boolean;
-      };
-      const where: CheckWhere = { monitorId: monitor.id };
+      const where: any = { monitorId: monitor.id };
       if (statusChanged !== undefined) where.statusChanged = statusChanged;
 
       const skip = (page - 1) * limit;
