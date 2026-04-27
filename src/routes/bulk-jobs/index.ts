@@ -144,11 +144,16 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
       });
 
       // Enqueue the background job
-      await bulkQueue.add(
-        'process-bulk',
-        { jobId, apiKeyId: request.apiKey.id, storagePath, fileName: originalName },
-        { jobId: `bulk:${jobId}` },
-      );
+      try {
+        await bulkQueue.add(
+          'process-bulk',
+          { jobId, apiKeyId: request.apiKey.id, storagePath, fileName: originalName },
+          { jobId: `bulk-${jobId}` },
+        );
+      } catch (queueErr) {
+        logger.error({ queueErr, jobId, jobIdOption: `bulk-${jobId}` }, 'BullMQ queue.add failed — exact error');
+        throw queueErr;
+      }
 
       logger.info(
         { jobId, totalEmails, duplicateCount, apiKeyId: request.apiKey.id },
