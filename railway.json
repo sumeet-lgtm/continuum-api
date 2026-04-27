@@ -4,7 +4,6 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "node dist/server.js",
     "healthcheckPath": "/health/live",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
