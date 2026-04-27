@@ -354,7 +354,7 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
           payload,
           attemptNumber: 1,
         },
-        { jobId: `ping:${delivery.id}`, priority: 1 },
+        { jobId: `ping-${delivery.id}`, priority: 1 },
       );
 
       return reply.status(202).send({

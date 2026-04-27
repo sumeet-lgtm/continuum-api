@@ -263,7 +263,7 @@ async function processWebhookDelivery(job: Job<WebhookDeliveryPayload>): Promise
     },
     {
       delay,
-      jobId:    `webhook:${deliveryId}:${newAttemptCount + 1}`,
+      jobId:    `webhook-${deliveryId}-${newAttemptCount + 1}`,
       priority: 2,
     },
   );

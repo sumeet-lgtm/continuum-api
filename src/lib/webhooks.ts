@@ -132,7 +132,7 @@ async function deliverToEndpoint(
         attemptNumber: 1,
       },
       {
-        jobId:    `webhook:${delivery.id}:1`,
+        jobId:    `webhook-${delivery.id}-1`,
         priority: 2,
       },
     );
