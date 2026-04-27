@@ -532,7 +532,7 @@ async function recoverStalledJobs(): Promise<void> {
     await queue.add(
       'process-bulk',
       { jobId: job.id, apiKeyId: job.apiKeyId, storagePath: job.storagePath, fileName: job.fileName },
-      { jobId: `bulk:${job.id}` },
+      { jobId: `bulk-${job.id}` },
     );
     await queue.close();
 

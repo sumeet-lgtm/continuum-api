@@ -468,7 +468,7 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
         'recheck-single',
         { monitorId: monitor.id, source: 'manual_recheck' } as MonitorRecheckPayload,
         {
-          jobId:    `recheck:${monitor.id}:${Date.now()}`,
+          jobId:    `recheck-${monitor.id}-${Date.now()}`,
           priority: 1, // higher priority than scheduled ticks
         },
       );
