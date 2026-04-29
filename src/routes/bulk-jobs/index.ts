@@ -411,28 +411,50 @@ export function parseCsv(text: string): ParsedEmail[] {
   const results: ParsedEmail[] = [];
   const seen   = new Set<string>();
   let rowIndex  = 0;
-  let headerSkipped = false;
+  let emailColumnIndex = 0; // default to first column
+  let headerProcessed = false;
 
   for (const rawLine of lines) {
-    const line = rawLine.trim();
+    const line = rawLine.trim().replace(/\r$/, '');
     if (line.length === 0) continue;
 
-    // Skip header row
-    if (!headerSkipped) {
-      headerSkipped = true;
-      const lower = line.toLowerCase();
-      if (
-        lower.startsWith('email') ||
-        lower.startsWith('address') ||
-        lower.startsWith('"email') ||
-        !line.includes('@')
-      ) {
-        continue;
+    // Process header row — detect which column contains email
+    if (!headerProcessed) {
+      headerProcessed = true;
+      const columns = splitCsvLine(line);
+      const lower = columns.map(c => c.toLowerCase().replace(/[^a-z_]/g, ''));
+
+      // Look for column named email, email_address, e-mail, emailaddress etc
+      const emailColIdx = lower.findIndex(c =>
+        c === 'email' ||
+        c === 'emailaddress' ||
+        c === 'email_address' ||
+        c === 'emai' ||
+        c === 'mail'
+      );
+
+      if (emailColIdx !== -1) {
+        // Has a header row with email column
+        emailColumnIndex = emailColIdx;
+        continue; // skip header row
       }
+
+      // No header or first column doesn't look like a header
+      // Check if first row looks like a header (no @ in first column)
+      if (!line.includes('@')) {
+        emailColumnIndex = 0;
+        continue; // skip header row
+      }
+
+      // First row is data — use column 0
+      emailColumnIndex = 0;
     }
 
-    const email = extractFirstColumn(line);
-    if (!email) continue;
+    const columns = splitCsvLine(line);
+    const raw = columns[emailColumnIndex] ?? '';
+    const email = raw.trim().replace(/^["'\s]+|["'\s]+$/g, '').toLowerCase();
+
+    if (!email || !email.includes('@')) continue;
 
     const isDuplicate = seen.has(email);
     if (!isDuplicate) seen.add(email);
@@ -443,17 +465,24 @@ export function parseCsv(text: string): ParsedEmail[] {
   return results;
 }
 
-function extractFirstColumn(line: string): string {
-  // Handle quoted fields: "value","other"
-  if (line.startsWith('"')) {
-    const end = line.indexOf('"', 1);
-    if (end !== -1) {
-      return line.slice(1, end).trim().toLowerCase();
+function splitCsvLine(line: string): string[] {
+  const columns: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      columns.push(current.trim().replace(/^"+|"+$/g, ''));
+      current = '';
+    } else {
+      current += char;
     }
   }
-
-  const first = (line.split(',')[0] ?? line).trim();
-  return first.replace(/^["'\s]+|["'\s]+$/g, '').toLowerCase();
+  columns.push(current.trim().replace(/^"+|"+$/g, ''));
+  return columns;
 }
 
 function isCSVMimeType(mimetype: string, filename: string): boolean {
