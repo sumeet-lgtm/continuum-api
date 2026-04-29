@@ -30,6 +30,8 @@ const envSchema = z.object({
     .string()
     .min(1, 'SMTP_HELO_DOMAIN is required when SMTP_CHECK_ENABLED=true')
     .default('localhost'),
+  SMTP_PROBE_URL: z.string().url().optional(),
+  SMTP_PROBE_KEY: z.string().optional(),
 
   // Rate limiting
   DEFAULT_RATE_LIMIT_RPM: z.coerce.number().int().min(1).max(100000).default(1000),
