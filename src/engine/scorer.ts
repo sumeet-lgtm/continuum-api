@@ -27,11 +27,17 @@ export function score(input: ScorerInput): ScorerOutput {
     smtpReachable,
     isCatchAll,
     greylisted,
+    spfValid,
+    dmarcValid,
+    blacklisted,
   } = input;
 
   // ── 1. Hard failures ───────────────────────────────────────────────────────
   if (!syntaxValid) return out('invalid', 'syntax_invalid', 0);
   if (!mxFound)     return out('invalid', 'no_mx_records',  5);
+
+  // ── 1b. Blacklisted domain ────────────────────────────────────────────────
+  if (blacklisted) return out('risky', 'blacklisted_domain', 10);
 
   // ── 2. SMTP permanently rejected ──────────────────────────────────────────
   if (smtpChecked && smtpReachable === false && !greylisted) {

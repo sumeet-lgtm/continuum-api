@@ -12,6 +12,11 @@ export interface VerificationChecks {
   smtpReachable: boolean | null;
   isCatchAll:    boolean | null;
   greylisted:    boolean;
+  spfValid?:     boolean;
+  dmarcValid?:   boolean;
+  dkimFound?:    boolean;
+  blacklisted?:  boolean;
+  blacklists?:   string[];
 }
 
 export interface VerificationResult {
@@ -64,6 +69,10 @@ export interface ScorerInput {
   smtpReachable: boolean | null;
   isCatchAll:    boolean | null;
   greylisted:    boolean;
+  spfValid?:     boolean;
+  dmarcValid?:   boolean;
+  dkimFound?:    boolean;
+  blacklisted?:  boolean;
 }
 
 export interface ScorerOutput {

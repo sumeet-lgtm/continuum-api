@@ -5,6 +5,7 @@ import { lookupMx } from './mx.js';
 import { isDisposableDomain } from './disposable.js';
 import { isRoleAccount } from './roleAccount.js';
 import { smtpProbe } from './smtp.js';
+import { checkDeliverability } from './deliverability.js';
 import { score } from './scorer.js';
 import { logger } from '../lib/logger.js';
 import type {
@@ -121,6 +122,12 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   }
   const smtpMs = Date.now() - t3;
 
+  // ── 6b. Deliverability checks (SPF/DKIM/DMARC/Blacklist) ──────────────────
+  const deliverability = await checkDeliverability(domain).catch(() => ({
+    spfValid: false, spfRecord: null, dmarcValid: false, dmarcRecord: null,
+    dkimFound: false, dkimSelectors: [], blacklisted: false, blacklists: [],
+  }));
+
   // ── 7. Score ───────────────────────────────────────────────────────────────
   const scored = score({
     syntaxValid:   true,
@@ -131,6 +138,9 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
     smtpReachable: smtpResult.reachable,
     isCatchAll:    smtpResult.isCatchAll,
     greylisted:    smtpResult.greylisted,
+    spfValid:      deliverability.spfValid,
+    dmarcValid:    deliverability.dmarcValid,
+    blacklisted:   deliverability.blacklisted,
   });
 
   // ── 8. Persist + return ────────────────────────────────────────────────────
@@ -147,6 +157,11 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
     smtpRawResponse: smtpResult.rawResponse,
     isCatchAll:      smtpResult.isCatchAll,
     greylisted:      smtpResult.greylisted,
+    spfValid:        deliverability.spfValid,
+    dmarcValid:      deliverability.dmarcValid,
+    dkimFound:       deliverability.dkimFound,
+    blacklisted:     deliverability.blacklisted,
+    blacklists:      deliverability.blacklists,
     subStatus:       scored.subStatus,
     wallStart,
     timings: { syntaxMs, mxMs, disposableMs, roleMs, smtpMs, totalMs: 0 },
@@ -169,6 +184,11 @@ interface PersistInput {
   smtpRawResponse: string  | null;
   isCatchAll:      boolean | null;
   greylisted:      boolean;
+  spfValid?:       boolean;
+  dmarcValid?:     boolean;
+  dkimFound?:      boolean;
+  blacklisted?:    boolean;
+  blacklists?:     string[];
   subStatus:       string  | null;
   wallStart:       number;
   timings:         Omit<EngineTimings, 'totalMs'> & { totalMs: number };
