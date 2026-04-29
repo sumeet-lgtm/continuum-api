@@ -40,16 +40,28 @@ const BLACKLISTS = [
 // Cache to avoid redundant DNS lookups for same domain in bulk jobs
 const domainCache = new Map<string, DeliverabilityResult>();
 
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))
+  ]);
+}
+
 export async function checkDeliverability(domain: string): Promise<DeliverabilityResult> {
   if (domainCache.has(domain)) {
     return domainCache.get(domain)!;
   }
 
+  const fallbackSpf   = { valid: false, record: null };
+  const fallbackDmarc = { valid: false, record: null };
+  const fallbackDkim  = { found: false, selectors: [] };
+  const fallbackBl    = { blacklisted: false, lists: [] };
+
   const [spf, dmarc, dkim, blacklist] = await Promise.allSettled([
-    checkSpf(domain),
-    checkDmarc(domain),
-    checkDkim(domain),
-    checkBlacklists(domain),
+    withTimeout(checkSpf(domain),        3000, fallbackSpf),
+    withTimeout(checkDmarc(domain),      3000, fallbackDmarc),
+    withTimeout(checkDkim(domain),       3000, fallbackDkim),
+    withTimeout(checkBlacklists(domain), 3000, fallbackBl),
   ]);
 
   const result: DeliverabilityResult = {
