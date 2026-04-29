@@ -43,7 +43,7 @@ import { logger } from '../lib/logger.js';
 import type { BulkJobPayload } from '../types/job.js';
 import type { VerificationResult } from '../types/verification.js';
 
-const EMAIL_CONCURRENCY      = 5;
+const EMAIL_CONCURRENCY      = 10;
 const PROGRESS_FLUSH_INTERVAL = 25;  // flush every N processed emails
 
 // ─── Main job processor ───────────────────────────────────────────────────────
@@ -550,7 +550,7 @@ function startBulkWorker(): void {
   const worker = new Worker<BulkJobPayload>(QUEUE_BULK, processBulkJob, {
     connection:      redisConnection,
     concurrency:     3,
-    stalledInterval: 300_000,  // 5-min heartbeat
+    stalledInterval: 1_800_000,  // 30-min heartbeat for large jobs
     maxStalledCount: 1,        // fail after 1 stall detection (not infinite retry)
   });
 
