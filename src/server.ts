@@ -15,6 +15,7 @@ import { monitoringRoutes } from './routes/monitor/index.js';
 import { historyRoutes } from './routes/history/index.js';
 import { webhookRoutes } from './routes/webhooks/index.js';
 import { bulkJobRoutes } from './routes/bulk-jobs/index.js';
+import { ipRoutes } from './routes/ip/index.js';
 import { loadDisposableList } from './engine/disposable.js';
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -24,6 +25,7 @@ async function buildApp(): Promise<FastifyInstance> {
     requestIdLogLabel: 'requestId',
     genReqId: () => crypto.randomUUID(),
     trustProxy: true, // Required for correct IP detection behind load balancers
+    bodyLimit: 52428800, // 50MB body limit for large CSV uploads
     ajv: {
       customOptions: {
         removeAdditional: 'all', // Strip unknown fields from validated bodies
@@ -101,6 +103,7 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(historyRoutes, { prefix: '/v1' });
   await app.register(webhookRoutes, { prefix: '/v1' });
   await app.register(bulkJobRoutes, { prefix: '/v1' });
+  await app.register(ipRoutes, { prefix: '/v1' });
 
   // ─── Root info ────────────────────────────────────────────────────────────
   app.get('/', async (_request, reply) => {
