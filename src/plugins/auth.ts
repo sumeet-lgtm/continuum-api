@@ -13,7 +13,13 @@ interface ApiKeyRecord {
   keyPrefix: string;
   label: string | null;
   ownerId: string | null;
+  userId: string | null;
+  keyRaw: string | null;
   rateLimit: number;
+  monthlyLimit: number;
+  currentMonthUsage: number;
+  usageResetAt: Date | null;
+  plan: string;
   isActive: boolean;
   createdAt: Date;
   revokedAt: Date | null;

@@ -10,15 +10,21 @@ datasource db {
 // ─── API Keys ────────────────────────────────────────────────────────────────
 
 model ApiKey {
-  id          String    @id @default(cuid())
-  keyHash     String    @unique // SHA-256(salt + raw_key)
-  keyPrefix   String    // first 8 chars of raw key for display/support
-  label       String?
-  ownerId     String? // external user/org ID from the calling system
-  rateLimit   Int       @default(1000) // requests per minute ceiling
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  revokedAt   DateTime?
+  id                 String    @id @default(cuid())
+  keyHash            String    @unique // SHA-256(salt + raw_key)
+  keyPrefix          String    // first 8 chars of raw key for display/support
+  label              String?
+  ownerId            String? // external user/org ID from the calling system
+  userId             String? // Supabase auth user ID
+  keyRaw             String? // full raw key stored for dashboard use
+  rateLimit          Int       @default(1000) // requests per minute ceiling
+  monthlyLimit       Int       @default(1000) // max verifications per month
+  currentMonthUsage  Int       @default(0) // verifications used this month
+  usageResetAt       DateTime  @default(dbgenerated("date_trunc('month', now() + interval '1 month')"))
+  plan               String    @default("free") // free, starter, growth, scale
+  isActive           Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  revokedAt          DateTime?
 
   verifications Verification[]
   bulkJobs      BulkJob[]

@@ -195,7 +195,7 @@ async function processMonitor(monitor: MonitorRecord): Promise<void> {
         monitorId:      monitor.id,
         verificationId: result.id,
         statusChanged,
-        previousStatus: previousStatus ?? undefined,
+        previousStatus: previousStatus ?? null,
         newStatus,
         source:         monitor.source,
         checkedAt,
@@ -332,6 +332,30 @@ export function calcNextCheckAt(intervalHours: number): Date {
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
+
+// ─── Monthly usage reset ──────────────────────────────────────────────────────
+
+async function resetMonthlyUsage(): Promise<void> {
+  const now = new Date();
+  try {
+    const result = await prisma.apiKey.updateMany({
+      where: {
+        usageResetAt: { lte: now },
+        isActive: true,
+      },
+      data: {
+        currentMonthUsage: 0,
+        usageResetAt: new Date(now.getFullYear(), now.getMonth() + 1, 1),
+      },
+    });
+    if (result.count > 0) {
+      logger.info({ count: result.count }, 'Monthly usage reset complete');
+    }
+  } catch (err) {
+    logger.error({ err }, 'Monthly usage reset failed');
+  }
+}
+
 function startMonitorWorker(): void {
   loadDisposableList();
 
@@ -369,6 +393,10 @@ function startMonitorWorker(): void {
   });
 
   logger.info('Monitor worker started — cron tick every 5 minutes');
+
+  // Check for monthly usage resets every hour
+  setInterval(() => { void resetMonthlyUsage(); }, 3_600_000);
+  void resetMonthlyUsage(); // Run on startup too
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Monitor worker shutting down');

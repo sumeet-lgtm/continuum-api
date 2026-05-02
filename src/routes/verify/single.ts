@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
+import { requireMonthlyQuota, incrementUsage } from '../../plugins/usageMeter.js';
 import { verifyEmail } from '../../engine/index.js';
 import type { VerificationResult } from '../../types/verification.js';
 import { dispatchWebhook, buildEventId } from '../../lib/webhooks.js';
@@ -64,7 +65,7 @@ export async function verifySingleRoute(fastify: FastifyInstance): Promise<void>
   fastify.post<VerifyRoute>(
     '/verify',
     {
-      preHandler: [requireAuth, requireRateLimit],
+      preHandler: [requireAuth, requireRateLimit, requireMonthlyQuota],
       schema: {
         body: {
           type: 'object',
@@ -100,6 +101,9 @@ export async function verifySingleRoute(fastify: FastifyInstance): Promise<void>
       void dispatchVerificationWebhooks(request.apiKey.id, result);
 
       // ── Respond ─────────────────────────────────────────────────────────
+      // Increment monthly usage counter
+      void incrementUsage(request.apiKey.id);
+
       return reply.status(200).send({
         id:        result.id,
         email:     result.email,

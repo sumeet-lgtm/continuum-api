@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
+import { requireMonthlyQuota } from '../../plugins/usageMeter.js';
 import { uploadToStorage, createSignedUrl } from '../../lib/supabase.js';
 import { bulkQueue } from '../../lib/queue.js';
 import { prisma } from '../../lib/prisma.js';
