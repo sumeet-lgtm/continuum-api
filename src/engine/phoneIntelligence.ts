@@ -17,7 +17,7 @@ import {
   isPossiblePhoneNumber,
   parsePhoneNumberWithError,
   type CountryCode,
-} from 'libphonenumber-js';
+} from 'libphonenumber-js/max';
 import { logger } from '../lib/logger.js';
 
 export interface PhoneIntelligenceResult {
@@ -48,18 +48,18 @@ export interface PhoneIntelligenceResult {
 }
 
 // Line type mapping from libphonenumber
-const LINE_TYPE_MAP: Record<number, PhoneIntelligenceResult['lineType']> = {
-  0:  'mobile',
-  1:  'landline',
-  2:  'landline', // FIXED_LINE_OR_MOBILE
-  3:  'toll_free',
-  4:  'premium_rate',
-  5:  'shared_cost',
-  6:  'voip',
-  7:  'personal',
-  8:  'pager',
-  9:  'uan',
-  10: 'voicemail',
+const LINE_TYPE_MAP: Record<string, PhoneIntelligenceResult['lineType']> = {
+  'MOBILE':               'mobile',
+  'FIXED_LINE':           'landline',
+  'FIXED_LINE_OR_MOBILE': 'mobile',
+  'TOLL_FREE':            'toll_free',
+  'PREMIUM_RATE':         'premium_rate',
+  'SHARED_COST':          'shared_cost',
+  'VOIP':                 'voip',
+  'PERSONAL_NUMBER':      'personal',
+  'PAGER':                'pager',
+  'UAN':                  'uan',
+  'VOICEMAIL':            'voicemail',
 };
 
 // Major carrier prefixes for India (approximate)
@@ -107,7 +107,7 @@ export async function checkPhoneIntelligence(
 
     const valid = parsed.isValid();
     const typeNum = parsed.getType();
-    const lineType = typeNum !== undefined ? (LINE_TYPE_MAP[typeNum as unknown as number] ?? 'unknown') : 'unknown';
+    const lineType = typeNum !== undefined ? (LINE_TYPE_MAP[String(typeNum)] ?? 'unknown') : 'unknown';
 
     const isMobile    = lineType === 'mobile';
     const isLandline  = lineType === 'landline';
