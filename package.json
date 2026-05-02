@@ -39,6 +39,7 @@
     "bullmq": "^5.8.1",
     "fastify": "^4.27.0",
     "fastify-plugin": "^4.5.1",
+    "libphonenumber-js": "^1.12.42",
     "pino": "^9.1.0",
     "pino-pretty": "^11.0.0",
     "zod": "^3.23.8"
