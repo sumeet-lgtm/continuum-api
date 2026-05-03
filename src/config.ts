@@ -36,6 +36,7 @@ const envSchema = z.object({
   MV_PROXY_URL: z.string().url().optional(),
   MV_PROXY_KEY: z.string().optional(),
   DEBOUNCE_API_KEY: z.string().optional(),
+  BOUNCER_API_KEY: z.string().optional(),
 
   // Rate limiting
   DEFAULT_RATE_LIMIT_RPM: z.coerce.number().int().min(1).max(100000).default(1000),
