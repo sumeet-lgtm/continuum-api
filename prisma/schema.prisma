@@ -284,3 +284,23 @@ model WebhookAttempt {
   @@index([deliveryId, attemptNumber])
   @@map("webhook_attempts")
 }
+
+// ─── SMTP Result Cache ────────────────────────────────────────────────────────
+// Stores SMTP verification results to avoid redundant API calls
+// Results are reused across all users — shared cache builds moat over time
+
+model SmtpCache {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  reachable     Boolean?
+  isCatchAll    Boolean?
+  resultCode    Int      // MillionVerifier result code
+  result        String   // ok, error, unknown, disposable
+  subResult     String?
+  checkedAt     DateTime @default(now())
+  expiresAt     DateTime // TTL: 30d valid, 7d invalid, 1d unknown
+
+  @@index([email])
+  @@index([expiresAt])
+  @@map("smtp_cache")
+}

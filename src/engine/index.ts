@@ -5,6 +5,7 @@ import { lookupMx } from './mx.js';
 import { isDisposableDomain } from './disposable.js';
 import { isRoleAccount } from './roleAccount.js';
 import { smtpProbe } from './smtp.js';
+import { smtpVerifyWithCache } from './smtpCache.js';
 import { checkDeliverability } from './deliverability.js';
 import { score } from './scorer.js';
 import { logger } from '../lib/logger.js';
