@@ -141,7 +141,7 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
         'Content-Type': 'application/json',
         'x-proxy-key': proxyKey,
       },
-      body: JSON.stringify({ email, apiKey: config.MILLIONVERIFIER_API_KEY }),
+      body: JSON.stringify({ email, apiKey: config.DEBOUNCE_API_KEY ?? config.MILLIONVERIFIER_API_KEY }),
       signal: AbortSignal.timeout(20_000),
     });
 
@@ -150,70 +150,71 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
       return notChecked('API error');
     }
 
+    // DeBounce response format
     const data = await res.json() as {
-      email:           string;
-      result:          string;
-      resultcode:      number;
-      subresult:       string;
-      free:            number;
-      role:            number;
-      mailserverdomain: string;
-      credits:         number;
-      error?:          string;
+      debounce?: {
+        email:       string;
+        code:        string; // '5'=deliverable, '6'=risky, '7'=unknown, '8'=undeliverable
+        role:        string;
+        free_email:  string;
+        result:      string; // 'Safe to Send', 'Risky', 'Unknown', 'Do Not Send'
+        reason:      string; // 'Deliverable', 'Low Quality', etc
+        send_transactional: string;
+      };
+      success?: string;
+      error?:   string;
+      balance?: string;
     };
 
-    logger.info({ email, result: data.result, resultcode: data.resultcode, credits: data.credits }, 'MillionVerifier response');
+    logger.info({ email, result: data.debounce?.result, code: data.debounce?.code }, 'DeBounce response');
 
-    switch (data.resultcode) {
-      case MV_RESULT.OK:
-        return {
-          checked:     true,
-          reachable:   true,
-          isCatchAll:  data.subresult === 'ok_catchall' ? true : false,
-          greylisted:  false,
-          fromCache:   false,
-          rawResponse: null,
-          error:       null,
-        };
-
-      case MV_RESULT.ERROR:
-      case MV_RESULT.MAILBOX_FULL:
-      case MV_RESULT.NO_MAILBOX:
-      case MV_RESULT.BAD:
-        return {
-          checked:     true,
-          reachable:   false,
-          isCatchAll:  false,
-          greylisted:  false,
-          fromCache:   false,
-          rawResponse: '',
-          error:       null,
-        };
-
-      case MV_RESULT.DISPOSABLE:
-        return {
-          checked:     true,
-          reachable:   false,
-          isCatchAll:  false,
-          greylisted:  false,
-          fromCache:   false,
-          rawResponse: '',
-          error:       'disposable_email',
-        };
-
-      case MV_RESULT.UNKNOWN:
-        return notChecked('smtp_unknown');
-      
-      default:
-        // Fallback — use result string if code is unrecognized
-        if (data.result === 'ok') {
-          return { checked: true, reachable: true, isCatchAll: data.subresult?.includes('catchall') ?? false, greylisted: false, fromCache: false, rawResponse: null, error: null };
-        }
-        if (data.result === 'invalid' || data.result === 'error') {
-          return { checked: true, reachable: false, isCatchAll: false, greylisted: false, fromCache: false, rawResponse: null, error: null };
-        }
-        return notChecked('smtp_unknown');
+    if (!data.debounce) {
+      return notChecked(data.error ?? 'No response from DeBounce');
     }
+
+    const code = data.debounce.code;
+    const result = data.debounce.result?.toLowerCase() ?? '';
+
+    // DeBounce codes: 5=deliverable, 6=risky, 7=unknown, 8=undeliverable
+    if (code === '5' || result.includes('safe')) {
+      return {
+        checked:     true,
+        reachable:   true,
+        isCatchAll:  data.debounce.reason?.toLowerCase().includes('catch') ?? false,
+        greylisted:  false,
+        fromCache:   false,
+        rawResponse: null,
+        error:       null,
+      };
+    }
+
+    if (code === '8' || result.includes('do not send')) {
+      return {
+        checked:     true,
+        reachable:   false,
+        isCatchAll:  false,
+        greylisted:  false,
+        fromCache:   false,
+        rawResponse: null,
+        error:       null,
+      };
+    }
+
+    if (code === '6' || result.includes('risky')) {
+      // Risky — treat as reachable but flag
+      return {
+        checked:     true,
+        reachable:   true,
+        isCatchAll:  true, // treat risky as catch-all
+        greylisted:  false,
+        fromCache:   false,
+        rawResponse: null,
+        error:       null,
+      };
+    }
+
+    // Unknown or anything else
+    return notChecked('smtp_unknown');
 
   } catch (err) {
     logger.error({ err, email }, 'MillionVerifier API call failed');
