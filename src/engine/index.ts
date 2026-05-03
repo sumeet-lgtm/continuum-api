@@ -114,7 +114,13 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   };
 
   const t3 = Date.now();
-  if (primaryMx) {
+  // Try MillionVerifier via Cloudflare Worker first (with shared cache)
+  const mvResult = await smtpVerifyWithCache(email);
+  if (mvResult.checked) {
+    smtpResult = mvResult;
+    logger.info({ email, fromCache: mvResult.fromCache }, 'SMTP via MillionVerifier');
+  } else if (primaryMx) {
+    // Fallback to local SMTP probe
     try {
       smtpResult = await smtpProbe(email, primaryMx);
     } catch (err) {

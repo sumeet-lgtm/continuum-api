@@ -137,7 +137,7 @@ interface ProbeResult {
   connected:   boolean;
   accepted:    boolean;
   greylisted:  boolean;
-  rawResponse: string;
+  rawResponse: string | null;
   error?:      string | null;
 }
 

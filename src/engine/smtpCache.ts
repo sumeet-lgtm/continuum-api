@@ -15,12 +15,13 @@ import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
 
 export interface SmtpCacheResult {
-  checked:    boolean;
-  reachable:  boolean | null;
-  isCatchAll: boolean | null;
-  greylisted: boolean;
-  fromCache:  boolean;
-  error:      string | null;
+  checked:     boolean;
+  reachable:   boolean | null;
+  isCatchAll:  boolean | null;
+  greylisted:  boolean;
+  fromCache:   boolean;
+  rawResponse: string | null;
+  error:       string | null;
 }
 
 // MillionVerifier result codes
@@ -46,12 +47,12 @@ export async function smtpVerifyWithCache(email: string): Promise<SmtpCacheResul
   const cached = await getCached(email);
   if (cached) {
     logger.debug({ email }, 'SMTP cache hit');
-    return { ...cached, fromCache: true };
+    return { ...cached, fromCache: true, rawResponse: '' };
   }
 
   // 2. No cache — call MillionVerifier
   if (!config.MILLIONVERIFIER_API_KEY) {
-    return { checked: false, reachable: null, isCatchAll: null, greylisted: false, fromCache: false, error: 'No SMTP API key configured' };
+    return { checked: false, reachable: null, isCatchAll: null, greylisted: false, fromCache: false, rawResponse: '', error: 'No SMTP API key configured' };
   }
 
   const mvResult = await callMillionVerifier(email);
@@ -80,11 +81,12 @@ async function getCached(email: string): Promise<Omit<SmtpCacheResult, 'fromCach
     }
 
     return {
-      checked:    true,
-      reachable:  cached.reachable,
-      isCatchAll: cached.isCatchAll,
-      greylisted: false,
-      error:      null,
+      checked:     true,
+      reachable:   cached.reachable,
+      isCatchAll:  cached.isCatchAll,
+      greylisted:  false,
+      rawResponse: null,
+      error:       null,
     };
   } catch (err) {
     logger.warn({ err, email }, 'Cache lookup failed');
@@ -165,12 +167,13 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
     switch (data.resultcode) {
       case MV_RESULT.OK:
         return {
-          checked:    true,
-          reachable:  true,
-          isCatchAll: data.subresult === 'ok_catchall' ? true : false,
-          greylisted: false,
-          fromCache:  false,
-          error:      null,
+          checked:     true,
+          reachable:   true,
+          isCatchAll:  data.subresult === 'ok_catchall' ? true : false,
+          greylisted:  false,
+          fromCache:   false,
+          rawResponse: null,
+          error:       null,
         };
 
       case MV_RESULT.ERROR:
@@ -178,22 +181,24 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
       case MV_RESULT.NO_MAILBOX:
       case MV_RESULT.BAD:
         return {
-          checked:    true,
-          reachable:  false,
-          isCatchAll: false,
-          greylisted: false,
-          fromCache:  false,
-          error:      null,
+          checked:     true,
+          reachable:   false,
+          isCatchAll:  false,
+          greylisted:  false,
+          fromCache:   false,
+          rawResponse: '',
+          error:       null,
         };
 
       case MV_RESULT.DISPOSABLE:
         return {
-          checked:    true,
-          reachable:  false,
-          isCatchAll: false,
-          greylisted: false,
-          fromCache:  false,
-          error:      'disposable_email',
+          checked:     true,
+          reachable:   false,
+          isCatchAll:  false,
+          greylisted:  false,
+          fromCache:   false,
+          rawResponse: '',
+          error:       'disposable_email',
         };
 
       case MV_RESULT.UNKNOWN:
@@ -202,10 +207,10 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
       default:
         // Fallback — use result string if code is unrecognized
         if (data.result === 'ok') {
-          return { checked: true, reachable: true, isCatchAll: data.subresult?.includes('catchall') ?? false, greylisted: false, fromCache: false, error: null };
+          return { checked: true, reachable: true, isCatchAll: data.subresult?.includes('catchall') ?? false, greylisted: false, fromCache: false, rawResponse: null, error: null };
         }
         if (data.result === 'invalid' || data.result === 'error') {
-          return { checked: true, reachable: false, isCatchAll: false, greylisted: false, fromCache: false, error: null };
+          return { checked: true, reachable: false, isCatchAll: false, greylisted: false, fromCache: false, rawResponse: null, error: null };
         }
         return notChecked('smtp_unknown');
     }
@@ -217,5 +222,5 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
 }
 
 function notChecked(error: string): SmtpCacheResult {
-  return { checked: false, reachable: null, isCatchAll: null, greylisted: false, fromCache: false, error };
+  return { checked: false, reachable: null, isCatchAll: null, greylisted: false, fromCache: false, rawResponse: '', error };
 }
