@@ -30,6 +30,8 @@ const MV_RESULT = {
   UNKNOWN:      3, // can't determine
   DISPOSABLE:   4, // disposable email
   MAILBOX_FULL: 5, // invalid — mailbox disabled
+  NO_MAILBOX:   6, // no mailbox found
+  BAD:          7, // bad email
 } as const;
 
 // Cache TTL in milliseconds
@@ -127,10 +129,18 @@ async function storeCache(email: string, result: SmtpCacheResult): Promise<void>
 
 async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
   try {
-    const url = `https://api.millionverifier.com/api/v3/?api=${config.MILLIONVERIFIER_API_KEY}&email=${encodeURIComponent(email)}&timeout=10`;
-    
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(15_000),
+    // Call via Cloudflare Worker proxy (Railway blocks direct access to millionverifier.com)
+    const proxyUrl = config.MV_PROXY_URL ?? 'https://mv-proxy.sumit-sutar259.workers.dev';
+    const proxyKey = config.MV_PROXY_KEY ?? 'cnt-mv-proxy-2026';
+
+    const res = await fetch(`${proxyUrl}/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-proxy-key': proxyKey,
+      },
+      body: JSON.stringify({ email, apiKey: config.MILLIONVERIFIER_API_KEY }),
+      signal: AbortSignal.timeout(20_000),
     });
 
     if (!res.ok) {
@@ -165,6 +175,8 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
 
       case MV_RESULT.ERROR:
       case MV_RESULT.MAILBOX_FULL:
+      case MV_RESULT.NO_MAILBOX:
+      case MV_RESULT.BAD:
         return {
           checked:    true,
           reachable:  false,
@@ -185,7 +197,16 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
         };
 
       case MV_RESULT.UNKNOWN:
+        return notChecked('smtp_unknown');
+      
       default:
+        // Fallback — use result string if code is unrecognized
+        if (data.result === 'ok') {
+          return { checked: true, reachable: true, isCatchAll: data.subresult?.includes('catchall') ?? false, greylisted: false, fromCache: false, error: null };
+        }
+        if (data.result === 'invalid' || data.result === 'error') {
+          return { checked: true, reachable: false, isCatchAll: false, greylisted: false, fromCache: false, error: null };
+        }
         return notChecked('smtp_unknown');
     }
 
