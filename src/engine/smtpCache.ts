@@ -141,7 +141,7 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
         'Content-Type': 'application/json',
         'x-proxy-key': proxyKey,
       },
-      body: JSON.stringify({ email, apiKey: config.BOUNCER_API_KEY ?? config.DEBOUNCE_API_KEY ?? config.MILLIONVERIFIER_API_KEY }),
+      body: JSON.stringify({ email, apiKey: config.DEBOUNCE_API_KEY ?? config.BOUNCER_API_KEY ?? config.MILLIONVERIFIER_API_KEY }),
       signal: AbortSignal.timeout(20_000),
     });
 
@@ -150,38 +150,37 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
       return notChecked('API error');
     }
 
-    // Bouncer response format
+    // DeBounce response format
     const data = await res.json() as {
-      email:   string;
-      status:  string; // 'deliverable', 'undeliverable', 'risky', 'unknown'
-      reason:  string; // 'accepted_email', 'rejected_email', 'dns_error', etc
-      domain?: {
-        acceptAll:  string; // 'yes' | 'no'
-        disposable: string;
-        free:       string;
+      debounce?: {
+        email:            string;
+        code:             string; // '5'=deliverable, '6'=risky, '7'=unknown, '8'=undeliverable
+        role:             string;
+        free_email:       string;
+        result:           string; // 'Safe to Send', 'Risky', 'Unknown', 'Do Not Send'
+        reason:           string;
+        send_transactional: string;
+        did_you_mean:     string;
       };
-      account?: {
-        role:        string;
-        disabled:    string;
-        fullMailbox: string;
-      };
-      score?:   number;
-      toxic?:   string;
+      success?: string;
+      balance?: string;
+      error?:   string;
     };
 
-    logger.info({ email, status: data.status, reason: data.reason, score: data.score }, 'Bouncer response');
+    logger.info({ email, code: data.debounce?.code, result: data.debounce?.result }, 'DeBounce response');
 
-    if (!data.status) {
-      return notChecked('No response from Bouncer');
+    if (!data.debounce || data.success !== '1') {
+      return notChecked(data.error ?? 'DeBounce verification failed');
     }
 
-    const isCatchAll = data.domain?.acceptAll === 'yes';
+    const code = data.debounce.code;
 
-    if (data.status === 'deliverable') {
+    // code 5 = Safe to Send (deliverable)
+    if (code === '5') {
       return {
         checked:     true,
         reachable:   true,
-        isCatchAll,
+        isCatchAll:  false,
         greylisted:  false,
         fromCache:   false,
         rawResponse: null,
@@ -189,31 +188,33 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
       };
     }
 
-    if (data.status === 'undeliverable') {
-      return {
-        checked:     true,
-        reachable:   false,
-        isCatchAll,
-        greylisted:  false,
-        fromCache:   false,
-        rawResponse: null,
-        error:       null,
-      };
-    }
-
-    if (data.status === 'risky') {
+    // code 6 = Risky (catch-all or low quality)
+    if (code === '6') {
       return {
         checked:     true,
         reachable:   true,
         isCatchAll:  true,
-        greylisted:  data.reason === 'low_deliverability',
+        greylisted:  false,
         fromCache:   false,
         rawResponse: null,
         error:       null,
       };
     }
 
-    // Unknown
+    // code 8 = Do Not Send (undeliverable)
+    if (code === '8') {
+      return {
+        checked:     true,
+        reachable:   false,
+        isCatchAll:  false,
+        greylisted:  false,
+        fromCache:   false,
+        rawResponse: null,
+        error:       null,
+      };
+    }
+
+    // code 7 = Unknown
     return notChecked('smtp_unknown');
 
   } catch (err) {
