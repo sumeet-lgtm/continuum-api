@@ -174,13 +174,24 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
     }
 
     const code = data.debounce.code;
+    const reason = data.debounce.reason ?? '';
 
-    // code 5 = Safe to Send (deliverable)
-    if (code === '5') {
+    // DeBounce codes:
+    // 1 = Safe to Send
+    // 2 = Safe to Send  
+    // 3 = Unknown
+    // 4 = Risky (Accept All / Catch-all)
+    // 5 = Safe to Send
+    // 6 = Risky
+    // 7 = Unknown
+    // 8 = Do Not Send
+
+    // Safe to Send
+    if (code === '1' || code === '2' || code === '5') {
       return {
         checked:     true,
         reachable:   true,
-        isCatchAll:  false,
+        isCatchAll:  reason.toLowerCase().includes('accept all') || reason.toLowerCase().includes('catch'),
         greylisted:  false,
         fromCache:   false,
         rawResponse: null,
@@ -188,8 +199,8 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
       };
     }
 
-    // code 6 = Risky (catch-all or low quality)
-    if (code === '6') {
+    // Risky / Accept All / Catch-all
+    if (code === '4' || code === '6') {
       return {
         checked:     true,
         reachable:   true,
@@ -201,7 +212,7 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
       };
     }
 
-    // code 8 = Do Not Send (undeliverable)
+    // Do Not Send / Undeliverable
     if (code === '8') {
       return {
         checked:     true,
@@ -214,7 +225,7 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
       };
     }
 
-    // code 7 = Unknown
+    // code 3 or 7 = Unknown
     return notChecked('smtp_unknown');
 
   } catch (err) {
