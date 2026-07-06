@@ -13,6 +13,9 @@ function parseRedisConnection(): ConnectionOptions {
     password: url.password || undefined,
     username: url.username !== 'default' ? url.username : undefined,
     tls: config.REDIS_URL.startsWith('rediss://') ? {} : undefined,
+    // family 0 = dual-stack DNS lookup — required for Railway private
+    // networking (*.railway.internal resolves via IPv6 only)
+    family: 0,
     maxRetriesPerRequest: null, // Required for BullMQ workers
   };
 }

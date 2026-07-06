@@ -1,40 +1,68 @@
-import { Redis } from '@upstash/redis';
+import IORedis from 'ioredis';
 import { config } from '../config.js';
 import { logger } from './logger.js';
 
-let _redis: Redis | null = null;
+let _client: IORedis | null = null;
 
 /**
- * Parse an Upstash Redis URL into the { url, token } shape required by @upstash/redis.
+ * Raw ioredis client — speaks the Redis protocol directly (Railway Redis,
+ * local Redis, or any rediss:// endpoint).
  *
- * Upstash provides connection URLs in the form:
- *   rediss://default:<TOKEN>@<HOST>:<PORT>
- *
- * The @upstash/redis REST client requires:
- *   url:   https://<HOST>   (no port — Upstash REST is always port 443)
- *   token: <TOKEN>
- *
- * For local Redis (no auth, plain redis://), we use a noop token and http.
+ * Configured to fail fast: rate limiting and locks must fail open on a Redis
+ * outage rather than hang API requests waiting on infinite retries.
  */
-function parseUpstashConfig(redisUrl: string): { url: string; token: string } {
-  const parsed = new URL(redisUrl);
-  const token = parsed.password ? decodeURIComponent(parsed.password) : 'local';
-  const protocol = redisUrl.startsWith('rediss://') ? 'https' : 'http';
-  return {
-    url: `${protocol}://${parsed.hostname}`,
-    token,
-  };
-}
-
-export function getRedis(): Redis {
-  if (!_redis) {
-    const { url, token } = parseUpstashConfig(config.REDIS_URL);
-    _redis = new Redis({ url, token });
+function getClient(): IORedis {
+  if (!_client) {
+    _client = new IORedis(config.REDIS_URL, {
+      // family 0 = dual-stack DNS lookup — required for Railway private
+      // networking (*.railway.internal resolves via IPv6 only)
+      family: 0,
+      tls: config.REDIS_URL.startsWith('rediss://') ? {} : undefined,
+      maxRetriesPerRequest: 1,
+      connectTimeout: 5000,
+      enableOfflineQueue: false,
+      retryStrategy: (times) => Math.min(times * 500, 5000),
+    });
+    _client.on('error', (err) => {
+      logger.warn({ err: err.message }, 'Redis connection error');
+    });
   }
-  return _redis;
+  return _client;
 }
 
-export const redis = getRedis();
+interface SetOptions {
+  nx?: boolean;
+  px?: number;
+}
+
+/**
+ * Thin wrapper keeping the call signatures the rest of the codebase already
+ * uses (previously the @upstash/redis REST client).
+ */
+export const redis = {
+  incr: (key: string): Promise<number> => getClient().incr(key),
+  expire: (key: string, seconds: number): Promise<number> => getClient().expire(key, seconds),
+  ttl: (key: string): Promise<number> => getClient().ttl(key),
+  get: (key: string): Promise<string | null> => getClient().get(key),
+  del: (key: string): Promise<number> => getClient().del(key),
+  set: (key: string, value: string, opts?: SetOptions): Promise<'OK' | null> => {
+    if (opts?.nx && opts?.px !== undefined) {
+      return getClient().set(key, value, 'PX', opts.px, 'NX');
+    }
+    if (opts?.nx) {
+      return getClient().set(key, value, 'NX');
+    }
+    if (opts?.px !== undefined) {
+      return getClient().set(key, value, 'PX', opts.px) as Promise<'OK'>;
+    }
+    return getClient().set(key, value) as Promise<'OK'>;
+  },
+  ping: (): Promise<string> => getClient().ping(),
+};
+
+export function getRedis(): typeof redis {
+  return redis;
+}
 
 /**
  * Ping Redis to verify connectivity. Returns true if reachable.
