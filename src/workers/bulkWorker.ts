@@ -36,6 +36,7 @@ import { prisma } from '../lib/prisma.js';
 import { downloadFromStorage, uploadToStorage } from '../lib/supabase.js';
 import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
 import { verifyEmail } from '../engine/index.js';
+import { incrementUsageBy } from '../plugins/usageMeter.js';
 import { loadDisposableList } from '../engine/disposable.js';
 import { parseCsv } from '../routes/bulk-jobs/index.js';
 import { config } from '../config.js';
@@ -157,6 +158,8 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
     });
     if ((fresh?.status as string) === 'cancelled' || fresh?.cancelledAt) {
       log.info('Job cancelled — stopping processing');
+      // Verifications already performed still count toward the monthly quota
+      await incrementUsageBy(apiKeyId, processedCount);
       return;
     }
 
@@ -266,42 +269,53 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
   }
 
   // ── 7. Build and upload export CSV ────────────────────────────────────────
-  const allRows = await prisma.bulkJobEmail.findMany({
-    where:   { bulkJobId: jobId },
-    orderBy: { rowIndex: 'asc' },
-    select: {
-      email:         true,
-      isDuplicate:   true,
-      status:        true,
-      subStatus:     true,
-      score:         true,
-      domain:        true,
-      isDisposable:  true,
-      isRoleAccount: true,
-      mxFound:       true,
-      smtpChecked:   true,
-      smtpReachable: true,
-      isCatchAll:    true,
-      greylisted:    true,
-      durationMs:    true,
-      errorMessage:  true,
-      processedAt:   true,
-    },
-  });
-
-  const csvContent  = buildExportCsv(allRows);
+  // Fetched in pages so a 100k-row job doesn't hold every row object in memory
+  // at once — only the compact CSV string accumulates.
+  const EXPORT_PAGE = 2_000;
   const exportPath  = `exports/${apiKeyId}/${jobId}/results.csv`;
+  let exportUploaded = false;
 
   try {
+    const csvParts: string[] = [EXPORT_CSV_HEADER];
+    for (let offset = 0; ; offset += EXPORT_PAGE) {
+      const page = await prisma.bulkJobEmail.findMany({
+        where:   { bulkJobId: jobId },
+        orderBy: { rowIndex: 'asc' },
+        skip:    offset,
+        take:    EXPORT_PAGE,
+        select: {
+          email:         true,
+          isDuplicate:   true,
+          status:        true,
+          subStatus:     true,
+          score:         true,
+          domain:        true,
+          isDisposable:  true,
+          isRoleAccount: true,
+          mxFound:       true,
+          smtpChecked:   true,
+          smtpReachable: true,
+          isCatchAll:    true,
+          greylisted:    true,
+          durationMs:    true,
+          errorMessage:  true,
+          processedAt:   true,
+        },
+      });
+      if (page.length === 0) break;
+      csvParts.push(buildExportCsvRows(page));
+      if (page.length < EXPORT_PAGE) break;
+    }
+
     await uploadToStorage(
       config.STORAGE_BUCKET_EXPORTS,
       exportPath,
-      Buffer.from(csvContent, 'utf-8'),
+      Buffer.from(csvParts.join(''), 'utf-8'),
       'text/csv',
     );
+    exportUploaded = true;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Export upload failed';
-    log.error({ err }, 'Export CSV upload failed — job still marked completed');
+    log.error({ err }, 'Export CSV build/upload failed — job still marked completed');
     // Not fatal — results are still in bulk_job_emails; the export is a convenience
   }
 
@@ -317,10 +331,15 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
       unknownCount,
       errorCount,
       duplicateCount: dupeCount,
-      exportPath,
+      // Only persist the path if the file actually exists in storage —
+      // otherwise the results route would hand out signed URLs to nothing.
+      exportPath:     exportUploaded ? exportPath : null,
       completedAt:    new Date(),
     },
   });
+
+  // Bulk verifications count toward the key's monthly quota
+  await incrementUsageBy(apiKeyId, processedCount);
 
   log.info({ processedCount, validCount, invalidCount, riskyCount, unknownCount, errorCount },
     'Bulk job completed');
@@ -408,11 +427,11 @@ type ExportRow = {
   processedAt:   Date | null;
 };
 
-function buildExportCsv(rows: ExportRow[]): string {
-  const header =
-    'email,isDuplicate,status,subStatus,score,domain,isDisposable,isRoleAccount,' +
-    'mxFound,smtpChecked,smtpReachable,isCatchAll,greylisted,durationMs,errorMessage,processedAt\n';
+const EXPORT_CSV_HEADER =
+  'email,isDuplicate,status,subStatus,score,domain,isDisposable,isRoleAccount,' +
+  'mxFound,smtpChecked,smtpReachable,isCatchAll,greylisted,durationMs,errorMessage,processedAt\n';
 
+function buildExportCsvRows(rows: ExportRow[]): string {
   const body = rows.map((r) => {
     const cols = [
       r.email,
@@ -437,7 +456,7 @@ function buildExportCsv(rows: ExportRow[]): string {
     ).join(',');
   }).join('\n');
 
-  return header + body + '\n';
+  return body + '\n';
 }
 
 // ─── Webhook dispatch ─────────────────────────────────────────────────────────

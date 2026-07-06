@@ -131,9 +131,15 @@ async function storeCache(email: string, result: SmtpCacheResult): Promise<void>
 
 async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
   try {
-    // Call via Cloudflare Worker proxy (Railway blocks direct access to millionverifier.com)
-    const proxyUrl = config.MV_PROXY_URL ?? 'https://mv-proxy.sumit-sutar259.workers.dev';
-    const proxyKey = config.MV_PROXY_KEY ?? 'cnt-mv-proxy-2026';
+    // Call via Cloudflare Worker proxy (Railway blocks direct access to the providers)
+    const proxyUrl = config.MV_PROXY_URL;
+    const proxyKey = config.MV_PROXY_KEY;
+    const apiKey   = config.DEBOUNCE_API_KEY ?? config.BOUNCER_API_KEY ?? config.MILLIONVERIFIER_API_KEY;
+
+    if (!proxyUrl || !proxyKey || !apiKey) {
+      logger.warn('SMTP proxy not configured (MV_PROXY_URL/MV_PROXY_KEY/provider API key) — skipping SMTP check');
+      return notChecked('SMTP provider not configured');
+    }
 
     const res = await fetch(`${proxyUrl}/`, {
       method: 'POST',
@@ -141,7 +147,7 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
         'Content-Type': 'application/json',
         'x-proxy-key': proxyKey,
       },
-      body: JSON.stringify({ email, apiKey: config.DEBOUNCE_API_KEY ?? config.BOUNCER_API_KEY ?? config.MILLIONVERIFIER_API_KEY }),
+      body: JSON.stringify({ email, apiKey }),
       signal: AbortSignal.timeout(20_000),
     });
 

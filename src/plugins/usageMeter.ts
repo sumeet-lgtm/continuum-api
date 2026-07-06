@@ -7,7 +7,7 @@
  * 
  * Plan limits:
  *   free:    1,000/month
- *   starter: pay-as-you-go (no hard limit, but tracked)
+ *   starter: 5,000/month
  *   growth:  15,000/month
  *   scale:   100,000/month
  */
@@ -19,10 +19,14 @@ import { logger } from '../lib/logger.js';
 
 const PLAN_LIMITS: Record<string, number> = {
   free:    1_000,
-  starter: 999_999, // pay-as-you-go — no hard limit
+  starter: 5_000,
   growth:  15_000,
   scale:   100_000,
 };
+
+export function getPlanLimit(plan: string | null, monthlyLimit?: number | null): number {
+  return PLAN_LIMITS[plan ?? 'free'] ?? monthlyLimit ?? 1_000;
+}
 
 export async function requireMonthlyQuota(
   request: FastifyRequest,
@@ -51,8 +55,7 @@ export async function requireMonthlyQuota(
     }
 
     // Get plan limit
-    const plan = key.plan ?? 'free';
-    const limit = PLAN_LIMITS[plan] ?? key.monthlyLimit ?? 1_000;
+    const limit = getPlanLimit(key.plan, key.monthlyLimit);
 
     // Check if over limit
     if (key.currentMonthUsage >= limit) {
@@ -82,12 +85,17 @@ export async function requireMonthlyQuota(
 }
 
 export async function incrementUsage(apiKeyId: string): Promise<void> {
+  return incrementUsageBy(apiKeyId, 1);
+}
+
+export async function incrementUsageBy(apiKeyId: string, count: number): Promise<void> {
+  if (count <= 0) return;
   try {
     await prisma.apiKey.update({
       where: { id: apiKeyId },
-      data: { currentMonthUsage: { increment: 1 } },
+      data: { currentMonthUsage: { increment: count } },
     });
   } catch (err) {
-    logger.warn({ err, apiKeyId }, 'Failed to increment usage counter');
+    logger.warn({ err, apiKeyId, count }, 'Failed to increment usage counter');
   }
 }

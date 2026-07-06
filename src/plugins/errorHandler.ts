@@ -35,6 +35,13 @@ export const Errors = {
   rateLimited: (retryAfter: number) =>
     new AppError(429, 'RATE_LIMITED', 'Too many requests', { retryAfterMs: retryAfter }),
 
+  quotaExceeded: (used: number, limit: number, requested?: number) =>
+    new AppError(429, 'QUOTA_EXCEEDED', 'Monthly verification quota exceeded', {
+      used,
+      limit,
+      ...(requested !== undefined ? { requested } : {}),
+    }),
+
   validationFailed: (details: unknown) =>
     new AppError(422, 'VALIDATION_FAILED', 'Request validation failed', details),
 

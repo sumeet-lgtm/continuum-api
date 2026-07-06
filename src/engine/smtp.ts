@@ -203,5 +203,5 @@ function probeAddress(email: string, mxHost: string, port: number): Promise<Prob
 
 function notChecked(reason: string): SmtpProbeResult {
   logger.debug({ reason }, 'SMTP probe skipped');
-  return { checked: false, reachable: null, isCatchAll: null, greylisted: false, rawResponse: '', error: null };
+  return { checked: false, reachable: null, isCatchAll: null, greylisted: false, rawResponse: null, error: reason };
 }

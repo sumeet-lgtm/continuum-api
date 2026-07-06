@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { requireMonthlyQuota } from '../../plugins/usageMeter.js';
+import { requireMonthlyQuota, getPlanLimit } from '../../plugins/usageMeter.js';
 import { uploadToStorage, createSignedUrl } from '../../lib/supabase.js';
 import { bulkQueue } from '../../lib/queue.js';
 import { prisma } from '../../lib/prisma.js';
@@ -44,7 +44,7 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
   // ── POST /v1/bulk-jobs ──────────────────────────────────────────────────────
   fastify.post(
     '/bulk-jobs',
-    { preHandler: [requireAuth, requireRateLimit] },
+    { preHandler: [requireAuth, requireRateLimit, requireMonthlyQuota] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const data = await request.file();
 
@@ -103,6 +103,15 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
 
       const totalEmails     = parsed.length;
       const duplicateCount  = parsed.filter((r) => r.isDuplicate).length;
+
+      // The whole job must fit in the remaining monthly quota — duplicates are
+      // not verified (and not charged), so only count unique emails.
+      const uniqueEmails = totalEmails - duplicateCount;
+      const quotaLimit   = getPlanLimit(request.apiKey.plan, request.apiKey.monthlyLimit);
+      const quotaUsed    = request.apiKey.currentMonthUsage ?? 0;
+      if (quotaUsed + uniqueEmails > quotaLimit) {
+        throw Errors.quotaExceeded(quotaUsed, quotaLimit, uniqueEmails);
+      }
 
       // Create the BulkJob record and pre-create BulkJobEmail rows in one transaction
       const bulkJob = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
