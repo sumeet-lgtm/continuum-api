@@ -139,6 +139,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
     subStatus:      string | null;
     score:          number | null;
     domain:         string | null;
+    syntaxValid:    boolean | null;
     isDisposable:   boolean | null;
     isRoleAccount:  boolean | null;
     mxFound:        boolean | null;
@@ -146,6 +147,10 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
     smtpReachable:  boolean | null;
     isCatchAll:     boolean | null;
     greylisted:     boolean;
+    spfValid:       boolean | null;
+    dkimFound:      boolean | null;
+    dmarcValid:     boolean | null;
+    blacklisted:    boolean | null;
     durationMs:     number | null;
     verificationId: string | null;
     errorMessage:   string | null;
@@ -206,6 +211,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
           subStatus:      null,
           score:          null,
           domain:         null,
+          syntaxValid:    null,
           isDisposable:   null,
           isRoleAccount:  null,
           mxFound:        null,
@@ -213,6 +219,10 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
           smtpReachable:  null,
           isCatchAll:     null,
           greylisted:     false,
+          spfValid:       null,
+          dkimFound:      null,
+          dmarcValid:     null,
+          blacklisted:    null,
           durationMs:     null,
           verificationId: null,
           errorMessage:   error ?? 'Unknown error',
@@ -234,6 +244,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
           subStatus:      result.subStatus,
           score:          result.score,
           domain:         result.domain,
+          syntaxValid:    result.checks.syntaxValid,
           isDisposable:   result.checks.isDisposable,
           isRoleAccount:  result.checks.isRoleAccount,
           mxFound:        result.checks.mxFound,
@@ -241,6 +252,10 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
           smtpReachable:  result.checks.smtpReachable,
           isCatchAll:     result.checks.isCatchAll,
           greylisted:     result.checks.greylisted,
+          spfValid:       result.checks.spfValid ?? null,
+          dkimFound:      result.checks.dkimFound ?? null,
+          dmarcValid:     result.checks.dmarcValid ?? null,
+          blacklisted:    result.checks.blacklisted ?? null,
           durationMs:     result.durationMs,
           verificationId: result.id,
           errorMessage:   null,
@@ -294,6 +309,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
           subStatus:     true,
           score:         true,
           domain:        true,
+          syntaxValid:   true,
           isDisposable:  true,
           isRoleAccount: true,
           mxFound:       true,
@@ -301,6 +317,10 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
           smtpReachable: true,
           isCatchAll:    true,
           greylisted:    true,
+          spfValid:      true,
+          dkimFound:     true,
+          dmarcValid:    true,
+          blacklisted:   true,
           durationMs:    true,
           errorMessage:  true,
           processedAt:   true,
@@ -369,6 +389,7 @@ async function flushRowUpdates(updates: Array<{
   subStatus:      string | null;
   score:          number | null;
   domain:         string | null;
+  syntaxValid:    boolean | null;
   isDisposable:   boolean | null;
   isRoleAccount:  boolean | null;
   mxFound:        boolean | null;
@@ -376,6 +397,10 @@ async function flushRowUpdates(updates: Array<{
   smtpReachable:  boolean | null;
   isCatchAll:     boolean | null;
   greylisted:     boolean;
+  spfValid:       boolean | null;
+  dkimFound:      boolean | null;
+  dmarcValid:     boolean | null;
+  blacklisted:    boolean | null;
   durationMs:     number | null;
   verificationId: string | null;
   errorMessage:   string | null;
@@ -393,6 +418,7 @@ async function flushRowUpdates(updates: Array<{
           subStatus:      u.subStatus,
           score:          u.score,
           domain:         u.domain,
+          syntaxValid:    u.syntaxValid,
           isDisposable:   u.isDisposable,
           isRoleAccount:  u.isRoleAccount,
           mxFound:        u.mxFound,
@@ -400,6 +426,10 @@ async function flushRowUpdates(updates: Array<{
           smtpReachable:  u.smtpReachable,
           isCatchAll:     u.isCatchAll,
           greylisted:     u.greylisted,
+          spfValid:       u.spfValid,
+          dkimFound:      u.dkimFound,
+          dmarcValid:     u.dmarcValid,
+          blacklisted:    u.blacklisted,
           durationMs:     u.durationMs,
           verificationId: u.verificationId,
           errorMessage:   u.errorMessage,
@@ -419,6 +449,7 @@ type ExportRow = {
   subStatus:     string | null;
   score:         number | null;
   domain:        string | null;
+  syntaxValid:   boolean | null;
   isDisposable:  boolean | null;
   isRoleAccount: boolean | null;
   mxFound:       boolean | null;
@@ -426,34 +457,77 @@ type ExportRow = {
   smtpReachable: boolean | null;
   isCatchAll:    boolean | null;
   greylisted:    boolean;
+  spfValid:      boolean | null;
+  dkimFound:     boolean | null;
+  dmarcValid:    boolean | null;
+  blacklisted:   boolean | null;
   durationMs:    number | null;
   errorMessage:  string | null;
   processedAt:   Date | null;
 };
 
+// Full signal set (all 12 checks) plus a plain-English "reason" so a customer
+// can see WHY each address got its verdict without decoding sub-status codes.
 const EXPORT_CSV_HEADER =
-  'email,isDuplicate,status,subStatus,score,domain,isDisposable,isRoleAccount,' +
-  'mxFound,smtpChecked,smtpReachable,isCatchAll,greylisted,durationMs,errorMessage,processedAt\n';
+  'email,isDuplicate,status,reason,subStatus,score,domain,' +
+  'syntaxValid,mxFound,smtpChecked,smtpReachable,isCatchAll,greylisted,' +
+  'isDisposable,isRoleAccount,spfValid,dkimFound,dmarcValid,blacklisted,' +
+  'durationMs,errorMessage,processedAt\n';
+
+/** Human-readable explanation of the verdict, built from the signals. */
+function explainReason(r: ExportRow): string {
+  if (r.errorMessage) return 'Verification error — not checked';
+  if (r.isDuplicate)  return 'Duplicate of an earlier row';
+
+  switch (r.status) {
+    case 'valid':
+      return 'Deliverable — mailbox accepted verification';
+    case 'invalid':
+      if (r.syntaxValid === false)  return 'Invalid — malformed email address';
+      if (r.mxFound === false)      return 'Invalid — domain has no mail server (no MX)';
+      if (r.smtpReachable === false) return 'Invalid — mail server rejected the mailbox';
+      return 'Invalid — undeliverable';
+    case 'risky':
+      if (r.isCatchAll)     return 'Risky — catch-all domain, mailbox can’t be individually confirmed';
+      if (r.isRoleAccount)  return 'Risky — role account (e.g. info@, support@)';
+      if (r.isDisposable)   return 'Risky — disposable / temporary email domain';
+      if (r.blacklisted)    return 'Risky — sending domain is on a blacklist';
+      return 'Risky — deliverable but with quality flags';
+    case 'unknown':
+      if (r.greylisted)          return 'Unknown — mail server greylisted the probe, retry later';
+      if (r.smtpChecked === false) return 'Unknown — mailbox check unavailable for this domain';
+      return 'Unknown — could not determine deliverability';
+    default:
+      return '';
+  }
+}
 
 function buildExportCsvRows(rows: ExportRow[]): string {
+  const b = (v: boolean | null): string => (v !== null ? String(v) : '');
   const body = rows.map((r) => {
     const cols = [
       r.email,
       String(r.isDuplicate),
-      r.status           ?? '',
-      r.subStatus        ?? '',
-      r.score            !== null ? String(r.score)        : '',
-      r.domain           ?? '',
-      r.isDisposable     !== null ? String(r.isDisposable) : '',
-      r.isRoleAccount    !== null ? String(r.isRoleAccount): '',
-      r.mxFound          !== null ? String(r.mxFound)      : '',
-      r.smtpChecked      !== null ? String(r.smtpChecked)  : '',
-      r.smtpReachable    !== null ? String(r.smtpReachable): '',
-      r.isCatchAll       !== null ? String(r.isCatchAll)   : '',
+      r.status        ?? '',
+      explainReason(r),
+      r.subStatus     ?? '',
+      r.score !== null ? String(r.score) : '',
+      r.domain        ?? '',
+      b(r.syntaxValid),
+      b(r.mxFound),
+      b(r.smtpChecked),
+      b(r.smtpReachable),
+      b(r.isCatchAll),
       String(r.greylisted),
-      r.durationMs       !== null ? String(r.durationMs)   : '',
-      r.errorMessage     ? `"${r.errorMessage.replace(/"/g, '""')}"` : '',
-      r.processedAt      ? r.processedAt.toISOString()     : '',
+      b(r.isDisposable),
+      b(r.isRoleAccount),
+      b(r.spfValid),
+      b(r.dkimFound),
+      b(r.dmarcValid),
+      b(r.blacklisted),
+      r.durationMs !== null ? String(r.durationMs) : '',
+      r.errorMessage ? `"${r.errorMessage.replace(/"/g, '""')}"` : '',
+      r.processedAt ? r.processedAt.toISOString() : '',
     ];
     return cols.map((c) =>
       c.includes(',') && !c.startsWith('"') ? `"${c}"` : c,

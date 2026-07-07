@@ -124,6 +124,7 @@ model BulkJobEmail {
   subStatus      String?
   score          Int?
   domain         String?
+  syntaxValid    Boolean?
   isDisposable   Boolean?
   isRoleAccount  Boolean?
   mxFound        Boolean?
@@ -131,6 +132,10 @@ model BulkJobEmail {
   smtpReachable  Boolean?
   isCatchAll     Boolean?
   greylisted     Boolean   @default(false)
+  spfValid       Boolean?
+  dkimFound      Boolean?
+  dmarcValid     Boolean?
+  blacklisted    Boolean?
   durationMs     Int?
   verificationId String?   // FK to Verification.id — nullable because engine may fail
   errorMessage   String?   // set only if engine threw an unexpected error

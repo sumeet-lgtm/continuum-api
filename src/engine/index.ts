@@ -129,11 +129,12 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   }
   const smtpMs = Date.now() - t3;
 
-  // ── 6b. Deliverability checks (SPF/DKIM/DMARC/Blacklist) — skip for bulk to keep fast ─
-  const deliverability = bulkJobId ? {
-    spfValid: false, spfRecord: null, dmarcValid: false, dmarcRecord: null,
-    dkimFound: false, dkimSelectors: [], blacklisted: false, blacklists: [],
-  } : await checkDeliverability(domain).catch(() => ({
+  // ── 6b. Deliverability checks (SPF/DKIM/DMARC/Blacklist) ─────────────────────
+  // Run for bulk too — checkDeliverability is cached per-domain, so a big list
+  // only pays the DNS cost once per unique domain (and these are free DNS
+  // lookups, not provider credits). Skipping them left bulk exports blank on 4
+  // of the 12 signals, which is exactly what customers need to see.
+  const deliverability = await checkDeliverability(domain).catch(() => ({
     spfValid: false, spfRecord: null, dmarcValid: false, dmarcRecord: null,
     dkimFound: false, dkimSelectors: [], blacklisted: false, blacklists: [],
   }));
