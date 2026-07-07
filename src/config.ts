@@ -46,6 +46,10 @@ const envSchema = z.object({
   DODO_PRODUCT_SCALE: z.string().optional(),
   DASHBOARD_URL: z.string().url().default('https://app.continuumapi.com'),
 
+  // Transactional email (Resend) — email is off when the key is unset
+  RESEND_API_KEY: z.string().optional(),
+  SUPPORT_EMAIL: z.string().default('sumeet@continuumapi.com'),
+
   // Rate limiting
   DEFAULT_RATE_LIMIT_RPM: z.coerce.number().int().min(1).max(100000).default(1000),
 

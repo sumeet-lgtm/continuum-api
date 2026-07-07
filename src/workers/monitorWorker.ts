@@ -30,6 +30,7 @@ import { redis } from '../lib/redis.js';
 import { prisma } from '../lib/prisma.js';
 import { verifyEmail } from '../engine/index.js';
 import { getPlanLimit, incrementUsageBy } from '../plugins/usageMeter.js';
+import { runEmailSweep } from './emailSweep.js';
 import { loadDisposableList } from '../engine/disposable.js';
 import { config } from '../config.js';
 import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
@@ -462,6 +463,10 @@ function startMonitorWorker(): void {
   // Provider credit alarm — twice a day + on startup
   setInterval(() => { void checkProviderCredits(); }, 43_200_000);
   void checkProviderCredits();
+
+  // Lifecycle emails (welcome / quota warnings) — hourly + on startup
+  setInterval(() => { void runEmailSweep(); }, 3_600_000);
+  void runEmailSweep();
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Monitor worker shutting down');
