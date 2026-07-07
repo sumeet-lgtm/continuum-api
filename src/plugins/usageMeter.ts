@@ -51,6 +51,16 @@ export async function requireMonthlyQuota(
   const now = new Date();
 
   try {
+    // Keys created without a reset date would otherwise never reset their usage
+    if (!key.usageResetAt) {
+      const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      await prisma.apiKey.update({
+        where: { id: key.id },
+        data:  { usageResetAt: nextReset },
+      });
+      key.usageResetAt = nextReset;
+    }
+
     // Check if usage needs to be reset (new month)
     const resetAt = key.usageResetAt ? new Date(key.usageResetAt) : null;
     if (resetAt && now >= resetAt) {
