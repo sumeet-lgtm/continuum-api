@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
+import { getMonitorLimit } from '../../plugins/usageMeter.js';
 import { prisma } from '../../lib/prisma.js';
 import { monitorQueue } from '../../lib/queue.js';
 import type { MonitorRecheckPayload } from '../../types/job.js';
@@ -12,9 +13,6 @@ import { logger } from '../../lib/logger.js';
 
 // Valid recheck cadences in hours
 const VALID_INTERVALS = [1, 6, 12, 24, 48, 72, 168] as const;
-
-// Maximum monitors per API key to prevent unbounded growth
-const MAX_MONITORS_PER_KEY = 500;
 
 // ─── Input schemas ────────────────────────────────────────────────────────────
 
@@ -143,13 +141,14 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
 
       const { email, intervalHours, tags, notifyOnAnyChange } = parsed.data;
 
-      // Enforce per-key monitor cap
+      // Enforce per-plan monitor cap
+      const monitorLimit  = getMonitorLimit(request.apiKey.plan);
       const existingCount = await prisma.monitor.count({
         where: { apiKeyId: request.apiKey.id },
       });
-      if (existingCount >= MAX_MONITORS_PER_KEY) {
+      if (existingCount >= monitorLimit) {
         throw Errors.validationFailed({
-          limit: `Maximum of ${MAX_MONITORS_PER_KEY} monitors per API key. Delete some before creating new ones.`,
+          limit: `Your ${request.apiKey.plan ?? 'free'} plan allows ${monitorLimit} monitors. Delete some or upgrade to add more.`,
         });
       }
 

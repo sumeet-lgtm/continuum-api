@@ -28,6 +28,19 @@ export function getPlanLimit(plan: string | null, monthlyLimit?: number | null):
   return PLAN_LIMITS[plan ?? 'free'] ?? monthlyLimit ?? 1_000;
 }
 
+// Active-monitor ceiling per plan. Each monitor check consumes a verification
+// (and a provider credit), so caps scale with the plan's monthly quota.
+const PLAN_MONITOR_LIMITS: Record<string, number> = {
+  free:    5,
+  starter: 50,
+  growth:  200,
+  scale:   500,
+};
+
+export function getMonitorLimit(plan: string | null): number {
+  return PLAN_MONITOR_LIMITS[plan ?? 'free'] ?? PLAN_MONITOR_LIMITS['free']!;
+}
+
 export async function requireMonthlyQuota(
   request: FastifyRequest,
   reply: FastifyReply,

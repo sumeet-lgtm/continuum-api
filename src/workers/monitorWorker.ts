@@ -29,6 +29,7 @@ import { redisConnection, QUEUE_MONITOR, webhookQueue } from '../lib/queue.js';
 import { redis } from '../lib/redis.js';
 import { prisma } from '../lib/prisma.js';
 import { verifyEmail } from '../engine/index.js';
+import { getPlanLimit, incrementUsageBy } from '../plugins/usageMeter.js';
 import { loadDisposableList } from '../engine/disposable.js';
 import { config } from '../config.js';
 import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
@@ -175,12 +176,30 @@ async function processMonitor(monitor: MonitorRecord): Promise<void> {
   try {
     log.debug({ source: monitor.source }, 'Running monitor check');
 
+    // Monitor checks consume verifications (and provider credits) — skip when
+    // the key is over its monthly quota, rescheduling instead of burning credits.
+    const key = await prisma.apiKey.findUnique({
+      where:  { id: monitor.apiKeyId },
+      select: { plan: true, monthlyLimit: true, currentMonthUsage: true },
+    });
+    if (key && key.currentMonthUsage >= getPlanLimit(key.plan, key.monthlyLimit)) {
+      log.info({ apiKeyId: monitor.apiKeyId }, 'Monthly quota exhausted — skipping monitor check');
+      await prisma.monitor.update({
+        where: { id: monitor.id },
+        data:  { nextCheckAt: calcNextCheckAt(monitor.intervalHours) },
+      });
+      return;
+    }
+
     const result = await verifyEmail({
       email:     monitor.email,
       apiKeyId:  monitor.apiKeyId,
       bulkJobId: undefined,
       sourceIp:  undefined,
     });
+
+    // Each successful check counts toward the key's monthly quota
+    await incrementUsageBy(monitor.apiKeyId, 1);
 
     const durationMs      = Date.now() - wallStart;
     const newStatus       = result.status;
@@ -356,6 +375,48 @@ async function resetMonthlyUsage(): Promise<void> {
   }
 }
 
+// ─── Provider credit alarm ────────────────────────────────────────────────────
+// The Redis outage in June went unnoticed for two weeks; credits running dry
+// would fail the same silent way. Checked twice a day; alerts via log +
+// optional ALERT_WEBHOOK_URL (Slack-compatible {text} payload).
+
+const CREDIT_ALERT_THRESHOLD = Number(process.env['CREDIT_ALERT_THRESHOLD'] ?? 5_000);
+
+async function checkProviderCredits(): Promise<void> {
+  const apiKey = config.DEBOUNCE_API_KEY;
+  if (!apiKey) return;
+  try {
+    const res = await fetch(`https://api.debounce.io/v1/balance/?api=${apiKey}`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return;
+    const data = await res.json() as { balance?: string };
+    const balance = Number(data.balance ?? NaN);
+    if (!Number.isFinite(balance)) return;
+
+    logger.info({ balance }, 'DeBounce credit balance');
+    if (balance < CREDIT_ALERT_THRESHOLD) {
+      logger.error(
+        { balance, threshold: CREDIT_ALERT_THRESHOLD },
+        'LOW DEBOUNCE CREDITS — SMTP verification will degrade to unknown when exhausted',
+      );
+      const hook = process.env['ALERT_WEBHOOK_URL'];
+      if (hook) {
+        await fetch(hook, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            text: `⚠️ Continuum API: DeBounce balance is ${balance} credits (threshold ${CREDIT_ALERT_THRESHOLD}). Top up before SMTP checks stop.`,
+          }),
+          signal: AbortSignal.timeout(10_000),
+        }).catch(() => { /* alert delivery is best-effort */ });
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Provider credit balance check failed');
+  }
+}
+
 function startMonitorWorker(): void {
   loadDisposableList();
 
@@ -397,6 +458,10 @@ function startMonitorWorker(): void {
   // Check for monthly usage resets every hour
   setInterval(() => { void resetMonthlyUsage(); }, 3_600_000);
   void resetMonthlyUsage(); // Run on startup too
+
+  // Provider credit alarm — twice a day + on startup
+  setInterval(() => { void checkProviderCredits(); }, 43_200_000);
+  void checkProviderCredits();
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Monitor worker shutting down');
