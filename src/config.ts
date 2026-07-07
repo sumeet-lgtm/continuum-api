@@ -38,6 +38,14 @@ const envSchema = z.object({
   DEBOUNCE_API_KEY: z.string().optional(),
   BOUNCER_API_KEY: z.string().optional(),
 
+  // Billing (Dodo Payments)
+  DODO_PAYMENTS_API_KEY: z.string().optional(),
+  DODO_WEBHOOK_SECRET: z.string().optional(),
+  DODO_PRODUCT_STARTER: z.string().optional(),
+  DODO_PRODUCT_GROWTH: z.string().optional(),
+  DODO_PRODUCT_SCALE: z.string().optional(),
+  DASHBOARD_URL: z.string().url().default('https://app.continuumapi.com'),
+
   // Rate limiting
   DEFAULT_RATE_LIMIT_RPM: z.coerce.number().int().min(1).max(100000).default(1000),
 

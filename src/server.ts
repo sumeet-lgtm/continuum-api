@@ -17,6 +17,7 @@ import { webhookRoutes } from './routes/webhooks/index.js';
 import { bulkJobRoutes } from './routes/bulk-jobs/index.js';
 import { ipRoutes } from './routes/ip/index.js';
 import { phoneRoutes } from './routes/phone/index.js';
+import { billingRoutes } from './routes/billing/index.js';
 import { loadDisposableList } from './engine/disposable.js';
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -106,6 +107,7 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(bulkJobRoutes, { prefix: '/v1' });
   await app.register(ipRoutes, { prefix: '/v1' });
   await app.register(phoneRoutes, { prefix: '/v1' });
+  await app.register(billingRoutes, { prefix: '/v1' });
 
   // ─── Root info ────────────────────────────────────────────────────────────
   app.get('/', async (_request, reply) => {
