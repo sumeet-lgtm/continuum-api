@@ -129,115 +129,136 @@ async function storeCache(email: string, result: SmtpCacheResult): Promise<void>
 
 // ─── MillionVerifier API call ─────────────────────────────────────────────────
 
+// The provider (DeBounce) rate-limits concurrent traffic and returns 429. A
+// 429 means "ask again", NOT "this address is unverifiable" — so we retry with
+// backoff+jitter instead of mislabeling the address as unknown. This was the
+// bug that made bulk jobs come back ~50% "unknown" under load.
+const SMTP_MAX_ATTEMPTS = 4;
+const SMTP_RETRY_BASE_MS = 700;
+
+function isRateLimitError(text: string): boolean {
+  return /\b429\b|rate.?limit|too many/i.test(text);
+}
+
 async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
-  try {
-    // Call via Cloudflare Worker proxy (Railway blocks direct access to the providers)
-    const proxyUrl = config.MV_PROXY_URL;
-    const proxyKey = config.MV_PROXY_KEY;
-    const apiKey   = config.DEBOUNCE_API_KEY ?? config.BOUNCER_API_KEY ?? config.MILLIONVERIFIER_API_KEY;
+  // Call via Cloudflare Worker proxy (Railway blocks direct access to the providers)
+  const proxyUrl = config.MV_PROXY_URL;
+  const proxyKey = config.MV_PROXY_KEY;
+  const apiKey   = config.DEBOUNCE_API_KEY ?? config.BOUNCER_API_KEY ?? config.MILLIONVERIFIER_API_KEY;
 
-    if (!proxyUrl || !proxyKey || !apiKey) {
-      logger.warn('SMTP proxy not configured (MV_PROXY_URL/MV_PROXY_KEY/provider API key) — skipping SMTP check');
-      return notChecked('SMTP provider not configured');
-    }
-
-    const res = await fetch(`${proxyUrl}/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-proxy-key': proxyKey,
-      },
-      body: JSON.stringify({ email, apiKey }),
-      signal: AbortSignal.timeout(20_000),
-    });
-
-    if (!res.ok) {
-      logger.warn({ status: res.status, email }, 'MillionVerifier API error');
-      return notChecked('API error');
-    }
-
-    // DeBounce response format
-    const data = await res.json() as {
-      debounce?: {
-        email:            string;
-        code:             string; // '5'=deliverable, '6'=risky, '7'=unknown, '8'=undeliverable
-        role:             string;
-        free_email:       string;
-        result:           string; // 'Safe to Send', 'Risky', 'Unknown', 'Do Not Send'
-        reason:           string;
-        send_transactional: string;
-        did_you_mean:     string;
-      };
-      success?: string;
-      balance?: string;
-      error?:   string;
-    };
-
-    logger.info({ email, code: data.debounce?.code, result: data.debounce?.result }, 'DeBounce response');
-
-    if (!data.debounce || data.success !== '1') {
-      return notChecked(data.error ?? 'DeBounce verification failed');
-    }
-
-    const code = data.debounce.code;
-    const reason = data.debounce.reason ?? '';
-
-    // DeBounce codes:
-    // 1 = Safe to Send
-    // 2 = Safe to Send  
-    // 3 = Unknown
-    // 4 = Risky (Accept All / Catch-all)
-    // 5 = Safe to Send
-    // 6 = Risky
-    // 7 = Unknown
-    // 8 = Do Not Send
-
-    // Safe to Send
-    if (code === '1' || code === '2' || code === '5') {
-      return {
-        checked:     true,
-        reachable:   true,
-        isCatchAll:  reason.toLowerCase().includes('accept all') || reason.toLowerCase().includes('catch'),
-        greylisted:  false,
-        fromCache:   false,
-        rawResponse: null,
-        error:       null,
-      };
-    }
-
-    // Risky / Accept All / Catch-all
-    if (code === '4' || code === '6') {
-      return {
-        checked:     true,
-        reachable:   true,
-        isCatchAll:  true,
-        greylisted:  false,
-        fromCache:   false,
-        rawResponse: null,
-        error:       null,
-      };
-    }
-
-    // Do Not Send / Undeliverable
-    if (code === '8') {
-      return {
-        checked:     true,
-        reachable:   false,
-        isCatchAll:  false,
-        greylisted:  false,
-        fromCache:   false,
-        rawResponse: null,
-        error:       null,
-      };
-    }
-
-    // code 3 or 7 = Unknown
-    return notChecked('smtp_unknown');
-
-  } catch (err) {
-    logger.error({ err, email }, 'MillionVerifier API call failed');
-    return notChecked('API unreachable');
+  if (!proxyUrl || !proxyKey || !apiKey) {
+    logger.warn('SMTP proxy not configured (MV_PROXY_URL/MV_PROXY_KEY/provider API key) — skipping SMTP check');
+    return notChecked('SMTP provider not configured');
   }
+
+  let lastError = 'API unreachable';
+
+  for (let attempt = 1; attempt <= SMTP_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      const delay = SMTP_RETRY_BASE_MS * 2 ** (attempt - 2) + Math.random() * 400;
+      await new Promise((r) => setTimeout(r, delay));
+    }
+
+    try {
+      const res = await fetch(`${proxyUrl}/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-proxy-key': proxyKey,
+        },
+        body: JSON.stringify({ email, apiKey }),
+        signal: AbortSignal.timeout(20_000),
+      });
+
+      // Provider rate limit or upstream error → retryable
+      if (res.status === 429 || res.status >= 500) {
+        lastError = `provider ${res.status}`;
+        continue;
+      }
+      if (!res.ok) {
+        logger.warn({ status: res.status, email }, 'MillionVerifier API error');
+        return notChecked('API error');
+      }
+
+      // DeBounce response format
+      const data = await res.json() as {
+        debounce?: {
+          email:            string;
+          code:             string; // '5'=deliverable, '6'=risky, '7'=unknown, '8'=undeliverable
+          role:             string;
+          free_email:       string;
+          result:           string; // 'Safe to Send', 'Risky', 'Unknown', 'Do Not Send'
+          reason:           string;
+          send_transactional: string;
+          did_you_mean:     string;
+        };
+        success?: string;
+        balance?: string;
+        error?:   string;
+      };
+
+      // DeBounce can return HTTP 200 with an error field on rate limit
+      if (data.error && isRateLimitError(String(data.error))) {
+        lastError = 'provider 429';
+        continue;
+      }
+
+      if (!data.debounce || data.success !== '1') {
+        return notChecked(data.error ?? 'DeBounce verification failed');
+      }
+
+      const code = data.debounce.code;
+      const reason = data.debounce.reason ?? '';
+
+      // DeBounce codes: 1/2/5 = Safe · 4/6 = Risky (accept-all) · 8 = Undeliverable · 3/7 = Unknown
+
+      if (code === '1' || code === '2' || code === '5') {
+        return {
+          checked:     true,
+          reachable:   true,
+          isCatchAll:  reason.toLowerCase().includes('accept all') || reason.toLowerCase().includes('catch'),
+          greylisted:  false,
+          fromCache:   false,
+          rawResponse: null,
+          error:       null,
+        };
+      }
+
+      if (code === '4' || code === '6') {
+        return {
+          checked:     true,
+          reachable:   true,
+          isCatchAll:  true,
+          greylisted:  false,
+          fromCache:   false,
+          rawResponse: null,
+          error:       null,
+        };
+      }
+
+      if (code === '8') {
+        return {
+          checked:     true,
+          reachable:   false,
+          isCatchAll:  false,
+          greylisted:  false,
+          fromCache:   false,
+          rawResponse: null,
+          error:       null,
+        };
+      }
+
+      // code 3 or 7 = genuinely Unknown (provider couldn't determine)
+      return notChecked('smtp_unknown');
+
+    } catch (err) {
+      // Timeout / network blip → retryable
+      lastError = err instanceof Error ? err.message : 'API unreachable';
+    }
+  }
+
+  logger.warn({ email, lastError, attempts: SMTP_MAX_ATTEMPTS }, 'SMTP check exhausted retries');
+  return notChecked(lastError);
 }
 
 function notChecked(error: string): SmtpCacheResult {

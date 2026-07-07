@@ -44,7 +44,11 @@ import { logger } from '../lib/logger.js';
 import type { BulkJobPayload } from '../types/job.js';
 import type { VerificationResult } from '../types/verification.js';
 
-const EMAIL_CONCURRENCY      = 10;
+// DeBounce rate-limits concurrent traffic (429s above ~4-5 in flight). Keep
+// concurrency low so we rarely trip the limit; callMillionVerifier retries the
+// occasional 429 that slips through. Higher values traded throughput for a
+// ~50% "unknown" rate under load — not worth it.
+const EMAIL_CONCURRENCY      = 4;
 const PROGRESS_FLUSH_INTERVAL = 25;  // flush every N processed emails
 
 // ─── Main job processor ───────────────────────────────────────────────────────
