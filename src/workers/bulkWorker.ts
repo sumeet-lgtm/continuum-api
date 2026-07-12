@@ -87,11 +87,13 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
   // ── 4. Load pre-created BulkJobEmail rows (ordered by rowIndex) ───────────
   // We created these rows in the route handler. We use them to map results back.
   // Typed as mutable so the fallback branch can push into it
-  type EmailRowRecord = { id: string; email: string; rowIndex: number; isDuplicate: boolean };
+  // processedAt/status are read so a re-run RESUMES: rows already verified in a
+  // previous attempt are skipped instead of re-charged and re-verified.
+  type EmailRowRecord = { id: string; email: string; rowIndex: number; isDuplicate: boolean; processedAt: Date | null; status: string | null };
   const emailRows: EmailRowRecord[] = await prisma.bulkJobEmail.findMany({
     where:   { bulkJobId: jobId },
     orderBy: { rowIndex: 'asc' },
-    select:  { id: true, email: true, rowIndex: true, isDuplicate: true },
+    select:  { id: true, email: true, rowIndex: true, isDuplicate: true, processedAt: true, status: true },
   });
 
   if (emailRows.length === 0) {
@@ -116,27 +118,33 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
     const refetched: EmailRowRecord[] = await prisma.bulkJobEmail.findMany({
       where:   { bulkJobId: jobId },
       orderBy: { rowIndex: 'asc' },
-      select:  { id: true, email: true, rowIndex: true, isDuplicate: true },
+      select:  { id: true, email: true, rowIndex: true, isDuplicate: true, processedAt: true, status: true },
     });
     emailRows.push(...refetched);
   }
 
-  // ── 5. Separate duplicates from to-verify list ────────────────────────────
-  const toVerify  = emailRows.filter((r) => !r.isDuplicate);
-  const dupeRows  = emailRows.filter((r) => r.isDuplicate);
-  const dupeCount = dupeRows.length;
+  // ── 5. Separate duplicates, already-done, and still-to-verify ─────────────
+  // A previous attempt may have processed some rows (long jobs can be reclaimed
+  // by BullMQ after a stall). Skip anything already verified so a 6-hour job
+  // that blips resumes instead of restarting from zero.
+  const dupeRows    = emailRows.filter((r) => r.isDuplicate);
+  const dupeCount   = dupeRows.length;
+  const alreadyDone = emailRows.filter((r) => !r.isDuplicate && r.processedAt);
+  const toVerify    = emailRows.filter((r) => !r.isDuplicate && !r.processedAt);
+  const totalToVerify = alreadyDone.length + toVerify.length;
 
-  log.info({ total: emailRows.length, toVerify: toVerify.length, duplicates: dupeCount },
-    'Starting verification');
+  log.info({ total: emailRows.length, toVerify: toVerify.length, resumedDone: alreadyDone.length, duplicates: dupeCount },
+    alreadyDone.length > 0 ? 'Resuming verification' : 'Starting verification');
 
   // ── 6. Verify emails with bounded per-job concurrency ─────────────────────
-  const verifiedResults: VerificationResult[] = [];
-  let processedCount = 0;
-  let validCount     = 0;
-  let invalidCount   = 0;
-  let riskyCount     = 0;
-  let unknownCount   = 0;
-  let errorCount     = 0;
+  // Seed running counts from rows completed in a previous attempt so progress
+  // stays monotonic across a resume (never overwrites the DB with a lower count).
+  let processedCount = alreadyDone.length;
+  let validCount     = alreadyDone.filter((r) => r.status === 'valid').length;
+  let invalidCount   = alreadyDone.filter((r) => r.status === 'invalid').length;
+  let riskyCount     = alreadyDone.filter((r) => r.status === 'risky').length;
+  let unknownCount   = alreadyDone.filter((r) => r.status === 'unknown').length;
+  let errorCount     = alreadyDone.filter((r) => r.status === null).length;
 
   // Accumulate row updates to batch-write
   type RowUpdate = {
@@ -235,8 +243,6 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
           processedAt:    new Date(),
         });
       } else {
-        verifiedResults.push(result);
-
         switch (result.status) {
           case 'valid':   validCount++;   break;
           case 'invalid': invalidCount++; break;
@@ -273,7 +279,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
     // ── Flush to DB periodically ─────────────────────────────────────────────
     const shouldFlush =
       rowUpdates.length >= PROGRESS_FLUSH_INTERVAL ||
-      processedCount === toVerify.length;
+      processedCount === totalToVerify;
 
     if (shouldFlush && rowUpdates.length > 0) {
       await flushRowUpdates(rowUpdates.splice(0)); // drain the accumulator
@@ -282,9 +288,9 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
         data:  { processedCount, validCount, invalidCount, riskyCount, unknownCount, errorCount },
       });
 
-      const pct = Math.round((processedCount / toVerify.length) * 100);
+      const pct = totalToVerify > 0 ? Math.round((processedCount / totalToVerify) * 100) : 100;
       await job.updateProgress(pct);
-      log.info({ processedCount, total: toVerify.length, pct }, 'Progress');
+      log.info({ processedCount, total: totalToVerify, pct }, 'Progress');
     }
   }
 
@@ -624,10 +630,12 @@ async function recoverStalledJobs(): Promise<void> {
   logger.warn({ count: stalled.length }, 'Found stalled bulk jobs — re-enqueuing');
 
   for (const job of stalled) {
+    // Do NOT reset the counts — the worker resumes from already-processed rows,
+    // so keeping the partial progress means a reclaimed job continues instead
+    // of re-verifying (and re-charging) everything from zero.
     await prisma.bulkJob.update({
       where: { id: job.id },
-      data:  { status: 'pending', startedAt: null, processedCount: 0,
-               validCount: 0, invalidCount: 0, riskyCount: 0, unknownCount: 0, errorCount: 0 },
+      data:  { status: 'pending', startedAt: null },
     });
 
     // Re-create the BullMQ job (will no-op if it already exists due to jobId dedup)
@@ -654,7 +662,10 @@ function startBulkWorker(): void {
     connection:      redisConnection,
     concurrency:     3,
     stalledInterval: 1_800_000,  // 30-min heartbeat for large jobs
-    maxStalledCount: 1,        // fail after 1 stall detection (not infinite retry)
+    // Tolerate a few stalls (Redis blips over a multi-hour job) before giving
+    // up. Safe now that the worker RESUMES from already-processed rows, so a
+    // reclaim continues rather than restarting/re-charging.
+    maxStalledCount: 3,
   });
 
   worker.on('completed', (job) => {
