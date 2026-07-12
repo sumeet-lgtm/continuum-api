@@ -95,17 +95,23 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
   });
 
   if (emailRows.length === 0) {
-    // Fallback: rows may not exist if job was created by an older code path
-    log.warn('No BulkJobEmail rows found — creating them now');
-    await prisma.bulkJobEmail.createMany({
-      data: parsed.map((r) => ({
-        id:          randomUUID(),
-        bulkJobId:   jobId,
-        email:       r.email,
-        rowIndex:    r.rowIndex,
-        isDuplicate: r.isDuplicate,
-      })),
-    });
+    // Primary path now: the creation route no longer pre-creates these rows
+    // (that blew the 5s transaction timeout for big files), so the worker
+    // builds them here. Batch at 500 — a single createMany of all rows would
+    // exceed Postgres's 65k bound-parameter limit around ~13k rows.
+    log.info({ rows: parsed.length }, 'Creating BulkJobEmail rows (batched)');
+    const CREATE_BATCH = 500;
+    for (let i = 0; i < parsed.length; i += CREATE_BATCH) {
+      await prisma.bulkJobEmail.createMany({
+        data: parsed.slice(i, i + CREATE_BATCH).map((r) => ({
+          id:          randomUUID(),
+          bulkJobId:   jobId,
+          email:       r.email,
+          rowIndex:    r.rowIndex,
+          isDuplicate: r.isDuplicate,
+        })),
+      });
+    }
 
     const refetched: EmailRowRecord[] = await prisma.bulkJobEmail.findMany({
       where:   { bulkJobId: jobId },

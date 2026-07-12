@@ -113,44 +113,34 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.quotaExceeded(quotaUsed, quotaLimit, uniqueEmails);
       }
 
-      // Create the BulkJob record and pre-create BulkJobEmail rows in one transaction
-      const bulkJob = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        const job = await tx.bulkJob.create({
-          data: {
-            id:             jobId,
-            apiKeyId:       request.apiKey.id,
-            fileName:       originalName,
-            storagePath,
-            totalEmails,
-            duplicateCount,
-            status:         'pending',
-          },
-          select: {
-            id:            true,
-            fileName:      true,
-            totalEmails:   true,
-            duplicateCount: true,
-            status:        true,
-            createdAt:     true,
-          },
-        });
-
-        // Insert all email rows in batches of 500 to avoid hitting Postgres param limits
-        const BATCH = 500;
-        for (let i = 0; i < parsed.length; i += BATCH) {
-          const slice = parsed.slice(i, i + BATCH);
-          await tx.bulkJobEmail.createMany({
-            data: slice.map((r) => ({
-              id:          randomUUID(),
-              bulkJobId:   jobId,
-              email:       r.email,
-              rowIndex:    r.rowIndex,
-              isDuplicate: r.isDuplicate,
-            })),
-          });
-        }
-
-        return job;
+      // Create the BulkJob record only. The per-email BulkJobEmail rows are
+      // created by the worker at job start (batched) — NOT here.
+      //
+      // Why: inserting all rows synchronously in one interactive $transaction
+      // blew Prisma's default 5s transaction timeout for large files (e.g. 29k
+      // rows = 58 round-trips to Postgres), which rolled the whole job back —
+      // so big uploads silently produced no job at all. Small files (≤~2k) fit
+      // under 5s and worked, which masked the bug. Creating just the job row is
+      // O(1) regardless of size; the worker re-parses the CSV from storage and
+      // pre-creates the email rows (batched) before it starts verifying.
+      const bulkJob = await prisma.bulkJob.create({
+        data: {
+          id:             jobId,
+          apiKeyId:       request.apiKey.id,
+          fileName:       originalName,
+          storagePath,
+          totalEmails,
+          duplicateCount,
+          status:         'pending',
+        },
+        select: {
+          id:            true,
+          fileName:      true,
+          totalEmails:   true,
+          duplicateCount: true,
+          status:        true,
+          createdAt:     true,
+        },
       });
 
       // Enqueue the background job
