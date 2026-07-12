@@ -1,0 +1,10 @@
+# Railway/Nixpacks build config.
+#
+# NODE_ENV=production is set as a service variable (the app needs it at runtime),
+# which makes the default `npm ci` OMIT devDependencies — so `tsc` and `prisma`
+# (both devDependencies) go missing and the build fails with "tsc: not found".
+#
+# Force dev deps in the build phase with --include=dev (overrides NODE_ENV).
+# Nixpacks still prunes to production deps for the final runtime image.
+[phases.install]
+cmds = ["npm ci --include=dev"]
