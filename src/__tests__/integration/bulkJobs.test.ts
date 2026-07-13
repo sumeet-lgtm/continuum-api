@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import type { BulkJob, BulkJobEmail } from '@prisma/client';
 import { Readable } from 'node:stream';
 
 // ─── Mock all external I/O ────────────────────────────────────────────────────
@@ -94,7 +95,8 @@ const mockQueueAdd   = vi.mocked(bulkQueue.add);
 const TEST_KEY     = 'cnt_testbulkkey0123456789abcdefghijklm';
 const TEST_KEY_REC = {
   id: 'key-bulk-001', keyHash: '', keyPrefix: 'cnt_testbulk',
-  label: 'test', ownerId: null, rateLimit: 1000,
+  label: 'test', ownerId: null, userId: null, keyRaw: null, rateLimit: 1000,
+  monthlyLimit: 100000, currentMonthUsage: 0, usageResetAt: new Date(), plan: 'scale',
   isActive: true, createdAt: new Date(), revokedAt: null,
 };
 
@@ -157,7 +159,7 @@ async function uploadCsv(csvBuf: Buffer, filename = 'leads.csv') {
   });
 }
 
-function mockJobRecord(overrides = {}) {
+function mockJobRecord(overrides: Partial<BulkJob> = {}): BulkJob {
   return {
     id:             'job-001',
     apiKeyId:       'key-bulk-001',
@@ -171,14 +173,16 @@ function mockJobRecord(overrides = {}) {
     duplicateCount: 0,
     errorCount:     0,
     status:         'pending',
+    storagePath:    'uploads/key-bulk-001/job-001/leads.csv',
     errorMessage:   null,
     exportPath:     null,
+    webhookSent:    false,
     createdAt:      new Date('2026-04-24T10:00:00Z'),
     startedAt:      null,
     completedAt:    null,
     cancelledAt:    null,
     ...overrides,
-  };
+  } as unknown as BulkJob;
 }
 
 // ─── POST /v1/bulk-jobs ───────────────────────────────────────────────────────
@@ -217,14 +221,7 @@ describe('POST /v1/bulk-jobs', () => {
 
   describe('successful upload', () => {
     beforeEach(() => {
-      const createdJob = {
-        id:             'job-001',
-        fileName:       'leads.csv',
-        totalEmails:    3,
-        duplicateCount: 0,
-        status:         'pending',
-        createdAt:      new Date('2026-04-24T10:00:00Z'),
-      };
+      const createdJob = mockJobRecord({ fileName: 'leads.csv', totalEmails: 3 });
       mockJobCreate.mockResolvedValue(createdJob);
       mockTx.mockImplementation(async (fn: unknown) => {
         if (typeof fn === 'function') {
@@ -359,8 +356,10 @@ describe('GET /v1/bulk-jobs/:id', () => {
 // ─── GET /v1/bulk-jobs/:id/results ───────────────────────────────────────────
 
 describe('GET /v1/bulk-jobs/:id/results', () => {
-  function mockEmailRows(n = 3) {
+  function mockEmailRows(n = 3): BulkJobEmail[] {
     return Array.from({ length: n }, (_, i) => ({
+      id:             `email-${i}`,
+      bulkJobId:      'job-001',
       email:          `user${i}@example.com`,
       rowIndex:       i,
       isDuplicate:    false,
@@ -368,6 +367,7 @@ describe('GET /v1/bulk-jobs/:id/results', () => {
       subStatus:      null,
       score:          90,
       domain:         'example.com',
+      syntaxValid:    true,
       isDisposable:   false,
       isRoleAccount:  false,
       mxFound:        true,
@@ -375,11 +375,15 @@ describe('GET /v1/bulk-jobs/:id/results', () => {
       smtpReachable:  null,
       isCatchAll:     null,
       greylisted:     false,
+      spfValid:       true,
+      dkimFound:      true,
+      dmarcValid:     true,
+      blacklisted:    false,
       durationMs:     40,
       verificationId: `ver-${i}`,
       errorMessage:   null,
       processedAt:    new Date('2026-04-24T10:01:00Z'),
-    }));
+    })) as unknown as BulkJobEmail[];
   }
 
   beforeEach(() => {
