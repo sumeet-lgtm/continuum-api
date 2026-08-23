@@ -26,10 +26,23 @@ model ApiKey {
   createdAt          DateTime  @default(now())
   revokedAt          DateTime?
 
+  monthlySendLimit      Int @default(500) // max /v1/send calls per month
+  currentMonthSendUsage Int @default(0)   // sends used this month — separate counter from verification usage
+  // Deliberately its OWN column, not a reuse of usageResetAt: sharing one
+  // rollover timestamp between two independent counters means whichever
+  // quota check fires first each month resets ITS OWN counter and pushes
+  // usageResetAt forward, silently starving the other counter's reset for
+  // that entire month (its `now >= resetAt` never fires again until the
+  // NEXT boundary). Found this by tracing the verify/send interaction, not
+  // by a failing test — worth remembering if a third quota dimension ever
+  // gets added: give it its own reset column too, not a shared one.
+  sendUsageResetAt DateTime @default(dbgenerated("date_trunc('month', now() + interval '1 month')"))
+
   verifications Verification[]
   bulkJobs      BulkJob[]
   monitors      Monitor[]
   webhooks      Webhook[]
+  sendMessages  SendMessage[]
 
   @@map("api_keys")
 }
@@ -61,6 +74,7 @@ model Verification {
 
   apiKey  ApiKey   @relation(fields: [apiKeyId], references: [id])
   bulkJob BulkJob? @relation(fields: [bulkJobId], references: [id])
+  sendMessages SendMessage[]
 
   @@index([email])
   @@index([apiKeyId])
@@ -237,6 +251,12 @@ enum WebhookEvent {
   verification_complete    // emitted as "verification.completed" in payloads
   bulk_job_complete        // emitted as "bulk_job.completed" in payloads
   monitor_status_change    // emitted as "email.status_changed" in payloads
+  // Phase 6 (Send)
+  email_sent                // emitted as "email.sent"
+  email_delivered           // emitted as "email.delivered"
+  email_bounced             // emitted as "email.bounced"
+  email_complained          // emitted as "email.complained"
+  email_send_failed         // emitted as "email.send_failed"
 }
 
 // ─── Webhook Delivery Log ─────────────────────────────────────────────────────
@@ -308,4 +328,88 @@ model SmtpCache {
   @@index([email])
   @@index([expiresAt])
   @@map("smtp_cache")
+}
+
+// ─── Phase 6: Send ────────────────────────────────────────────────────────────
+// Transactional sending on top of verification. verifyEmail() already exists
+// and stores per-address history — SendMessage reads from it (verify-before-send)
+// so a send can be checked against the same dataset instead of a second product.
+
+model SendMessage {
+  id            String        @id @default(cuid())
+  apiKeyId      String
+  to            String
+  from          String
+  replyTo       String?
+  subject       String
+  sesMessageId  String?       @unique
+  status        SendStatus    @default(queued)
+  errorMessage  String?       // set when status = failed (SES call itself errored)
+  verificationId String?      // set when verify_before_send ran inline for this address
+  createdAt     DateTime      @default(now())
+  sentAt        DateTime?
+
+  apiKey       ApiKey       @relation(fields: [apiKeyId], references: [id])
+  verification Verification? @relation(fields: [verificationId], references: [id])
+  events       SendEvent[]
+
+  @@index([apiKeyId])
+  @@index([apiKeyId, createdAt])
+  @@index([sesMessageId])
+  @@map("send_messages")
+}
+
+enum SendStatus {
+  queued
+  sent
+  delivered
+  bounced
+  complained
+  failed
+}
+
+// ─── Per-message delivery event log (from SES → SNS) ─────────────────────────
+
+model SendEvent {
+  id            String        @id @default(cuid())
+  sendMessageId String
+  type          SendEventType
+  rawPayload    Json          // the raw SES/SNS notification, kept for debugging
+  occurredAt    DateTime      @default(now())
+
+  sendMessage SendMessage @relation(fields: [sendMessageId], references: [id], onDelete: Cascade)
+
+  @@index([sendMessageId])
+  @@map("send_events")
+}
+
+enum SendEventType {
+  sent
+  delivered
+  bounced
+  complained
+  failed
+}
+
+// ─── Suppression list ─────────────────────────────────────────────────────────
+// GLOBAL, not per-key: v1 shares one SES sending domain/reputation across every
+// customer, so a hard bounce or complaint under any one apiKeyId threatens
+// everyone's deliverability. apiKeyId is kept only to show each customer which
+// of their own sends triggered a global suppression, never to scope the check.
+
+model Suppression {
+  id        String            @id @default(cuid())
+  email     String            @unique
+  reason    SuppressionReason
+  apiKeyId  String?           // which customer's send (if any) triggered this
+  createdAt DateTime          @default(now())
+
+  @@index([email])
+  @@map("suppressions")
+}
+
+enum SuppressionReason {
+  hard_bounce
+  complaint
+  manual
 }

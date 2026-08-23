@@ -122,3 +122,95 @@ export async function incrementUsageBy(apiKeyId: string, count: number): Promise
     logger.warn({ err, apiKeyId, count }, 'Failed to increment usage counter');
   }
 }
+
+// ─── Send quota (Phase 6) ───────────────────────────────────────────────────
+// A separate counter/limit from verification usage above — sends and
+// verifications have different unit economics. v1 default mirrors the
+// verification PLAN_LIMITS until real send volume suggests different numbers.
+
+const PLAN_SEND_LIMITS: Record<string, number> = {
+  free:    1_000,
+  starter: 5_000,
+  growth:  15_000,
+  scale:   100_000,
+};
+
+export function getSendLimit(plan: string | null, monthlySendLimit?: number | null): number {
+  return PLAN_SEND_LIMITS[plan ?? 'free'] ?? monthlySendLimit ?? 500;
+}
+
+export async function requireMonthlySendQuota(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  if (!request.apiKey) return;
+
+  const key = request.apiKey;
+  const now = new Date();
+
+  try {
+    // Deliberately its OWN column (sendUsageResetAt), not a reuse of the
+    // verify path's usageResetAt — see the schema.prisma comment on why
+    // sharing one rollover timestamp between two independent counters is a
+    // real bug (whichever check fires first each month starves the other's
+    // reset for the rest of that month).
+    if (!key.sendUsageResetAt) {
+      const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      await prisma.apiKey.update({
+        where: { id: key.id },
+        data:  { sendUsageResetAt: nextReset },
+      });
+      key.sendUsageResetAt = nextReset;
+    }
+
+    const resetAt = key.sendUsageResetAt ? new Date(key.sendUsageResetAt) : null;
+    if (resetAt && now >= resetAt) {
+      const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      await prisma.apiKey.update({
+        where: { id: key.id },
+        data: {
+          currentMonthSendUsage: 0,
+          sendUsageResetAt: nextReset,
+        },
+      });
+      key.currentMonthSendUsage = 0;
+      key.sendUsageResetAt = nextReset;
+    }
+
+    const limit = getSendLimit(key.plan, key.monthlySendLimit);
+
+    if (key.currentMonthSendUsage >= limit) {
+      const resetDate = key.sendUsageResetAt
+        ? new Date(key.sendUsageResetAt).toISOString().split('T')[0]
+        : 'next month';
+
+      void reply.header('X-Send-Usage-Limit', String(limit));
+      void reply.header('X-Send-Usage-Used', String(key.currentMonthSendUsage));
+      void reply.header('X-Send-Usage-Reset', resetDate ?? 'next month');
+
+      throw Errors.rateLimited(0);
+    }
+
+    void reply.header('X-Send-Usage-Limit', String(limit));
+    void reply.header('X-Send-Usage-Remaining', String(Math.max(0, limit - key.currentMonthSendUsage)));
+    void reply.header('X-Send-Usage-Reset', key.sendUsageResetAt
+      ? new Date(key.sendUsageResetAt).toISOString().split('T')[0]
+      : 'next month');
+
+  } catch (err) {
+    if (err instanceof Error && 'statusCode' in err) throw err;
+    logger.warn({ err, apiKeyId: key.id }, 'Send usage meter check failed — failing open');
+  }
+}
+
+export async function incrementSendUsageBy(apiKeyId: string, count: number): Promise<void> {
+  if (count <= 0) return;
+  try {
+    await prisma.apiKey.update({
+      where: { id: apiKeyId },
+      data: { currentMonthSendUsage: { increment: count } },
+    });
+  } catch (err) {
+    logger.warn({ err, apiKeyId, count }, 'Failed to increment send usage counter');
+  }
+}

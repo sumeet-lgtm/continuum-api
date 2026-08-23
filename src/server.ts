@@ -18,6 +18,8 @@ import { bulkJobRoutes } from './routes/bulk-jobs/index.js';
 import { ipRoutes } from './routes/ip/index.js';
 import { phoneRoutes } from './routes/phone/index.js';
 import { billingRoutes } from './routes/billing/index.js';
+import { sendRoute } from './routes/send/index.js';
+import { sendEventsRoute } from './routes/send/events.js';
 import { loadDisposableList } from './engine/disposable.js';
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -108,6 +110,8 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(ipRoutes, { prefix: '/v1' });
   await app.register(phoneRoutes, { prefix: '/v1' });
   await app.register(billingRoutes, { prefix: '/v1' });
+  await app.register(sendRoute, { prefix: '/v1' });
+  await app.register(sendEventsRoute, { prefix: '/v1' });
 
   // ─── Root info ────────────────────────────────────────────────────────────
   app.get('/', async (_request, reply) => {

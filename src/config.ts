@@ -50,6 +50,15 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
   SUPPORT_EMAIL: z.string().default('sumeet@continuumapi.com'),
 
+  // Send (Amazon SES) — /v1/send 503s until these are set; everything else
+  // in Phase 6 (schema, quota, webhooks, suppression) works without them.
+  AWS_REGION: z.string().optional(),
+  AWS_ACCESS_KEY_ID: z.string().optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().optional(),
+  SES_CONFIGURATION_SET: z.string().optional(),
+  SES_FROM_DOMAIN: z.string().default('relay.continuumapi.com'),
+  SES_SNS_TOPIC_ARN: z.string().optional(),
+
   // Rate limiting
   DEFAULT_RATE_LIMIT_RPM: z.coerce.number().int().min(1).max(100000).default(1000),
 

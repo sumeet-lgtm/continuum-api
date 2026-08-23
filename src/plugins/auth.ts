@@ -18,6 +18,9 @@ interface ApiKeyRecord {
   rateLimit: number;
   monthlyLimit: number;
   currentMonthUsage: number;
+  monthlySendLimit: number;
+  currentMonthSendUsage: number;
+  sendUsageResetAt: Date | null;
   usageResetAt: Date | null;
   plan: string;
   isActive: boolean;

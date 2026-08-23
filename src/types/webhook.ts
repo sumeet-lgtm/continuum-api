@@ -12,7 +12,13 @@
 export type WebhookEventV2 =
   | 'verification.completed'
   | 'email.status_changed'
-  | 'bulk_job.completed';
+  | 'bulk_job.completed'
+  // Phase 6 (Send)
+  | 'email.sent'
+  | 'email.delivered'
+  | 'email.bounced'
+  | 'email.complained'
+  | 'email.send_failed';
 
 // Legacy aliases (Phase 1-4 code paths still emit these)
 export type WebhookEventLegacy =
@@ -28,6 +34,11 @@ export const ALL_WEBHOOK_EVENTS: WebhookEvent[] = [
   'verification.completed',
   'email.status_changed',
   'bulk_job.completed',
+  'email.sent',
+  'email.delivered',
+  'email.bounced',
+  'email.complained',
+  'email.send_failed',
   // Legacy aliases
   'verification_complete',
   'bulk_job_complete',
@@ -53,6 +64,11 @@ export type WebhookEventPayload =
   | VerificationCompletedPayload
   | EmailStatusChangedPayload
   | BulkJobCompletedPayload
+  | EmailSentPayload
+  | EmailDeliveredPayload
+  | EmailBouncedPayload
+  | EmailComplainedPayload
+  | EmailSendFailedPayload
   // Legacy aliases
   | VerificationCompletePayload
   | BulkJobCompletePayload
@@ -107,6 +123,59 @@ export interface BulkJobCompletedPayload {
   duplicateCount: number;
   errorCount:   number;
   completedAt:  string;
+  apiVersion:   '2';
+}
+
+/** email.sent */
+export interface EmailSentPayload {
+  event:        'email.sent';
+  id:           string; // SendMessage id
+  to:           string;
+  subject:      string;
+  sesMessageId: string | null;
+  apiKeyId:     string;
+  sentAt:       string;
+  apiVersion:   '2';
+}
+
+/** email.delivered */
+export interface EmailDeliveredPayload {
+  event:      'email.delivered';
+  id:         string;
+  to:         string;
+  apiKeyId:   string;
+  occurredAt: string;
+  apiVersion: '2';
+}
+
+/** email.bounced */
+export interface EmailBouncedPayload {
+  event:       'email.bounced';
+  id:          string;
+  to:          string;
+  bounceType:  string | null;
+  apiKeyId:    string;
+  occurredAt:  string;
+  apiVersion:  '2';
+}
+
+/** email.complained */
+export interface EmailComplainedPayload {
+  event:      'email.complained';
+  id:         string;
+  to:         string;
+  apiKeyId:   string;
+  occurredAt: string;
+  apiVersion: '2';
+}
+
+/** email.send_failed */
+export interface EmailSendFailedPayload {
+  event:        'email.send_failed';
+  id:           string;
+  to:           string;
+  errorMessage: string | null;
+  apiKeyId:     string;
   apiVersion:   '2';
 }
 

@@ -33,6 +33,12 @@ const EVENT_ALIASES: Record<string, string[]> = {
   'verification_complete':  ['verification_complete',  'verification.completed'],
   'bulk_job_complete':      ['bulk_job_complete',      'bulk_job.completed'],
   'monitor_status_change':  ['monitor_status_change',  'email.status_changed'],
+  // Phase 6 (Send) — no legacy underscore alias, these are new in v2
+  'email.sent':        ['email.sent'],
+  'email.delivered':   ['email.delivered'],
+  'email.bounced':     ['email.bounced'],
+  'email.complained':  ['email.complained'],
+  'email.send_failed': ['email.send_failed'],
 };
 
 /**
@@ -80,6 +86,11 @@ const PRISMA_EVENT_MAP: Record<string, string> = {
   'verification.completed': 'verification_complete',
   'email.status_changed':   'monitor_status_change',
   'bulk_job.completed':     'bulk_job_complete',
+  'email.sent':             'email_sent',
+  'email.delivered':        'email_delivered',
+  'email.bounced':          'email_bounced',
+  'email.complained':       'email_complained',
+  'email.send_failed':      'email_send_failed',
 };
 
 async function deliverToEndpoint(

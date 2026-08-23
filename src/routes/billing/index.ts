@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { getPlanLimit } from '../../plugins/usageMeter.js';
+import { getPlanLimit, getSendLimit } from '../../plugins/usageMeter.js';
 import { prisma } from '../../lib/prisma.js';
 import { config, isProd } from '../../config.js';
 import { Errors } from '../../plugins/errorHandler.js';
@@ -269,7 +269,8 @@ async function applyPlanChange(event: DodoEvent, eventType: string): Promise<voi
   }
 
   const monthlyLimit = getPlanLimit(plan);
-  const updated = await updateKeys({ apiKeyId, userId, email }, plan, monthlyLimit);
+  const monthlySendLimit = getSendLimit(plan);
+  const updated = await updateKeys({ apiKeyId, userId, email }, plan, monthlyLimit, monthlySendLimit);
   if (updated === 0) {
     logger.error({ eventType, apiKeyId, userId, email, plan }, 'PAID EVENT MATCHED NO API KEY — reconcile manually');
     return;
@@ -290,7 +291,9 @@ async function applyPlanChange(event: DodoEvent, eventType: string): Promise<voi
 
 async function applyDowngrade(event: DodoEvent, eventType: string): Promise<void> {
   const { apiKeyId, userId, email } = eventIdentity(event);
-  const updated = await updateKeys({ apiKeyId, userId, email }, 'free', getPlanLimit('free'));
+  const updated = await updateKeys(
+    { apiKeyId, userId, email }, 'free', getPlanLimit('free'), getSendLimit('free'),
+  );
   if (userId) {
     await prisma.$executeRaw`update profiles set plan = 'free' where "userId" = ${userId}`
       .catch(() => { /* profile plan is display-only */ });
@@ -303,25 +306,26 @@ async function updateKeys(
   target: { apiKeyId: string | null; userId: string | null; email: string | null },
   plan: string,
   monthlyLimit: number,
+  monthlySendLimit: number,
 ): Promise<number> {
   if (target.apiKeyId) {
     const r = await prisma.apiKey.updateMany({
       where: { id: target.apiKeyId },
-      data:  { plan, monthlyLimit },
+      data:  { plan, monthlyLimit, monthlySendLimit },
     });
     if (r.count > 0) return r.count;
   }
   if (target.userId) {
     const r = await prisma.apiKey.updateMany({
       where: { userId: target.userId },
-      data:  { plan, monthlyLimit },
+      data:  { plan, monthlyLimit, monthlySendLimit },
     });
     if (r.count > 0) return r.count;
   }
   if (target.email) {
     const r = await prisma.apiKey.updateMany({
       where: { ownerId: target.email },
-      data:  { plan, monthlyLimit },
+      data:  { plan, monthlyLimit, monthlySendLimit },
     });
     return r.count;
   }
