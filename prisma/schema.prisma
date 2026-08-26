@@ -28,21 +28,29 @@ model ApiKey {
 
   monthlySendLimit      Int @default(500) // max /v1/send calls per month
   currentMonthSendUsage Int @default(0)   // sends used this month — separate counter from verification usage
-  // Deliberately its OWN column, not a reuse of usageResetAt: sharing one
-  // rollover timestamp between two independent counters means whichever
-  // quota check fires first each month resets ITS OWN counter and pushes
-  // usageResetAt forward, silently starving the other counter's reset for
-  // that entire month (its `now >= resetAt` never fires again until the
-  // NEXT boundary). Found this by tracing the verify/send interaction, not
-  // by a failing test — worth remembering if a third quota dimension ever
-  // gets added: give it its own reset column too, not a shared one.
   sendUsageResetAt DateTime @default(dbgenerated("date_trunc('month', now() + interval '1 month')"))
 
-  verifications Verification[]
-  bulkJobs      BulkJob[]
-  monitors      Monitor[]
-  webhooks      Webhook[]
-  sendMessages  SendMessage[]
+  // Self-service key management
+  name               String?   // human label for this key
+  permission         String    @default("full_access") // full_access | sending_access
+  restrictedDomainId String?   // if set, sending_access key is pinned to this domain
+  lastUsedAt         DateTime?
+
+  verifications  Verification[]
+  bulkJobs       BulkJob[]
+  monitors       Monitor[]
+  webhooks       Webhook[]
+  sendMessages   SendMessage[]
+  sendingDomains SendingDomain[]
+  emailTemplates EmailTemplate[]
+  mailingLists   MailingList[]
+  contacts       Contact[]
+  segments       Segment[]
+  campaigns      Campaign[]
+  mailboxes      Mailbox[]
+  sequences      Sequence[]
+  leads          Lead[]
+  inboxTests     InboxTest[]
 
   @@map("api_keys")
 }
@@ -168,6 +176,7 @@ enum BulkJobStatus {
   processing
   completed
   failed
+  cancelled
 }
 
 // ─── Monitored Emails ─────────────────────────────────────────────────────────
@@ -336,22 +345,31 @@ model SmtpCache {
 // so a send can be checked against the same dataset instead of a second product.
 
 model SendMessage {
-  id            String        @id @default(cuid())
-  apiKeyId      String
-  to            String
-  from          String
-  replyTo       String?
-  subject       String
-  sesMessageId  String?       @unique
-  status        SendStatus    @default(queued)
-  errorMessage  String?       // set when status = failed (SES call itself errored)
-  verificationId String?      // set when verify_before_send ran inline for this address
-  createdAt     DateTime      @default(now())
-  sentAt        DateTime?
+  id             String     @id @default(cuid())
+  apiKeyId       String
+  to             String
+  from           String
+  replyTo        String?
+  cc             String[]   @default([])
+  bcc            String[]   @default([])
+  subject        String
+  sesMessageId   String?    @unique
+  status         SendStatus @default(queued)
+  errorMessage   String?
+  verificationId String?
+  domainId       String?
+  templateId     String?
+  tags           Json?
+  trackingToken  String?    @unique
+  idempotencyKey String?    @unique
+  scheduledAt    DateTime?
+  createdAt      DateTime   @default(now())
+  sentAt         DateTime?
 
-  apiKey       ApiKey       @relation(fields: [apiKeyId], references: [id])
-  verification Verification? @relation(fields: [verificationId], references: [id])
-  events       SendEvent[]
+  apiKey         ApiKey        @relation(fields: [apiKeyId], references: [id])
+  verification   Verification? @relation(fields: [verificationId], references: [id])
+  events         SendEvent[]
+  trackingEvents TrackingEvent[]
 
   @@index([apiKeyId])
   @@index([apiKeyId, createdAt])
@@ -361,11 +379,15 @@ model SendMessage {
 
 enum SendStatus {
   queued
+  scheduled
   sent
   delivered
+  opened
+  clicked
   bounced
   complained
   failed
+  cancelled
 }
 
 // ─── Per-message delivery event log (from SES → SNS) ─────────────────────────
@@ -412,4 +434,417 @@ enum SuppressionReason {
   hard_bounce
   complaint
   manual
+  soft_bounce
+  unsubscribed
+}
+
+// ─── Custom Sending Domains ───────────────────────────────────────────────────
+
+model SendingDomain {
+  id                String    @id @default(cuid())
+  apiKeyId          String
+  name              String
+  status            String    @default("pending") // pending|verified|failed
+  region            String    @default("us-east-1")
+  dkimSelector      String
+  dkimPublicKey     String
+  dkimPrivateKeyEnc String
+  spfStatus         String    @default("pending")
+  dkimStatus        String    @default("pending")
+  returnPathStatus  String    @default("pending")
+  trackOpens        Boolean   @default(true)
+  trackClicks       Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  verifiedAt        DateTime?
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+
+  @@unique([apiKeyId, name])
+  @@index([apiKeyId])
+  @@map("sending_domains")
+}
+
+// ─── Email Templates ──────────────────────────────────────────────────────────
+
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  apiKeyId  String
+  name      String
+  subject   String
+  htmlBody  String
+  textBody  String?
+  variables Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+
+  @@index([apiKeyId])
+  @@map("email_templates")
+}
+
+// ─── Open / Click Tracking Events ────────────────────────────────────────────
+
+model TrackingEvent {
+  id            String   @id @default(cuid())
+  sendMessageId String?
+  campaignId    String?
+  sequenceId    String?
+  email         String
+  type          String   // open|click
+  linkUrl       String?
+  userAgent     String?
+  ip            String?
+  occurredAt    DateTime @default(now())
+
+  sendMessage SendMessage? @relation(fields: [sendMessageId], references: [id])
+
+  @@index([sendMessageId])
+  @@index([campaignId])
+  @@index([sequenceId])
+  @@map("tracking_events")
+}
+
+// ─── Mailing Lists (newsletter / permission-based) ────────────────────────────
+
+model MailingList {
+  id           String   @id @default(cuid())
+  apiKeyId     String
+  name         String
+  description  String?
+  contactCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  apiKey      ApiKey                  @relation(fields: [apiKeyId], references: [id])
+  memberships ContactListMembership[]
+  campaigns   Campaign[]              @relation("CampaignLists")
+
+  @@index([apiKeyId])
+  @@map("mailing_lists")
+}
+
+// ─── Contacts (opt-in subscribers) ───────────────────────────────────────────
+
+model Contact {
+  id           String   @id @default(cuid())
+  apiKeyId     String
+  email        String
+  firstName    String?
+  lastName     String?
+  customFields Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  apiKey      ApiKey                  @relation(fields: [apiKeyId], references: [id])
+  memberships ContactListMembership[]
+
+  @@unique([apiKeyId, email])
+  @@index([apiKeyId])
+  @@map("contacts")
+}
+
+model ContactListMembership {
+  id             String    @id @default(cuid())
+  contactId      String
+  listId         String
+  status         String    @default("subscribed") // subscribed|unsubscribed|bounced|complained
+  gdprConsent    Boolean   @default(false)
+  subscribedAt   DateTime  @default(now())
+  unsubscribedAt DateTime?
+
+  contact Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  list    MailingList @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, listId])
+  @@index([listId, status])
+  @@map("contact_list_memberships")
+}
+
+// ─── Segments ─────────────────────────────────────────────────────────────────
+
+model Segment {
+  id          String   @id @default(cuid())
+  apiKeyId    String
+  listId      String?
+  name        String
+  filterRules Json
+  createdAt   DateTime @default(now())
+
+  apiKey    ApiKey       @relation(fields: [apiKeyId], references: [id])
+  campaigns Campaign[]  @relation("CampaignSegments")
+
+  @@index([apiKeyId])
+  @@map("segments")
+}
+
+// ─── Campaigns ────────────────────────────────────────────────────────────────
+
+model Campaign {
+  id             String    @id @default(cuid())
+  apiKeyId       String
+  name           String    @default("")
+  fromName       String
+  fromEmail      String
+  domainId       String?
+  replyTo        String?
+  subject        String
+  htmlBody       String
+  textBody       String?
+  status         String    @default("draft") // draft|scheduled|sending|sent|failed|cancelled
+  listIds        String[]  @default([])
+  segmentIds     String[]  @default([])
+  excludeListIds String[]  @default([])
+  trackOpens     Boolean   @default(true)
+  trackClicks    Boolean   @default(true)
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  totalRecipients Int      @default(0)
+  sentCount      Int       @default(0)
+  deliveredCount Int       @default(0)
+  openCount      Int       @default(0)
+  clickCount     Int       @default(0)
+  bounceCount    Int       @default(0)
+  complaintCount Int       @default(0)
+  sendDays       String[]  @default(["monday","tuesday","wednesday","thursday","friday"])
+  sendStartHour  Int       @default(8)
+  sendEndHour    Int       @default(17)
+  timezone       String    @default("UTC")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  apiKey     ApiKey              @relation(fields: [apiKeyId], references: [id])
+  recipients CampaignRecipient[]
+  lists      MailingList[]       @relation("CampaignLists")
+  segments   Segment[]           @relation("CampaignSegments")
+
+  @@index([apiKeyId, status])
+  @@map("campaigns")
+}
+
+model CampaignRecipient {
+  id           String    @id @default(cuid())
+  campaignId   String
+  contactId    String?
+  email        String
+  status       String    @default("pending") // pending|sent|delivered|bounced|complained|failed
+  sesMessageId String?
+  sentAt       DateTime?
+  deliveredAt  DateTime?
+  openedAt     DateTime?
+  clickedAt    DateTime?
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, status])
+  @@index([sesMessageId])
+  @@map("campaign_recipients")
+}
+
+// ─── Mailboxes (cold outreach / multi-sender) ─────────────────────────────────
+
+model Mailbox {
+  id               String    @id @default(cuid())
+  apiKeyId         String
+  type             String    // smtp|gmail|outlook
+  label            String?
+  host             String?
+  port             Int?
+  username         String
+  passwordEnc      String?
+  oauthTokenEnc    String?
+  dailyLimit       Int       @default(200)
+  sendDelayMinMs   Int       @default(30000)
+  sendDelayMaxMs   Int       @default(120000)
+  sentToday        Int       @default(0)
+  sentTodayResetAt DateTime  @default(now())
+  status           String    @default("active") // active|paused|error
+  lastErrorMsg     String?
+  lastCheckedAt    DateTime?
+  createdAt        DateTime  @default(now())
+
+  apiKey       ApiKey        @relation(fields: [apiKeyId], references: [id])
+  warmupConfig WarmupConfig?
+  replyEvents  ReplyEvent[]
+
+  @@index([apiKeyId, status])
+  @@map("mailboxes")
+}
+
+model WarmupConfig {
+  id            String   @id @default(cuid())
+  mailboxId     String   @unique
+  enabled       Boolean  @default(true)
+  targetPerDay  Int      @default(40)
+  currentPerDay Int      @default(5)
+  rampUpDays    Int      @default(30)
+  poolTier      String   @default("standard") // basic|standard|premium
+  startedAt     DateTime @default(now())
+
+  mailbox Mailbox @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+
+  @@map("warmup_configs")
+}
+
+// ─── Sequences (cold outreach drip campaigns) ─────────────────────────────────
+
+model Sequence {
+  id           String   @id @default(cuid())
+  apiKeyId     String
+  mailboxId    String?
+  name         String
+  fromName     String
+  fromEmail    String
+  status       String   @default("active") // active|paused|archived
+  trackOpens   Boolean  @default(true)
+  trackClicks  Boolean  @default(true)
+  stopOnReply  Boolean  @default(true)
+  sendDays     String[] @default(["monday","tuesday","wednesday","thursday","friday"])
+  sendStartHour Int     @default(8)
+  sendEndHour   Int     @default(17)
+  timezone      String  @default("UTC")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  apiKey      ApiKey               @relation(fields: [apiKeyId], references: [id])
+  steps       SequenceStep[]
+  enrollments SequenceEnrollment[]
+
+  @@index([apiKeyId])
+  @@map("sequences")
+}
+
+model SequenceStep {
+  id         String   @id @default(cuid())
+  sequenceId String
+  stepOrder  Int
+  delayDays  Int      @default(0)
+  delayHours Int      @default(0)
+  subject    String
+  htmlBody   String
+  textBody   String?
+  condition  String   @default("always") // always|if_not_opened|if_opened|if_not_clicked|if_not_replied
+  createdAt  DateTime @default(now())
+
+  sequence Sequence          @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  variants SequenceVariant[]
+
+  @@unique([sequenceId, stepOrder])
+  @@map("sequence_steps")
+}
+
+model SequenceVariant {
+  id           String @id @default(cuid())
+  stepId       String
+  variantLabel String // "A", "B", "C"
+  subject      String
+  htmlBody     String
+  textBody     String?
+  weight       Int    @default(50)
+
+  step SequenceStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([stepId])
+  @@map("sequence_variants")
+}
+
+model SequenceEnrollment {
+  id          String    @id @default(cuid())
+  sequenceId  String
+  email       String
+  leadId      String?
+  status      String    @default("active") // active|paused|completed|unsubscribed|bounced|replied
+  currentStep Int       @default(0)
+  nextSendAt  DateTime?
+  variables   Json?
+  enrolledAt  DateTime  @default(now())
+  completedAt DateTime?
+  repliedAt   DateTime?
+
+  sequence    Sequence     @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  replyEvents ReplyEvent[]
+
+  @@unique([sequenceId, email])
+  @@index([sequenceId, status, nextSendAt])
+  @@map("sequence_enrollments")
+}
+
+// ─── Leads (cold outreach targets, distinct from newsletter contacts) ─────────
+
+model Lead {
+  id             String    @id @default(cuid())
+  apiKeyId       String
+  email          String
+  firstName      String?
+  lastName       String?
+  company        String?
+  title          String?
+  customVars     Json?
+  status         String    @default("active") // active|interested|not_interested|replied|unsubscribed|bounced|do_not_contact
+  repliedAt      DateTime?
+  unsubscribedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+
+  @@unique([apiKeyId, email])
+  @@index([apiKeyId, status])
+  @@map("leads")
+}
+
+// ─── Reply Events (IMAP-detected replies) ────────────────────────────────────
+
+model ReplyEvent {
+  id                   String    @id @default(cuid())
+  mailboxId            String
+  fromEmail            String
+  inReplyToMessageId   String?
+  enrollmentId         String?
+  campaignRecipientId  String?
+  subject              String?
+  bodySnippet          String?
+  isRead               Boolean   @default(false)
+  status               String    @default("new") // new|interested|not_interested|archived
+  receivedAt           DateTime  @default(now())
+
+  mailbox    Mailbox             @relation(fields: [mailboxId], references: [id])
+  enrollment SequenceEnrollment? @relation(fields: [enrollmentId], references: [id])
+
+  @@index([mailboxId])
+  @@index([enrollmentId])
+  @@map("reply_events")
+}
+
+// ─── Inbox Placement Tests ────────────────────────────────────────────────────
+
+model InboxTest {
+  id        String   @id @default(cuid())
+  apiKeyId  String
+  subject   String
+  fromEmail String
+  domainId  String?
+  status    String   @default("pending") // pending|checking|complete|failed
+  results   Json?
+  score     Int?
+  createdAt DateTime @default(now())
+  checkedAt DateTime?
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+
+  @@index([apiKeyId])
+  @@map("inbox_tests")
+}
+
+// ─── Sequence Templates (curated library) ────────────────────────────────────
+
+model SequenceTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  category    String   @default("cold_outreach") // cold_outreach|follow_up|re_engagement
+  steps       Json
+  createdAt   DateTime @default(now())
+
+  @@map("sequence_templates")
 }

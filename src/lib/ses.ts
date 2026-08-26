@@ -37,13 +37,24 @@ function getClient(): SESv2Client {
   return client;
 }
 
+export interface AttachmentInput {
+  filename: string;
+  content: string; // base64
+  content_type: string;
+}
+
 export interface SendViaSesInput {
   to: string;
+  cc?: string[];
+  bcc?: string[];
   from: string;
-  replyTo?: string;
+  replyTo?: string | string[];
   subject: string;
   htmlBody?: string;
   textBody?: string;
+  attachments?: AttachmentInput[];
+  headers?: Record<string, string>;
+  listUnsubscribeHeader?: string;
 }
 
 export interface SendViaSesResult {
@@ -53,10 +64,97 @@ export interface SendViaSesResult {
 export async function sendViaSes(input: SendViaSesInput): Promise<SendViaSesResult> {
   const ses = getClient();
 
+  const replyToAddresses = input.replyTo
+    ? (Array.isArray(input.replyTo) ? input.replyTo : [input.replyTo])
+    : undefined;
+
+  const hasAttachments = input.attachments && input.attachments.length > 0;
+  const hasExtraHeaders = (input.headers && Object.keys(input.headers).length > 0) || input.listUnsubscribeHeader;
+
+  if (hasAttachments || hasExtraHeaders) {
+    // Use Raw message for attachments or custom headers
+    const boundary = `=_continuum_${Date.now()}`;
+    const lines: string[] = [];
+
+    lines.push(`From: ${input.from}`);
+    lines.push(`To: ${input.to}`);
+    if (input.cc?.length) lines.push(`Cc: ${input.cc.join(', ')}`);
+    if (replyToAddresses?.length) lines.push(`Reply-To: ${replyToAddresses.join(', ')}`);
+    lines.push(`Subject: ${input.subject}`);
+    lines.push(`MIME-Version: 1.0`);
+
+    if (input.listUnsubscribeHeader) {
+      lines.push(`List-Unsubscribe: ${input.listUnsubscribeHeader}`);
+      lines.push(`List-Unsubscribe-Post: List-Unsubscribe=One-Click`);
+    }
+    if (input.headers) {
+      for (const [k, v] of Object.entries(input.headers)) {
+        lines.push(`${k}: ${v}`);
+      }
+    }
+
+    lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+    lines.push('');
+
+    // Body part
+    const bodyBoundary = `=_body_${Date.now()}`;
+    lines.push(`--${boundary}`);
+    lines.push(`Content-Type: multipart/alternative; boundary="${bodyBoundary}"`);
+    lines.push('');
+
+    if (input.textBody) {
+      lines.push(`--${bodyBoundary}`);
+      lines.push(`Content-Type: text/plain; charset=UTF-8`);
+      lines.push(`Content-Transfer-Encoding: quoted-printable`);
+      lines.push('');
+      lines.push(input.textBody);
+    }
+    if (input.htmlBody) {
+      lines.push(`--${bodyBoundary}`);
+      lines.push(`Content-Type: text/html; charset=UTF-8`);
+      lines.push(`Content-Transfer-Encoding: base64`);
+      lines.push('');
+      lines.push(Buffer.from(input.htmlBody, 'utf-8').toString('base64'));
+    }
+    lines.push(`--${bodyBoundary}--`);
+
+    // Attachments
+    for (const att of (input.attachments ?? [])) {
+      lines.push(`--${boundary}`);
+      lines.push(`Content-Type: ${att.content_type}; name="${att.filename}"`);
+      lines.push(`Content-Disposition: attachment; filename="${att.filename}"`);
+      lines.push(`Content-Transfer-Encoding: base64`);
+      lines.push('');
+      lines.push(att.content);
+    }
+    lines.push(`--${boundary}--`);
+
+    const rawMessage = lines.join('\r\n');
+    const toAddresses = [input.to, ...(input.cc ?? []), ...(input.bcc ?? [])];
+
+    const command = new SendEmailCommand({
+      FromEmailAddress: input.from,
+      Destination: { ToAddresses: toAddresses },
+      ConfigurationSetName: config.SES_CONFIGURATION_SET,
+      Content: {
+        Raw: { Data: Buffer.from(rawMessage) },
+      },
+    });
+
+    const result = await ses.send(command);
+    if (!result.MessageId) throw new Error('SES returned no MessageId.');
+    return { sesMessageId: result.MessageId };
+  }
+
+  // Simple path (no attachments, no extra headers)
   const command = new SendEmailCommand({
     FromEmailAddress: input.from,
-    Destination: { ToAddresses: [input.to] },
-    ReplyToAddresses: input.replyTo ? [input.replyTo] : undefined,
+    Destination: {
+      ToAddresses: [input.to],
+      CcAddresses: input.cc?.length ? input.cc : undefined,
+      BccAddresses: input.bcc?.length ? input.bcc : undefined,
+    },
+    ReplyToAddresses: replyToAddresses,
     ConfigurationSetName: config.SES_CONFIGURATION_SET,
     Content: {
       Simple: {

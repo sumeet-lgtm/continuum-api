@@ -66,6 +66,26 @@ const envSchema = z.object({
   WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
   WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
 
+  // Crypto secrets
+  DOMAIN_KEY_SECRET: z.string().optional(),
+  UNSUBSCRIBE_SECRET: z.string().optional(),
+  TRACKING_SECRET: z.string().optional(),
+  MAILBOX_CREDS_SECRET: z.string().optional(),
+
+  // Feature gates
+  WARMUP_POOL_ENABLED: z.string().transform(v => v?.toLowerCase() === 'true').default('false'),
+  IMAP_POLL_ENABLED: z.string().transform(v => v?.toLowerCase() === 'true').default('false'),
+  AI_PERSONALIZATION_ENABLED: z.string().transform(v => v?.toLowerCase() === 'true').default('false'),
+
+  // IMAP seed accounts for inbox placement testing
+  SEED_GMAIL_USER: z.string().optional(),
+  SEED_GMAIL_PASSWORD: z.string().optional(),
+  SEED_OUTLOOK_USER: z.string().optional(),
+  SEED_OUTLOOK_PASSWORD: z.string().optional(),
+
+  // Anthropic (for AI personalization)
+  ANTHROPIC_API_KEY: z.string().optional(),
+
   // Internal
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   API_KEY_SALT: z

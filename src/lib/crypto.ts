@@ -1,76 +1,52 @@
-import crypto from 'node:crypto';
-import { config } from '../config.js';
+import { createHash, createHmac, randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 
-/**
- * Hash a raw API key for storage in the database.
- * Uses SHA-256(salt + rawKey) — the salt prevents rainbow table attacks.
- * The raw key is never stored; only the hash is persisted.
- */
 export function hashApiKey(rawKey: string): string {
-  return crypto
-    .createHash('sha256')
-    .update(config.API_KEY_SALT + rawKey)
-    .digest('hex');
+  return createHash('sha256').update(rawKey).digest('hex');
 }
 
-/**
- * Generate a new random API key.
- * Format: cnt_<32 random hex chars>
- * The prefix "cnt_" makes Continuum keys easy to identify in logs.
- */
-export function generateApiKey(): string {
-  const random = crypto.randomBytes(24).toString('hex');
-  return `cnt_${random}`;
+export function hmacSign(secret: string, data: string): string {
+  return createHmac('sha256', secret).update(data).digest('base64url');
 }
 
-/**
- * Extract the display prefix from a raw API key (first 8 chars after "cnt_").
- * Used to identify keys in the UI without exposing the full key.
- */
-export function getKeyPrefix(rawKey: string): string {
-  return rawKey.slice(0, 12); // "cnt_" + 8 chars
+export function hmacVerify(secret: string, data: string, sig: string): boolean {
+  const expected = hmacSign(secret, data);
+  if (expected.length !== sig.length) return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(sig);
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
+  return diff === 0;
 }
 
-/**
- * Compute HMAC-SHA256 signature for webhook payload delivery.
- * Format returned: "sha256=<hex digest>"
- * Receivers verify by computing the same HMAC with their secret.
- */
-export function signWebhookPayload(secret: string, body: string): string {
-  const hmac = crypto.createHmac('sha256', secret).update(body, 'utf8').digest('hex');
-  return `sha256=${hmac}`;
+export function generateSecret(bytes = 32): string {
+  return randomBytes(bytes).toString('hex');
 }
 
-/**
- * Verify a webhook signature from an incoming request.
- * Uses timing-safe comparison to prevent timing attacks.
- */
-export function verifyWebhookSignature(
-  secret: string,
-  body: string,
-  signature: string,
-): boolean {
-  const expected = signWebhookPayload(secret, body);
-  try {
-    return crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(signature, 'utf8'));
-  } catch {
-    return false;
-  }
+// AES-256-GCM encryption for sensitive values (DKIM keys, SMTP passwords)
+const AES_KEY_LEN = 32;
+const IV_LEN = 12;
+const AUTH_TAG_LEN = 16;
+
+function getEncKey(secret: string): Buffer {
+  return createHash('sha256').update(secret).digest().subarray(0, AES_KEY_LEN);
 }
 
-/**
- * Generate a random webhook secret.
- * 32 bytes of entropy encoded as hex — 64 character string.
- */
-export function generateWebhookSecret(): string {
-  return crypto.randomBytes(32).toString('hex');
+export function encryptValue(plaintext: string, secret: string): string {
+  const key = getEncKey(secret);
+  const iv = randomBytes(IV_LEN);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, enc]).toString('base64');
 }
 
-/**
- * Generate a random ID with an optional prefix.
- * Used for cuid-style IDs when Prisma is not available (e.g. worker payloads).
- */
-export function generateId(prefix?: string): string {
-  const id = crypto.randomBytes(16).toString('hex');
-  return prefix ? `${prefix}_${id}` : id;
+export function decryptValue(ciphertext: string, secret: string): string {
+  const buf = Buffer.from(ciphertext, 'base64');
+  const iv = buf.subarray(0, IV_LEN);
+  const tag = buf.subarray(IV_LEN, IV_LEN + AUTH_TAG_LEN);
+  const enc = buf.subarray(IV_LEN + AUTH_TAG_LEN);
+  const key = getEncKey(secret);
+  const decipher = createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return decipher.update(enc).toString('utf8') + decipher.final('utf8');
 }

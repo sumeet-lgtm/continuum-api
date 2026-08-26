@@ -26,6 +26,11 @@ export const redisConnection = parseRedisConnection();
 export const QUEUE_BULK = 'continuum-bulk';
 export const QUEUE_MONITOR = 'continuum-monitor';
 export const QUEUE_WEBHOOK = 'continuum-webhooks';
+export const QUEUE_CAMPAIGN = 'continuum-campaign';
+export const QUEUE_SEQUENCE = 'continuum-sequence';
+export const QUEUE_WARMUP = 'continuum-warmup';
+export const QUEUE_IMAP = 'continuum-imap';
+export const QUEUE_SEND = 'continuum-send';
 
 // ─── Queue instances ──────────────────────────────────────────────────────────
 // Queues are lightweight producers — instantiated in the API server.
@@ -59,10 +64,62 @@ export const webhookQueue = new Queue<WebhookDeliveryPayload>(QUEUE_WEBHOOK, {
   },
 });
 
+export const campaignQueue = new Queue(QUEUE_CAMPAIGN, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: { type: 'exponential', delay: 30000 },
+    removeOnComplete: { count: 200, age: 86400 },
+    removeOnFail: { count: 100, age: 604800 },
+  },
+});
+
+export const sequenceQueue = new Queue(QUEUE_SEQUENCE, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 10000 },
+    removeOnComplete: { count: 1000, age: 86400 },
+    removeOnFail: { count: 200, age: 604800 },
+  },
+});
+
+export const warmupQueue = new Queue(QUEUE_WARMUP, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 1,
+    removeOnComplete: { count: 100, age: 86400 },
+    removeOnFail: { count: 50, age: 604800 },
+  },
+});
+
+export const imapQueue = new Queue(QUEUE_IMAP, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 1,
+    removeOnComplete: { count: 100, age: 86400 },
+    removeOnFail: { count: 50, age: 604800 },
+  },
+});
+
+export const sendQueue = new Queue(QUEUE_SEND, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 5000 },
+    removeOnComplete: { count: 1000, age: 86400 },
+    removeOnFail: { count: 200, age: 604800 },
+  },
+});
+
 /**
  * Gracefully close all queue connections.
  * Call this during server shutdown.
  */
 export async function closeQueues(): Promise<void> {
-  await Promise.all([bulkQueue.close(), monitorQueue.close(), webhookQueue.close()]);
+  await Promise.all([
+    bulkQueue.close(), monitorQueue.close(), webhookQueue.close(),
+    campaignQueue.close(), sequenceQueue.close(), warmupQueue.close(),
+    imapQueue.close(), sendQueue.close(),
+  ]);
 }

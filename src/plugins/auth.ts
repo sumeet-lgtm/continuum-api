@@ -11,6 +11,7 @@ interface ApiKeyRecord {
   id: string;
   keyHash: string;
   keyPrefix: string;
+  name: string | null;
   label: string | null;
   ownerId: string | null;
   userId: string | null;
@@ -26,6 +27,9 @@ interface ApiKeyRecord {
   isActive: boolean;
   createdAt: Date;
   revokedAt: Date | null;
+  permission: string;
+  restrictedDomainId: string | null;
+  lastUsedAt: Date | null;
 }
 
 declare module 'fastify' {

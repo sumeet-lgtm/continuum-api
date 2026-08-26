@@ -11,113 +11,216 @@ import { dispatchWebhook, buildEventId } from '../../lib/webhooks.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
 import type { EmailSentPayload, EmailSendFailedPayload } from '../../types/webhook.js';
+import { generateUnsubToken, generateUnsubHtml } from '../../lib/unsubscribe.js';
+import { generateOpenToken, generateClickToken, injectTracking } from '../../lib/tracking.js';
+import { processTemplate } from '../../lib/spintax.js';
+import { sendQueue } from '../../lib/queue.js';
 
 // ─── Input schema ─────────────────────────────────────────────────────────────
 
+const attachmentSchema = z.object({
+  filename: z.string().min(1).max(255),
+  content: z.string().min(1), // base64
+  content_type: z.string().min(1).max(100),
+});
+
 const bodySchema = z.object({
   to: z.string().email().transform((s) => s.trim().toLowerCase()),
+  cc: z.array(z.string().email()).max(50).optional(),
+  bcc: z.array(z.string().email()).max(50).optional(),
   subject: z.string().min(1).max(500),
   html_body: z.string().optional(),
   text_body: z.string().optional(),
-  reply_to: z.string().email().optional(),
+  reply_to: z.union([z.string().email(), z.array(z.string().email())]).optional(),
+  attachments: z.array(attachmentSchema).max(20).optional(),
+  headers: z.record(z.string()).optional(),
+  tags: z.record(z.string()).optional(),
+  idempotency_key: z.string().max(200).optional(),
+  scheduled_at: z.string().datetime().optional(),
+  template_id: z.string().optional(),
+  variables: z.record(z.string()).optional(),
+  domain_id: z.string().optional(),
   verify_before_send: z.boolean().default(false),
-}).refine((v) => v.html_body || v.text_body, {
-  message: 'html_body or text_body is required',
+  track_opens: z.boolean().optional(),
+  track_clicks: z.boolean().optional(),
+}).refine((v) => v.html_body || v.text_body || v.template_id, {
+  message: 'html_body, text_body, or template_id is required',
 });
 
-type SendBody = z.infer<typeof bodySchema>;
-interface SendRoute { Body: SendBody }
+async function buildEmailContent(
+  input: z.infer<typeof bodySchema>,
+  apiKeyId: string,
+): Promise<{ subject: string; htmlBody: string | undefined; textBody: string | undefined }> {
+  let subject = input.subject;
+  let htmlBody = input.html_body;
+  let textBody = input.text_body;
+
+  // Template resolution
+  if (input.template_id) {
+    const tmpl = await prisma.emailTemplate.findFirst({
+      where: { id: input.template_id, apiKeyId },
+    });
+    if (!tmpl) throw Errors.notFound(`Template ${input.template_id} not found.`);
+    subject = input.subject || tmpl.subject;
+    htmlBody = htmlBody ?? tmpl.htmlBody;
+    textBody = textBody ?? (tmpl.textBody ?? undefined);
+  }
+
+  // Variable substitution + spintax + liquid
+  if (input.variables && Object.keys(input.variables).length > 0) {
+    if (htmlBody) htmlBody = processTemplate(htmlBody, input.variables);
+    if (textBody) textBody = processTemplate(textBody, input.variables);
+    subject = processTemplate(subject, input.variables);
+  }
+
+  return { subject, htmlBody, textBody };
+}
 
 export async function sendRoute(fastify: FastifyInstance): Promise<void> {
-  fastify.post<SendRoute>(
+  fastify.post(
     '/send',
-    {
-      preHandler: [requireAuth, requireRateLimit, requireMonthlySendQuota],
-      schema: {
-        body: {
-          type: 'object',
-          required: ['to', 'subject'],
-          additionalProperties: false,
-          properties: {
-            to: { type: 'string', minLength: 1, maxLength: 254 },
-            subject: { type: 'string', minLength: 1, maxLength: 500 },
-            html_body: { type: 'string' },
-            text_body: { type: 'string' },
-            reply_to: { type: 'string' },
-            verify_before_send: { type: 'boolean' },
-          },
-        },
-      },
-    },
-    async (request: FastifyRequest<SendRoute>, reply: FastifyReply) => {
+    { preHandler: [requireAuth, requireRateLimit, requireMonthlySendQuota] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
       const parsed = bodySchema.safeParse(request.body);
       if (!parsed.success) {
         throw Errors.validationFailed(
           parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
         );
       }
-      const { to, subject, html_body, text_body, reply_to, verify_before_send } = parsed.data;
+
+      const {
+        to, cc, bcc, subject: rawSubject, reply_to, attachments, headers, tags,
+        idempotency_key, scheduled_at, domain_id, verify_before_send,
+        track_opens: requestTrackOpens, track_clicks: requestTrackClicks,
+      } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
-      // ── 1. Suppression check (global — see schema.prisma note on Suppression) ──
-      const suppressed = await prisma.suppression.findUnique({ where: { email: to } });
-      if (suppressed) {
-        throw Errors.forbidden(
-          `${to} is on the suppression list (${suppressed.reason}) and cannot be sent to.`,
-        );
+      // ── Idempotency check ──────────────────────────────────────────────────────
+      if (idempotency_key) {
+        const existing = await prisma.sendMessage.findUnique({
+          where: { idempotencyKey: idempotency_key },
+          select: { id: true, sesMessageId: true, status: true },
+        });
+        if (existing) {
+          return reply.status(200).send({ id: existing.id, sesMessageId: existing.sesMessageId, status: existing.status, idempotent: true });
+        }
       }
 
-      // ── 2. Verification — inline if requested, otherwise a soft check against
-      // recent history. Either way this is the differentiator: refuse to burn a
-      // send on an address Continuum already knows is bad. ──────────────────────
+      // ── Suppression check ──────────────────────────────────────────────────────
+      const suppressed = await prisma.suppression.findUnique({ where: { email: to } });
+      if (suppressed) {
+        throw Errors.forbidden(`${to} is on the suppression list (${suppressed.reason}) and cannot be sent to.`);
+      }
+
+      // ── Verification ───────────────────────────────────────────────────────────
       let verificationId: string | null = null;
       if (verify_before_send) {
         const result = await verifyEmail({ email: to, apiKeyId, bulkJobId: undefined, sourceIp: request.ip });
         verificationId = result.id.startsWith('ephemeral_') ? null : result.id;
         if (result.status === 'invalid' || result.checks.isDisposable) {
-          throw Errors.forbidden(
-            `${to} failed verification (status: ${result.status}${result.checks.isDisposable ? ', disposable' : ''}) — refusing to send.`,
-          );
+          throw Errors.forbidden(`${to} failed verification (status: ${result.status}${result.checks.isDisposable ? ', disposable' : ''}) — refusing to send.`);
         }
       } else {
-        // This lookup is explicitly a soft/best-effort check — a DB hiccup
-        // here must not fail the send, or "just warn, don't block" would
-        // start blocking on infrastructure errors instead of on anything
-        // about the address itself.
         try {
           const recent = await prisma.verification.findFirst({
-            where: { email: to, apiKeyId },
-            orderBy: { checkedAt: 'desc' },
+            where: { email: to, apiKeyId }, orderBy: { checkedAt: 'desc' },
             select: { id: true, status: true, isDisposable: true },
           });
           if (recent) verificationId = recent.id;
           if (recent && (recent.status === 'invalid' || recent.isDisposable)) {
-            logger.warn({ to, apiKeyId, verificationId }, 'Sending to a previously-flagged address (verify_before_send=false, so this only warns)');
+            logger.warn({ to, apiKeyId, verificationId }, 'Sending to a previously-flagged address');
           }
         } catch (err) {
-          logger.warn({ err, to, apiKeyId }, 'Recent-verification lookup failed — proceeding without it (soft check, fails open)');
+          logger.warn({ err, to, apiKeyId }, 'Recent-verification lookup failed — proceeding without it');
         }
       }
 
-      // ── 3. Send via SES ────────────────────────────────────────────────────────
-      if (!isSesConfigured()) {
-        throw Errors.serviceUnavailable('Send (SES not configured)');
+      // ── Resolve sending domain ────────────────────────────────────────────────
+      let sendingDomain: { id: string; name: string; trackOpens: boolean; trackClicks: boolean } | null = null;
+      if (domain_id) {
+        sendingDomain = await prisma.sendingDomain.findFirst({
+          where: { id: domain_id, apiKeyId, status: 'verified' },
+          select: { id: true, name: true, trackOpens: true, trackClicks: true },
+        });
+        if (!sendingDomain) throw Errors.validationFailed([{ field: 'domain_id', message: 'Domain not found or not verified.' }]);
       }
 
-      const from = config.SES_FROM_DOMAIN.includes('@')
-        ? config.SES_FROM_DOMAIN
-        : `no-reply@${config.SES_FROM_DOMAIN}`;
+      // ── Build email content ────────────────────────────────────────────────────
+      const { subject, htmlBody: rawHtml, textBody } = await buildEmailContent(parsed.data, apiKeyId);
 
+      // ── Scheduled send — queue and return early ───────────────────────────────
+      if (scheduled_at) {
+        const scheduledDate = new Date(scheduled_at);
+        const delayMs = scheduledDate.getTime() - Date.now();
+        if (delayMs < 0) throw Errors.validationFailed([{ field: 'scheduled_at', message: 'scheduled_at must be in the future.' }]);
+
+        if (!isSesConfigured()) throw Errors.serviceUnavailable('Send (SES not configured)');
+
+        const record = await prisma.sendMessage.create({
+          data: {
+            apiKeyId, to, from: buildFromAddress(sendingDomain), subject,
+            replyTo: Array.isArray(reply_to) ? reply_to.join(', ') : (reply_to ?? null),
+            cc: cc ?? [], bcc: bcc ?? [],
+            scheduledAt: scheduledDate, status: 'scheduled',
+            domainId: domain_id ?? null,
+            idempotencyKey: idempotency_key ?? null,
+            tags: tags ?? {},
+          },
+          select: { id: true, createdAt: true },
+        });
+
+        await sendQueue.add('send', {
+          sendMessageId: record.id, to, subject, htmlBody: rawHtml, textBody,
+          from: buildFromAddress(sendingDomain), replyTo: reply_to,
+          cc, bcc, attachments, headers, apiKeyId, domainId: domain_id,
+        }, { delay: delayMs, jobId: record.id });
+
+        return reply.status(200).send({ id: record.id, status: 'scheduled', scheduled_at });
+      }
+
+      // ── Inject tracking ────────────────────────────────────────────────────────
+      if (!isSesConfigured()) throw Errors.serviceUnavailable('Send (SES not configured)');
+
+      const from = buildFromAddress(sendingDomain);
+      const trackOpens = requestTrackOpens ?? sendingDomain?.trackOpens ?? true;
+      const trackClicks = requestTrackClicks ?? sendingDomain?.trackClicks ?? true;
+
+      // Generate a placeholder id for tokens before creating the DB record
+      const msgPlaceholderId = `pending_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const unsubToken = generateUnsubToken(to, apiKeyId);
+
+      let htmlBody = rawHtml;
+      if (htmlBody) {
+        // Inject unsubscribe footer
+        const unsubHtml = generateUnsubHtml(unsubToken);
+        htmlBody = htmlBody.replace(/<\/body>/i, `${unsubHtml}</body>`);
+
+        // Inject tracking
+        if (trackOpens || trackClicks) {
+          const openToken = trackOpens ? generateOpenToken(msgPlaceholderId) : '';
+          const clickTokenFn = trackClicks ? (url: string) => generateClickToken(msgPlaceholderId, url) : (_: string) => _;
+          htmlBody = injectTracking(htmlBody, openToken, clickTokenFn);
+        }
+      }
+
+      // ── SES send ────────────────────────────────────────────────────────────────
       let sesMessageId: string | null = null;
       let status: 'sent' | 'failed' = 'sent';
       let errorMessage: string | null = null;
 
+      const listUnsubscribeHeader = `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`;
+
       try {
         const result = await sendViaSes({
           to, from, subject,
+          ...(cc && cc.length ? { cc } : {}),
+          ...(bcc && bcc.length ? { bcc } : {}),
           ...(reply_to ? { replyTo: reply_to } : {}),
-          ...(html_body ? { htmlBody: html_body } : {}),
-          ...(text_body ? { textBody: text_body } : {}),
+          ...(htmlBody !== undefined ? { htmlBody } : {}),
+          ...(textBody ? { textBody } : {}),
+          ...(attachments && attachments.length ? { attachments } : {}),
+          ...(headers && Object.keys(headers).length ? { headers } : {}),
+          listUnsubscribeHeader,
         });
         sesMessageId = result.sesMessageId;
       } catch (err) {
@@ -128,73 +231,82 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         logger.error({ err, to, apiKeyId }, 'SES send failed');
       }
 
-      // ── 4. Persist ──────────────────────────────────────────────────────────────
-      // If status === 'sent' here, SES has ALREADY accepted the email — a DB
-      // failure below must never turn into a 500 that tells the customer the
-      // send failed, or they'll retry and double-send something that already
-      // went out. Same safety net engine/index.ts's persistAndReturn uses for
-      // verification: fall back to a synthetic id and keep responding as if
-      // nothing failed, since from the customer's side, nothing did.
+      // ── Persist ────────────────────────────────────────────────────────────────
       let record: { id: string; createdAt: Date };
       try {
         record = await prisma.sendMessage.create({
           data: {
             apiKeyId, to, from, subject,
-            replyTo: reply_to ?? null,
-            sesMessageId,
-            status,
-            errorMessage,
+            replyTo: Array.isArray(reply_to) ? reply_to.join(', ') : (reply_to ?? null),
+            cc: cc ?? [], bcc: bcc ?? [],
+            sesMessageId, status, errorMessage,
             verificationId,
             sentAt: status === 'sent' ? new Date() : null,
+            domainId: domain_id ?? null,
+            idempotencyKey: idempotency_key ?? null,
+            tags: tags ?? {},
+            trackingToken: (trackOpens || trackClicks) ? msgPlaceholderId : null,
           },
           select: { id: true, createdAt: true },
         });
       } catch (err) {
-        logger.error({ err, to, apiKeyId, sesMessageId, status }, 'Failed to persist SendMessage — SES outcome stands regardless');
+        logger.error({ err, to, apiKeyId, sesMessageId, status }, 'Failed to persist SendMessage');
         record = { id: `ephemeral_${Date.now()}`, createdAt: new Date() };
       }
 
-      // Only a send that actually left the building counts against quota —
-      // an SES-side failure is Continuum's infrastructure problem, not the
-      // customer's, and shouldn't cost them one of their allotted sends.
       if (status === 'sent') {
         void incrementSendUsageBy(apiKeyId, 1);
       }
 
-      // ── 5. Webhook (non-blocking) ────────────────────────────────────────────────
+      // ── Webhooks ───────────────────────────────────────────────────────────────
       if (status === 'sent') {
         const payload: EmailSentPayload = {
-          event: 'email.sent',
-          id: record.id,
-          to, subject,
-          sesMessageId,
-          apiKeyId,
-          sentAt: new Date().toISOString(),
-          apiVersion: '2',
+          event: 'email.sent', id: record.id, to, subject, sesMessageId, apiKeyId,
+          sentAt: new Date().toISOString(), apiVersion: '2',
         };
-        void dispatchWebhook({
-          apiKeyId, event: 'email.sent',
-          eventId: buildEventId('email.sent', record.id),
-          payload,
-        });
+        void dispatchWebhook({ apiKeyId, event: 'email.sent', eventId: buildEventId('email.sent', record.id), payload });
       } else {
         const payload: EmailSendFailedPayload = {
-          event: 'email.send_failed',
-          id: record.id, to, errorMessage, apiKeyId, apiVersion: '2',
+          event: 'email.send_failed', id: record.id, to, errorMessage, apiKeyId, apiVersion: '2',
         };
-        void dispatchWebhook({
-          apiKeyId, event: 'email.send_failed',
-          eventId: buildEventId('email.send_failed', record.id),
-          payload,
-        });
+        void dispatchWebhook({ apiKeyId, event: 'email.send_failed', eventId: buildEventId('email.send_failed', record.id), payload });
       }
 
       if (status === 'failed') {
-        return reply.status(502).send({
-          id: record.id, status, sesMessageId, errorMessage,
-        });
+        return reply.status(502).send({ id: record.id, status, sesMessageId, errorMessage });
       }
       return reply.status(200).send({ id: record.id, sesMessageId, status });
     },
   );
+
+  // DELETE /v1/messages/:id/cancel — cancel scheduled send
+  fastify.delete(
+    '/messages/:id/cancel',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+
+      const msg = await prisma.sendMessage.findFirst({
+        where: { id, apiKeyId, status: 'scheduled' },
+      });
+      if (!msg) throw Errors.notFound('Scheduled message not found.');
+
+      // Remove from BullMQ
+      const job = await sendQueue.getJob(id);
+      if (job) await job.remove();
+
+      await prisma.sendMessage.update({
+        where: { id },
+        data: { status: 'cancelled' },
+      });
+
+      return reply.status(200).send({ cancelled: true, id });
+    },
+  );
+}
+
+function buildFromAddress(domain: { name: string } | null): string {
+  if (domain) return `no-reply@${domain.name}`;
+  return config.SES_FROM_DOMAIN.includes('@') ? config.SES_FROM_DOMAIN : `no-reply@${config.SES_FROM_DOMAIN}`;
 }

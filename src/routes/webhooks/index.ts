@@ -4,7 +4,7 @@ import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { webhookQueue } from '../../lib/queue.js';
-import { generateWebhookSecret } from '../../lib/crypto.js';
+import { generateSecret as generateWebhookSecret } from '../../lib/crypto.js';
 import { dispatchWebhook, buildEventId } from '../../lib/webhooks.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';

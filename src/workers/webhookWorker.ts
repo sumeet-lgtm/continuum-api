@@ -34,7 +34,7 @@ import { Worker, type Job } from 'bullmq';
 import { randomUUID } from 'node:crypto';
 import { redisConnection, QUEUE_WEBHOOK, webhookQueue } from '../lib/queue.js';
 import { prisma } from '../lib/prisma.js';
-import { signWebhookPayload } from '../lib/crypto.js';
+import { hmacSign as signWebhookPayload } from '../lib/crypto.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
 import type { WebhookDeliveryPayload } from '../types/webhook.js';

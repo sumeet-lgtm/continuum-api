@@ -20,6 +20,25 @@ import { phoneRoutes } from './routes/phone/index.js';
 import { billingRoutes } from './routes/billing/index.js';
 import { sendRoute } from './routes/send/index.js';
 import { sendEventsRoute } from './routes/send/events.js';
+import { batchSendRoute } from './routes/send/batch.js';
+import { suppressionRoutes } from './routes/suppressions/index.js';
+import { messagesRoutes } from './routes/messages/index.js';
+import { usageRoutes } from './routes/usage/index.js';
+import { apiKeyRoutes } from './routes/api-keys/index.js';
+import { domainRoutes } from './routes/domains/index.js';
+import { templateRoutes } from './routes/templates/index.js';
+import { unsubscribeRoutes } from './routes/unsubscribe/index.js';
+import { trackRoutes } from './routes/track/index.js';
+import { analyticsRoutes } from './routes/analytics/index.js';
+import { listRoutes } from './routes/lists/index.js';
+import { contactRoutes } from './routes/contacts/index.js';
+import { segmentRoutes } from './routes/segments/index.js';
+import { campaignRoutes } from './routes/campaigns/index.js';
+import { mailboxRoutes } from './routes/mailboxes/index.js';
+import { sequenceRoutes } from './routes/sequences/index.js';
+import { leadRoutes } from './routes/leads/index.js';
+import { inboxRoutes } from './routes/inbox/index.js';
+import { inboxTestRoutes } from './routes/inbox-test/index.js';
 import { loadDisposableList } from './engine/disposable.js';
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -112,6 +131,26 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(billingRoutes, { prefix: '/v1' });
   await app.register(sendRoute, { prefix: '/v1' });
   await app.register(sendEventsRoute, { prefix: '/v1' });
+  await app.register(batchSendRoute, { prefix: '/v1' });
+  await app.register(suppressionRoutes, { prefix: '/v1' });
+  await app.register(messagesRoutes, { prefix: '/v1' });
+  await app.register(usageRoutes, { prefix: '/v1' });
+  await app.register(apiKeyRoutes, { prefix: '/v1' });
+  await app.register(domainRoutes, { prefix: '/v1' });
+  await app.register(templateRoutes, { prefix: '/v1' });
+  await app.register(analyticsRoutes, { prefix: '/v1' });
+  await app.register(listRoutes, { prefix: '/v1' });
+  await app.register(contactRoutes, { prefix: '/v1' });
+  await app.register(segmentRoutes, { prefix: '/v1' });
+  await app.register(campaignRoutes, { prefix: '/v1' });
+  await app.register(mailboxRoutes, { prefix: '/v1' });
+  await app.register(sequenceRoutes, { prefix: '/v1' });
+  await app.register(leadRoutes, { prefix: '/v1' });
+  await app.register(inboxRoutes, { prefix: '/v1' });
+  await app.register(inboxTestRoutes, { prefix: '/v1' });
+  // Tracking + unsubscribe at root (no /v1 — links in emails go here)
+  await app.register(trackRoutes);
+  await app.register(unsubscribeRoutes, { prefix: '/v1' });
 
   // ─── Root info ────────────────────────────────────────────────────────────
   app.get('/', async (_request, reply) => {
