@@ -68,15 +68,14 @@ const mockLookupMx = vi.mocked(lookupMx);
 
 const TEST_API_KEY = 'cnt_testkey0123456789abcdefghijklmnopqrstu';
 const TEST_KEY_RECORD = {
-  id:         'key-test-001',
-  keyHash:    '', // hash is computed by hashApiKey — we bypass by making findUnique return this
-  keyPrefix:  'cnt_testkey',
-  label:      'test',
-  ownerId:    null,
-  rateLimit:  1000,
-  isActive:   true,
-  createdAt:  new Date(),
-  revokedAt:  null,
+  id: 'key-test-001',
+  keyHash: '', // hash is computed by hashApiKey — we bypass by making findUnique return this
+  keyPrefix: 'cnt_testkey',
+  label: 'test', ownerId: null, userId: null, keyRaw: null, rateLimit: 1000,
+  monthlyLimit: 100000, currentMonthUsage: 0, usageResetAt: new Date(), plan: 'free',
+  isActive: true, createdAt: new Date(), revokedAt: null,
+  name: null, monthlySendLimit: 500, currentMonthSendUsage: 0, sendUsageResetAt: new Date(),
+  permission: 'full_access', restrictedDomainId: null, lastUsedAt: null,
 };
 
 // ─── App fixture ──────────────────────────────────────────────────────────────
@@ -86,7 +85,7 @@ let app: FastifyInstance;
 beforeAll(async () => {
   // Make every API key lookup return the test key record
   mockFindKey.mockResolvedValue(TEST_KEY_RECORD);
-  mockCreate.mockResolvedValue({ id: 'ver-001', checkedAt: new Date('2026-04-24T10:00:00Z') });
+  mockCreate.mockResolvedValue({ id: 'ver-001', checkedAt: new Date('2026-04-24T10:00:00Z') } as never);
   app = await buildApp();
 });
 
@@ -97,7 +96,7 @@ afterAll(async () => {
 beforeEach(() => {
   mockLookupMx.mockReset();
   mockCreate.mockReset();
-  mockCreate.mockResolvedValue({ id: 'ver-001', checkedAt: new Date('2026-04-24T10:00:00Z') });
+  mockCreate.mockResolvedValue({ id: 'ver-001', checkedAt: new Date('2026-04-24T10:00:00Z') } as never);
 });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

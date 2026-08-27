@@ -116,6 +116,10 @@ function makeKey(overrides: Record<string, unknown> = {}) {
     isActive: true,
     createdAt: new Date(),
     revokedAt: null,
+    name: null,
+    permission: 'full_access',
+    restrictedDomainId: null,
+    lastUsedAt: null,
     ...overrides,
   };
 }

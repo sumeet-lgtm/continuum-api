@@ -83,8 +83,11 @@ const mockQueueAdd     = vi.mocked(monitorQueue.add);
 const TEST_KEY     = 'cnt_testmonitorkey0123456789abcdefgh';
 const TEST_KEY_REC = {
   id: 'key-mon-001', keyHash: '', keyPrefix: 'cnt_testmonitor',
-  label: 'test', ownerId: null, rateLimit: 1000,
+  label: 'test', ownerId: null, userId: null, keyRaw: null, rateLimit: 1000,
+  monthlyLimit: 100000, currentMonthUsage: 0, usageResetAt: new Date(), plan: 'free',
   isActive: true, createdAt: new Date(), revokedAt: null,
+  name: null, monthlySendLimit: 500, currentMonthSendUsage: 0, sendUsageResetAt: new Date(),
+  permission: 'full_access', restrictedDomainId: null, lastUsedAt: null,
 };
 const AUTH = { authorization: `Bearer ${TEST_KEY}` };
 
@@ -114,9 +117,10 @@ function makeMonitor(overrides: Record<string, unknown> = {}) {
 function makeCheck(overrides: Record<string, unknown> = {}) {
   return {
     id:             'chk-001',
+    monitorId:      'mon-001',
     statusChanged:  true,
-    previousStatus: 'valid',
-    newStatus:      'invalid',
+    previousStatus: 'valid' as never,
+    newStatus:      'invalid' as never,
     source:         'scheduled',
     checkedAt:      new Date('2026-04-24T12:00:00Z'),
     durationMs:     340,
@@ -327,7 +331,7 @@ describe('GET /v1/monitoring', () => {
 
 describe('GET /v1/monitoring/:id', () => {
   beforeEach(() => {
-    mockMonitorFind.mockResolvedValue({ ...makeMonitor(), checks: [] });
+    mockMonitorFind.mockResolvedValue({ ...makeMonitor(), checks: [] } as never);
   });
 
   it('returns 404 for unknown id', async () => {
@@ -337,7 +341,7 @@ describe('GET /v1/monitoring/:id', () => {
   });
 
   it('returns 404 for a monitor belonging to another key', async () => {
-    mockMonitorFind.mockResolvedValue({ ...makeMonitor({ apiKeyId: 'other-key' }), checks: [] });
+    mockMonitorFind.mockResolvedValue({ ...makeMonitor({ apiKeyId: 'other-key' }), checks: [] } as never);
     const res = await app.inject({ method: 'GET', url: '/v1/monitoring/mon-001', headers: AUTH });
     expect(res.statusCode).toBe(404);
   });
@@ -351,7 +355,7 @@ describe('GET /v1/monitoring/:id', () => {
 
   it('recentChecks contains check objects when checks exist', async () => {
     const check = { ...makeCheck(), monitorId: 'mon-001' };
-    mockMonitorFind.mockResolvedValue({ ...makeMonitor(), checks: [check] });
+    mockMonitorFind.mockResolvedValue({ ...makeMonitor(), checks: [check] } as never);
     const res = await app.inject({ method: 'GET', url: '/v1/monitoring/mon-001', headers: AUTH });
     const body = res.json();
     expect(body.recentChecks).toHaveLength(1);

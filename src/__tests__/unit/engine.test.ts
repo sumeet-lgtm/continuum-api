@@ -98,7 +98,7 @@ function mockSmtpGreylisted() {
 describe('verifyEmail engine pipeline', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCreate.mockResolvedValue({ id: 'test-id-001', checkedAt: new Date('2026-04-24T10:00:00Z') });
+    mockCreate.mockResolvedValue({ id: 'test-id-001', checkedAt: new Date('2026-04-24T10:00:00Z') } as never);
     mockIsDisposable.mockReturnValue(false);
     // Restore default smtp mock: not checked (disabled in test env)
     mockSmtpProbe.mockResolvedValue({

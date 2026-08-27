@@ -65,31 +65,37 @@ const mockCheckList     = vi.mocked(prisma.monitorCheck.findMany);
 const TEST_KEY     = 'cnt_testhistorykey0123456789abcdefgh';
 const TEST_KEY_REC = {
   id: 'key-hist-001', keyHash: '', keyPrefix: 'cnt_testhist',
-  label: 'test', ownerId: null, rateLimit: 1000,
+  label: 'test', ownerId: null, userId: null, keyRaw: null, rateLimit: 1000,
+  monthlyLimit: 100000, currentMonthUsage: 0, usageResetAt: new Date(), plan: 'free',
   isActive: true, createdAt: new Date(), revokedAt: null,
+  name: null, monthlySendLimit: 500, currentMonthSendUsage: 0, sendUsageResetAt: new Date(),
+  permission: 'full_access', restrictedDomainId: null, lastUsedAt: null,
 };
 const AUTH = { authorization: `Bearer ${TEST_KEY}` };
 
 function makeVerification(overrides: Record<string, unknown> = {}) {
   return {
-    id:            'ver-001',
-    email:         'alice@example.com',
-    domain:        'example.com',
-    status:        'valid',
-    subStatus:     null,
-    syntaxValid:   true,
-    mxFound:       true,
-    mxRecords:     ['mx.example.com'],
-    isDisposable:  false,
-    isRoleAccount: false,
-    smtpChecked:   true,
-    smtpReachable: true,
-    isCatchAll:    false,
-    greylisted:    false,
-    score:         100,
-    durationMs:    200,
-    checkedAt:     new Date('2026-04-24T10:00:00Z'),
-    bulkJobId:     null,
+    id:              'ver-001',
+    apiKeyId:        'key-hist-001',
+    email:           'alice@example.com',
+    domain:          'example.com',
+    status:          'valid' as never,
+    subStatus:       null,
+    syntaxValid:     true,
+    mxFound:         true,
+    mxRecords:       ['mx.example.com'],
+    isDisposable:    false,
+    isRoleAccount:   false,
+    smtpChecked:     true,
+    smtpReachable:   true,
+    smtpRawResponse: null,
+    isCatchAll:      false,
+    greylisted:      false,
+    score:           100,
+    durationMs:      200,
+    checkedAt:       new Date('2026-04-24T10:00:00Z'),
+    bulkJobId:       null,
+    sourceIp:        null,
     ...overrides,
   };
 }
@@ -187,10 +193,10 @@ describe('GET /v1/history/:email', () => {
 
   it('source is "scheduled" and monitorId is set when verification came from monitor', async () => {
     mockCheckList.mockResolvedValue([{
-      verificationId: 'ver-001',
-      monitorId:      'mon-001',
-      source:         'scheduled',
-    }]);
+      id: 'chk-001', verificationId: 'ver-001', monitorId: 'mon-001',
+      source: 'scheduled', statusChanged: true, previousStatus: null,
+      newStatus: 'valid', checkedAt: new Date(), durationMs: null, webhookSent: false,
+    } as never]);
     const res = await app.inject({ method: 'GET', url: '/v1/history/alice%40example.com', headers: AUTH });
     const row = res.json().data[0];
     expect(row.source).toBe('scheduled');
@@ -199,10 +205,10 @@ describe('GET /v1/history/:email', () => {
 
   it('source is "manual_recheck" for recheck-triggered verifications', async () => {
     mockCheckList.mockResolvedValue([{
-      verificationId: 'ver-001',
-      monitorId:      'mon-001',
-      source:         'manual_recheck',
-    }]);
+      id: 'chk-002', verificationId: 'ver-001', monitorId: 'mon-001',
+      source: 'manual_recheck', statusChanged: true, previousStatus: null,
+      newStatus: 'valid', checkedAt: new Date(), durationMs: null, webhookSent: false,
+    } as never]);
     const res = await app.inject({ method: 'GET', url: '/v1/history/alice%40example.com', headers: AUTH });
     expect(res.json().data[0].source).toBe('manual_recheck');
   });

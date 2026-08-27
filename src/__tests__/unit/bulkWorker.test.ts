@@ -115,12 +115,12 @@ describe('export CSV generation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUpload.mockResolvedValue('exports/path/results.csv');
-    mockTx.mockImplementation(async (ops: unknown[]) => {
+    mockTx.mockImplementation((async (ops: unknown) => {
       if (Array.isArray(ops)) {
         return Promise.all(ops.map((op: unknown) => (typeof op === 'object' && op !== null && 'then' in op ? op : Promise.resolve(op))));
       }
       return (ops as () => Promise<unknown>)();
-    });
+    }) as never);
   });
 
   it('uploadToStorage is called with text/csv content type', async () => {

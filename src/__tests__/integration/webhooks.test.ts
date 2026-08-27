@@ -97,8 +97,11 @@ const mockQueueAdd      = vi.mocked(webhookQueue.add);
 const TEST_KEY     = 'cnt_testwebhookkey0123456789abcdefg';
 const TEST_KEY_REC = {
   id: 'key-wh-001', keyHash: '', keyPrefix: 'cnt_testwh',
-  label: 'test', ownerId: null, rateLimit: 1000,
+  label: 'test', ownerId: null, userId: null, keyRaw: null, rateLimit: 1000,
+  monthlyLimit: 100000, currentMonthUsage: 0, usageResetAt: new Date(), plan: 'free',
   isActive: true, createdAt: new Date(), revokedAt: null,
+  name: null, monthlySendLimit: 500, currentMonthSendUsage: 0, sendUsageResetAt: new Date(),
+  permission: 'full_access', restrictedDomainId: null, lastUsedAt: null,
 };
 const AUTH = { authorization: `Bearer ${TEST_KEY}` };
 
@@ -109,7 +112,7 @@ function makeWebhook(overrides: Record<string, unknown> = {}) {
     url:             'https://example.com/webhook',
     label:           null,
     description:     null,
-    events:          ['verification.completed'],
+    events:          ['verification.completed'] as never,
     isActive:        true,
     createdAt:       new Date('2026-04-24T10:00:00Z'),
     lastPingAt:      null,
@@ -126,7 +129,7 @@ function makeDelivery(overrides: Record<string, unknown> = {}) {
   return {
     id:                'del-001',
     webhookId:         'wh-001',
-    event:             'verification_complete',
+    event:             'verification.completed' as never,
     eventId:           'verification.completed:ver-001',
     attempts:          1,
     maxAttempts:       5,
@@ -137,8 +140,7 @@ function makeDelivery(overrides: Record<string, unknown> = {}) {
     statusCode:        200,
     errorMessage:      null,
     createdAt:         new Date('2026-04-24T10:00:00Z'),
-    attempts_:         [],
-    payload:           { event: 'verification_complete', id: 'ver-001' },
+    payload:           { event: 'verification.completed', id: 'ver-001' } as never,
     responseBody:      '{"ok":true}',
     ...overrides,
   };
@@ -473,7 +475,7 @@ describe('DELETE /v1/webhooks/:id', () => {
 describe('POST /v1/webhooks/:id/ping', () => {
   beforeEach(() => {
     mockWebhookFind.mockResolvedValue(makeWebhook());
-    mockDeliveryCreate.mockResolvedValue({ id: 'del-ping-001' });
+    mockDeliveryCreate.mockResolvedValue({ id: 'del-ping-001' } as never);
   });
 
   it('returns 404 for unknown webhook', async () => {
@@ -749,7 +751,7 @@ describe('Webhook signature', () => {
 describe('Phase 5 event names in queue payloads', () => {
   beforeEach(() => {
     mockWebhookFind.mockResolvedValue(makeWebhook());
-    mockDeliveryCreate.mockResolvedValue({ id: 'del-001' });
+    mockDeliveryCreate.mockResolvedValue({ id: 'del-001' } as never);
   });
 
   it('ping enqueues with verification.completed event', async () => {

@@ -4,6 +4,18 @@ export function hashApiKey(rawKey: string): string {
   return createHash('sha256').update(rawKey).digest('hex');
 }
 
+export function generateApiKey(): string {
+  return 'cnt_' + randomBytes(24).toString('hex');
+}
+
+export function getKeyPrefix(rawKey: string): string {
+  return rawKey.slice(0, 12);
+}
+
+export function generateWebhookSecret(): string {
+  return randomBytes(32).toString('hex');
+}
+
 export function hmacSign(secret: string, data: string): string {
   return createHmac('sha256', secret).update(data).digest('base64url');
 }
@@ -20,6 +32,22 @@ export function hmacVerify(secret: string, data: string, sig: string): boolean {
 
 export function generateSecret(bytes = 32): string {
   return randomBytes(bytes).toString('hex');
+}
+
+// Webhook signature helpers (Svix-compatible sha256=<hex> format)
+export function signWebhookPayload(secret: string, body: string): string {
+  return 'sha256=' + createHmac('sha256', secret).update(body).digest('hex');
+}
+
+export function verifyWebhookSignature(secret: string, body: string, sig: string): boolean {
+  if (!sig) return false;
+  const expected = signWebhookPayload(secret, body);
+  if (expected.length !== sig.length) return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(sig);
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
+  return diff === 0;
 }
 
 // AES-256-GCM encryption for sensitive values (DKIM keys, SMTP passwords)
