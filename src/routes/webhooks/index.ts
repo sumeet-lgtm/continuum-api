@@ -15,6 +15,32 @@ import type { WebhookRecord, DeliveryRecord, AttemptRecord } from '../../types/w
 
 const MAX_WEBHOOKS_PER_KEY = 10;
 
+// Map dot-style API event names to the Prisma WebhookEvent enum's underscore values.
+// ALL_WEBHOOK_EVENTS contains both dot-style (public API) and legacy underscore aliases.
+const EVENT_TO_DB: Record<string, string> = {
+  'email.sent':             'email_sent',
+  'email.delivered':        'email_delivered',
+  'email.bounced':          'email_bounced',
+  'email.complained':       'email_complained',
+  'email.send_failed':      'email_send_failed',
+  'email.status_changed':   'monitor_status_change',
+  'verification.completed': 'verification_complete',
+  'bulk_job.completed':     'bulk_job_complete',
+  // pass-through for already-underscore legacy aliases
+  'verification_complete':  'verification_complete',
+  'bulk_job_complete':      'bulk_job_complete',
+  'monitor_status_change':  'monitor_status_change',
+  'email_sent':             'email_sent',
+  'email_delivered':        'email_delivered',
+  'email_bounced':          'email_bounced',
+  'email_complained':       'email_complained',
+  'email_send_failed':      'email_send_failed',
+};
+
+function toDbEvents(events: string[]): string[] {
+  return events.map((e) => EVENT_TO_DB[e] ?? e);
+}
+
 // ─── Validation schemas ───────────────────────────────────────────────────────
 
 const eventEnum = z.string().refine(
@@ -142,7 +168,7 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
           apiKeyId:    request.apiKey.id,
           url,
           secret,
-          events:      events as unknown as never,
+          events:      toDbEvents(events) as unknown as never,
           label:       label       ?? null,
           description: description ?? null,
           isActive:    true,
@@ -255,7 +281,7 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
 
       const data: UpdateData = {};
       if (url         !== undefined) data.url         = url;
-      if (events      !== undefined) data.events = events as unknown as never;
+      if (events      !== undefined) data.events = toDbEvents(events) as unknown as never;
       if (label       !== undefined) data.label       = label ?? null;
       if (description !== undefined) data.description = description ?? null;
       if (isActive    !== undefined) data.isActive    = isActive;
