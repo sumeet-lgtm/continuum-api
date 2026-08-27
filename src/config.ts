@@ -86,6 +86,15 @@ const envSchema = z.object({
   // Anthropic (for AI personalization)
   ANTHROPIC_API_KEY: z.string().optional(),
 
+  // WorkOS (SSO / AuthKit)
+  WORKOS_API_KEY: z.string().optional(),
+  WORKOS_CLIENT_ID: z.string().optional(),
+  SESSION_SECRET: z
+    .string()
+    .min(32)
+    .default('dev-session-secret-at-least-32-chars-long'),
+  API_BASE_URL: z.string().url().optional(),
+
   // Internal
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   API_KEY_SALT: z
