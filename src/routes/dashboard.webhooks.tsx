@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 
 export const Route = createFileRoute("/dashboard/webhooks")({
+  head: () => ({ meta: [{ title: "Webhooks — Continuum API" }] }),
   component: WebhooksPage,
 });
 
@@ -36,10 +37,29 @@ interface Delivery {
   deliveredAt: string | null;
 }
 
-const EVENTS: { value: string; label: string }[] = [
-  { value: "verification_complete", label: "Verification completed" },
-  { value: "bulk_job_complete", label: "Bulk job completed" },
-  { value: "monitor_status_change", label: "Email status changed" },
+const EVENTS: { value: string; label: string; group: string }[] = [
+  // Transactional
+  { value: "email.delivered", label: "Email delivered", group: "Transactional" },
+  { value: "email.bounced", label: "Email bounced (hard/soft)", group: "Transactional" },
+  { value: "email.complained", label: "Spam complaint received", group: "Transactional" },
+  { value: "email.opened", label: "Email opened", group: "Transactional" },
+  { value: "email.clicked", label: "Link clicked", group: "Transactional" },
+  { value: "email.unsubscribed", label: "Recipient unsubscribed", group: "Transactional" },
+  // Campaigns
+  { value: "campaign.sent", label: "Campaign fully sent", group: "Campaigns" },
+  { value: "campaign.failed", label: "Campaign failed", group: "Campaigns" },
+  // Sequences
+  { value: "sequence.enrolled", label: "Contact enrolled in sequence", group: "Sequences" },
+  { value: "sequence.replied", label: "Sequence reply received", group: "Sequences" },
+  { value: "sequence.completed", label: "Contact completed sequence", group: "Sequences" },
+  { value: "sequence.unsubscribed", label: "Contact unsubscribed from sequence", group: "Sequences" },
+  // Mailboxes
+  { value: "mailbox.error", label: "Mailbox connection error", group: "Mailboxes" },
+  { value: "mailbox.daily_limit_reached", label: "Mailbox daily send limit hit", group: "Mailboxes" },
+  // Verification & Monitoring
+  { value: "verification_complete", label: "Email verified (single)", group: "Verification" },
+  { value: "bulk_job_complete", label: "Bulk verification job done", group: "Verification" },
+  { value: "monitor_status_change", label: "Monitor status changed", group: "Monitoring" },
 ];
 
 function WebhooksPage() {
@@ -280,25 +300,32 @@ function WebhooksPage() {
             </div>
             <div className="space-y-1.5">
               <Label>Events</Label>
-              <div className="space-y-1.5">
-                {EVENTS.map((e) => {
-                  const checked = selected.includes(e.value);
-                  return (
-                    <label key={e.value} className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() =>
-                          setSelected((prev) =>
-                            prev.includes(e.value) ? prev.filter((x) => x !== e.value) : [...prev, e.value],
-                          )
-                        }
-                        className="rounded border-border"
-                      />
-                      <span className="text-xs">{e.label}</span>
-                    </label>
-                  );
-                })}
+              <div className="max-h-64 overflow-y-auto space-y-3 pr-1">
+                {Array.from(new Set(EVENTS.map((e) => e.group))).map((grp) => (
+                  <div key={grp}>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">{grp}</p>
+                    <div className="space-y-1">
+                      {EVENTS.filter((e) => e.group === grp).map((e) => {
+                        const checked = selected.includes(e.value);
+                        return (
+                          <label key={e.value} className="flex items-center gap-2 text-sm cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                setSelected((prev) =>
+                                  prev.includes(e.value) ? prev.filter((x) => x !== e.value) : [...prev, e.value],
+                                )
+                              }
+                              className="rounded border-border"
+                            />
+                            <span className="text-xs">{e.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

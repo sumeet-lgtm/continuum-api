@@ -51,9 +51,8 @@ function TemplatesPage() {
   };
 
   const del = async (id: string) => {
-    if (!primaryKey?.keyRaw) return;
+    if (!primaryKey?.keyRaw || !confirm("Delete this template?")) return;
     try {
-      await api.withKey.get(`/v1/templates/${id}`, primaryKey.keyRaw); // just to verify exists
       await fetch(`https://api.continuumapi.com/v1/templates/${id}`, {
         method: "DELETE",
         headers: { "X-API-Key": primaryKey.keyRaw },
