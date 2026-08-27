@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { Errors } from '../../plugins/errorHandler.js';
 
 interface StatsQuery {
   dateFrom?: string;
@@ -138,6 +139,54 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       });
 
       return reply.status(200).send({ data: mailboxes });
+    },
+  );
+
+  // GET /v1/analytics/mailboxes/:id — per-mailbox detail with daily breakdown
+  fastify.get(
+    '/analytics/mailboxes/:id',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+
+      const mailbox = await prisma.mailbox.findFirst({
+        where: { id, apiKeyId },
+        select: {
+          id: true, username: true, type: true, status: true,
+          sentToday: true, dailyLimit: true, sendDelayMinMs: true, sendDelayMaxMs: true,
+          lastErrorMsg: true, lastCheckedAt: true, createdAt: true,
+          warmupConfig: true,
+        },
+      });
+      if (!mailbox) throw Errors.notFound('Mailbox not found.');
+
+      // Aggregate sequence sends from this mailbox over last 30 days
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const seqsOnMailbox = await prisma.sequence.findMany({ where: { mailboxId: id }, select: { id: true } });
+      const seqIds = seqsOnMailbox.map(s => s.id);
+      const enrollments = seqIds.length > 0
+        ? await prisma.sequenceEnrollment.findMany({
+            where: { sequenceId: { in: seqIds }, enrolledAt: { gte: since } },
+            select: { status: true, enrolledAt: true },
+          })
+        : [];
+
+      const byDay: Record<string, { sent: number; replied: number; bounced: number }> = {};
+      for (const e of enrollments) {
+        const day = e.enrolledAt.toISOString().slice(0, 10);
+        if (!byDay[day]) byDay[day] = { sent: 0, replied: 0, bounced: 0 };
+        byDay[day]!.sent++;
+        if (e.status === 'replied') byDay[day]!.replied++;
+        if (e.status === 'bounced') byDay[day]!.bounced++;
+      }
+
+      return reply.status(200).send({
+        ...mailbox,
+        daily_breakdown: Object.entries(byDay)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([date, stats]) => ({ date, ...stats })),
+      });
     },
   );
 }
