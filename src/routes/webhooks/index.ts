@@ -312,6 +312,8 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.notFound('Webhook');
       }
 
+      // Delete deliveries first (Prisma can't cascade without a schema migration on the shadow DB)
+      await prisma.webhookDelivery.deleteMany({ where: { webhookId: request.params.id } });
       await prisma.webhook.delete({ where: { id: request.params.id } });
       return reply.status(200).send({ id: request.params.id, deleted: true });
     },
