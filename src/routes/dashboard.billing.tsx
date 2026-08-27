@@ -20,9 +20,9 @@ interface PlanDef {
   features: string[];
 }
 const PLANS: PlanDef[] = [
-  { id: "starter", name: "Starter", price: "$25", quota: "5,000 verifications / month", features: ["Email verification API", "Phone & IP intelligence", "Bulk jobs & webhooks"] },
-  { id: "growth", name: "Growth", price: "$49", quota: "15,000 verifications / month", features: ["Everything in Starter", "Higher rate limits", "Priority support"] },
-  { id: "scale", name: "Scale", price: "$199", quota: "100,000 verifications / month", features: ["Everything in Growth", "Dedicated throughput", "SLA & onboarding"] },
+  { id: "starter", name: "Starter", price: "$25", quota: "5,000 verifications / month", features: ["Email verification API", "Phone & IP intelligence", "Transactional email sending", "Bulk jobs & webhooks", "Mailing lists & campaigns"] },
+  { id: "growth", name: "Growth", price: "$49", quota: "15,000 verifications / month", features: ["Everything in Starter", "Cold outreach sequences", "Multi-mailbox rotation", "Reply detection", "Analytics & tracking", "Priority support"] },
+  { id: "scale", name: "Scale", price: "$199", quota: "100,000 verifications / month", features: ["Everything in Growth", "Email warmup", "Inbox placement testing", "AI personalization", "Dedicated throughput", "SLA & onboarding"] },
 ];
 
 interface Usage {
