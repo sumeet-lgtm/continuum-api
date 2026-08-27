@@ -901,7 +901,7 @@ model Automation {
 
 model AutomationStep {
   id            String   @id @default(cuid())
-  automationId  String
+  automationId  String   @map("automation_id")
   stepOrder     Int
   delayHours    Int      @default(0)
   subject       String
@@ -919,7 +919,7 @@ model AutomationStep {
 
 model AutomationEnrollment {
   id            String    @id @default(cuid())
-  automationId  String
+  automationId  String    @map("automation_id")
   email         String
   data          Json?     // arbitrary event data passed at trigger time
   status        String    @default("active") // active|completed|unsubscribed|bounced

@@ -24,7 +24,9 @@ const automationInterval = setInterval(() => {
   });
 }, 5 * 60 * 1000);
 // Run once immediately on startup
-void runAutomationWorker();
+void runAutomationWorker().catch((err: unknown) => {
+  console.error('[automation-worker] startup error:', err);
+});
 
 closable.push({ close: async () => { clearInterval(automationInterval); } });
 
