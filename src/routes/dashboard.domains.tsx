@@ -42,7 +42,7 @@ function DomainsPage() {
     if (!primaryKey?.keyRaw) return;
     api.withKey
       .get<{ domains: Domain[] }>("/v1/domains", primaryKey.keyRaw)
-      .then((r) => setDomains(r.domains ?? []))
+      .then((r) => setDomains(r.data ?? r.domains ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };

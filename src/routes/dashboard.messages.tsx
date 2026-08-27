@@ -28,7 +28,7 @@ function MessagesPage() {
     if (!primaryKey?.keyRaw) return;
     api.withKey
       .get<{ messages: Message[]; total: number }>("/v1/messages?page=1&limit=50", primaryKey.keyRaw)
-      .then((r) => setMessages(r.messages ?? []))
+      .then((r) => setMessages(r.data ?? r.messages ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [primaryKey]);
