@@ -28,7 +28,7 @@ const bodySchema = z.object({
   to: z.string().email().transform((s) => s.trim().toLowerCase()),
   cc: z.array(z.string().email()).max(50).optional(),
   bcc: z.array(z.string().email()).max(50).optional(),
-  subject: z.string().min(1).max(500),
+  subject: z.string().min(1).max(500).optional(),
   html_body: z.string().optional(),
   text_body: z.string().optional(),
   reply_to: z.union([z.string().email(), z.array(z.string().email())]).optional(),
@@ -45,13 +45,16 @@ const bodySchema = z.object({
   track_clicks: z.boolean().optional(),
 }).refine((v) => v.html_body || v.text_body || v.template_id, {
   message: 'html_body, text_body, or template_id is required',
+}).refine((v) => v.subject || v.template_id, {
+  message: 'subject is required when template_id is not provided',
+  path: ['subject'],
 });
 
 async function buildEmailContent(
   input: z.infer<typeof bodySchema>,
   apiKeyId: string,
 ): Promise<{ subject: string; htmlBody: string | undefined; textBody: string | undefined }> {
-  let subject = input.subject;
+  let subject = input.subject ?? '';
   let htmlBody = input.html_body;
   let textBody = input.text_body;
 
