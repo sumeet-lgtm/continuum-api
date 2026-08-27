@@ -5,6 +5,9 @@ import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { campaignQueue } from '../../lib/queue.js';
+import { sendViaSes, isSesConfigured } from '../../lib/ses.js';
+import { generateOpenToken, generateClickToken, injectTracking } from '../../lib/tracking.js';
+import { generateUnsubToken, generateUnsubHtml } from '../../lib/unsubscribe.js';
 
 const createSchema = z.object({
   name: z.string().min(1).max(200),
@@ -168,6 +171,35 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
       select: { id: true, status: true, createdAt: true },
     });
     return reply.status(201).send(copy);
+  });
+
+  // POST /v1/campaigns/:id/test — send preview to a single address
+  fastify.post('/campaigns/:id/test', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const parsed = z.object({ to: z.string().email() }).safeParse(request.body);
+    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+    const { to } = parsed.data;
+
+    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
+    if (!campaign) throw Errors.notFound('Campaign not found.');
+    if (!isSesConfigured()) throw Errors.serviceUnavailable('Email sending (SES not configured)');
+
+    const unsubToken = generateUnsubToken(to, apiKeyId);
+    let html = campaign.htmlBody + generateUnsubHtml(unsubToken);
+    const fakeMessageId = `test_${id}_${Date.now()}`;
+    html = injectTracking(html, generateOpenToken(fakeMessageId), (url) => generateClickToken(fakeMessageId, url), null);
+
+    await sendViaSes({
+      to,
+      from: `${campaign.fromName} <${campaign.fromEmail}>`,
+      subject: `[TEST] ${campaign.subject}`,
+      htmlBody: html,
+      ...(campaign.textBody ? { textBody: campaign.textBody } : {}),
+      listUnsubscribeHeader: `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`,
+    });
+
+    return reply.status(200).send({ sent: true, to, subject: `[TEST] ${campaign.subject}` });
   });
 
   // GET /v1/campaigns/:id/health — real-time deliverability health for a campaign

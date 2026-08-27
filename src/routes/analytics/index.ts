@@ -6,17 +6,21 @@ import { Errors } from '../../plugins/errorHandler.js';
 
 interface StatsQuery {
   dateFrom?: string;
+  date_from?: string;
   dateTo?: string;
+  date_to?: string;
   domain_id?: string;
 }
 
 function buildWhere(apiKeyId: string, q: StatsQuery): Record<string, unknown> {
   const where: Record<string, unknown> = { apiKeyId };
   if (q.domain_id) where['domainId'] = q.domain_id;
-  if (q.dateFrom || q.dateTo) {
+  const from = q.dateFrom ?? q.date_from;
+  const to = q.dateTo ?? q.date_to;
+  if (from || to) {
     where['createdAt'] = {
-      ...(q.dateFrom ? { gte: new Date(q.dateFrom) } : {}),
-      ...(q.dateTo ? { lte: new Date(q.dateTo) } : {}),
+      ...(from ? { gte: new Date(from) } : {}),
+      ...(to ? { lte: new Date(to) } : {}),
     };
   }
   return where;
@@ -187,6 +191,84 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([date, stats]) => ({ date, ...stats })),
       });
+    },
+  );
+
+  // GET /v1/analytics/sequences — per-sequence enrollment stats
+  fastify.get(
+    '/analytics/sequences',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const apiKeyId = request.apiKey.id;
+      const q = request.query as { page?: string; limit?: string };
+      const page = Math.max(1, parseInt(q.page ?? '1', 10));
+      const limit = Math.min(50, Math.max(1, parseInt(q.limit ?? '20', 10)));
+
+      const sequences = await prisma.sequence.findMany({
+        where: { apiKeyId },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        select: { id: true, name: true, status: true, createdAt: true },
+      });
+
+      const data = await Promise.all(sequences.map(async (seq) => {
+        const [total, active, completed, replied, bounced] = await Promise.all([
+          prisma.sequenceEnrollment.count({ where: { sequenceId: seq.id } }),
+          prisma.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'active' } }),
+          prisma.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'completed' } }),
+          prisma.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'replied' } }),
+          prisma.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'bounced' } }),
+        ]);
+        return {
+          ...seq,
+          total_enrolled: total,
+          active,
+          completed,
+          replied,
+          bounced,
+          reply_rate: total > 0 ? +((replied / total) * 100).toFixed(1) : 0,
+          completion_rate: total > 0 ? +((completed / total) * 100).toFixed(1) : 0,
+        };
+      }));
+
+      return reply.status(200).send({ data });
+    },
+  );
+
+  // GET /v1/analytics/sequences/:id/variants — A/B variant performance for all steps
+  fastify.get(
+    '/analytics/sequences/:id/variants',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+
+      const sequence = await prisma.sequence.findFirst({ where: { id, apiKeyId }, select: { id: true } });
+      if (!sequence) throw Errors.notFound('Sequence not found.');
+
+      const steps = await prisma.sequenceStep.findMany({
+        where: { sequenceId: id },
+        orderBy: { stepOrder: 'asc' },
+        select: { id: true, stepOrder: true, subject: true, variants: true },
+      });
+
+      // For each step with variants, count sends per variant tracked via TrackingEvent
+      const result = await Promise.all(steps.map(async (step) => {
+        if (!step.variants || (step.variants as unknown[]).length === 0) return null;
+        const variants = step.variants as Array<{ variantLabel: string; subject: string; weight: number }>;
+        return {
+          step_id: step.id,
+          step_order: step.stepOrder,
+          variants: variants.map((v) => ({
+            label: v.variantLabel,
+            subject: v.subject,
+            weight: v.weight,
+          })),
+        };
+      }));
+
+      return reply.status(200).send({ data: result.filter(Boolean) });
     },
   );
 }
