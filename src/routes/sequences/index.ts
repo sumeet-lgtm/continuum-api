@@ -263,7 +263,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     if (!tmpl) throw Errors.notFound('Template not found.');
 
     const body = request.body as { from_name?: string; from_email?: string; mailbox_id?: string } | undefined;
-    const steps = tmpl.steps as Array<{ delay_days: number; delay_hours?: number; subject: string; html_body: string; condition?: string }>;
+    const steps = tmpl.steps as Array<{ delayDays?: number; delay_days?: number; delayHours?: number; delay_hours?: number; subject: string; htmlBody?: string; html_body?: string; condition?: string; stepOrder?: number }>;
 
     const seq = await prisma.sequence.create({
       data: {
@@ -271,8 +271,12 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
         fromName: body?.from_name ?? 'Sender', fromEmail: body?.from_email ?? 'sender@example.com',
         steps: {
           create: steps.map((s, i) => ({
-            stepOrder: i + 1, delayDays: s.delay_days, delayHours: s.delay_hours ?? 0,
-            subject: s.subject, htmlBody: s.html_body, condition: s.condition ?? 'always',
+            stepOrder: s.stepOrder ?? i + 1,
+            delayDays: s.delayDays ?? s.delay_days ?? 0,
+            delayHours: s.delayHours ?? s.delay_hours ?? 0,
+            subject: s.subject,
+            htmlBody: s.htmlBody ?? s.html_body ?? '',
+            condition: s.condition ?? 'always',
           })),
         },
       },
