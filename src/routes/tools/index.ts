@@ -242,11 +242,21 @@ Example output: ["Subject 1", "Subject 2", "Subject 3"]`,
   });
   if (!resp.ok) throw new Error('Anthropic API error');
   const data = await resp.json() as { content?: Array<{ text?: string }> };
-  const text = data.content?.[0]?.text?.trim() ?? '[]';
+  let text = data.content?.[0]?.text?.trim() ?? '[]';
+  // Strip markdown code fences if present
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
   try {
-    return JSON.parse(text) as string[];
-  } catch {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed)) return parsed as string[];
+    // If Claude returned an object with a subjects key
+    if (typeof parsed === 'object' && parsed !== null && 'subjects' in parsed) {
+      return (parsed as { subjects: string[] }).subjects;
+    }
     return [];
+  } catch {
+    // Last resort: extract quoted strings from the text
+    const matches = text.match(/"([^"]{5,80})"/g);
+    return matches ? matches.map(m => m.slice(1, -1)) : [];
   }
 }
 
