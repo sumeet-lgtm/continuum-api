@@ -131,12 +131,8 @@ function MonitoringPage() {
   const openHistory = async (m: Monitor) => {
     setActive(m);
     setHistory([]);
-    const { data } = await supabase
-      .from("monitor_checks")
-      .select("id, status, checkedAt")
-      .eq("monitorId", m.id)
-      .order("checkedAt", { ascending: false })
-      .limit(50);
+    const res = await fetch(`${API_BASE}/v1/monitors/${m.id}/history?limit=50`, { headers: { "X-API-Key": apiKey?.keyRaw ?? "" } });
+    const data = res.ok ? await res.json() : [];
     setHistory((data ?? []) as CheckLog[]);
   };
 

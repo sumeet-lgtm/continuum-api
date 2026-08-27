@@ -71,11 +71,8 @@ function BulkPage() {
       return;
     }
     setLoading(true);
-    const { data } = await supabase
-      .from("bulk_jobs")
-      .select("*")
-      .eq("apiKeyId", apiKey.id)
-      .order("createdAt", { ascending: false });
+    const res = await fetch(`${API_BASE}/v1/bulk-jobs?limit=50`, { headers: { "X-API-Key": apiKey.keyRaw ?? "" } });
+    const data = res.ok ? await res.json() : [];
     setJobs((data ?? []) as BulkJob[]);
     setLoading(false);
   };
@@ -206,12 +203,8 @@ function BulkPage() {
   const openJob = async (job: BulkJob) => {
     setActive(job);
     setResults([]);
-    const { data } = await supabase
-      .from("verifications")
-      .select("id, email, status, score")
-      .eq("bulkJobId", job.id)
-      .order("checkedAt", { ascending: false })
-      .limit(200);
+    const res = await fetch(`${API_BASE}/v1/bulk-jobs/${job.id}/results?limit=200`, { headers: { "X-API-Key": apiKey?.keyRaw ?? "" } });
+    const data = res.ok ? await res.json() : [];
     setResults((data ?? []) as BulkRow[]);
   };
 

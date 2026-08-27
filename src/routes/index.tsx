@@ -6,7 +6,7 @@ export const Route = createFileRoute("/")({
 });
 
 function Index() {
-  const { session, loading } = useAuth();
+  const { user, loading } = useAuth();
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -14,5 +14,5 @@ function Index() {
       </div>
     );
   }
-  return <Navigate to={session ? "/dashboard" : "/login"} />;
+  return <Navigate to={user ? "/dashboard" : "/login"} />;
 }

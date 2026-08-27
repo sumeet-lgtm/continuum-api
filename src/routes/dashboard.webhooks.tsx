@@ -165,12 +165,8 @@ function WebhooksPage() {
   const openDeliveries = async (w: Webhook) => {
     setActive(w);
     setDeliveries([]);
-    const { data } = await supabase
-      .from("webhook_deliveries")
-      .select("id, event, responseStatus, attemptCount, deliveredAt")
-      .eq("webhookId", w.id)
-      .order("deliveredAt", { ascending: false })
-      .limit(50);
+    const res = await fetch(`${API_BASE}/v1/webhooks/${w.id}/deliveries?limit=50`, { headers: { "X-API-Key": apiKey?.keyRaw ?? "" } });
+    const data = res.ok ? await res.json() : [];
     setDeliveries((data ?? []) as Delivery[]);
   };
 
