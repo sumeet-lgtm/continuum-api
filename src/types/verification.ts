@@ -17,6 +17,9 @@ export interface VerificationChecks {
   dkimFound?:    boolean;
   blacklisted?:  boolean;
   blacklists?:   string[];
+  isToxic?:      boolean;
+  isAbuse?:      boolean;
+  toxicReason?:  string | null;
 }
 
 export interface VerificationResult {
@@ -73,6 +76,8 @@ export interface ScorerInput {
   dmarcValid?:   boolean;
   dkimFound?:    boolean;
   blacklisted?:  boolean;
+  isToxic?:      boolean;
+  isAbuse?:      boolean;
 }
 
 export interface ScorerOutput {

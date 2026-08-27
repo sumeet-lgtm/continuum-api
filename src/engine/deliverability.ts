@@ -29,13 +29,36 @@ const DKIM_SELECTORS = [
   'mailjet', 'mandrill', 'sendgrid', 'amazonses',
 ];
 
-// Major DNS blacklists
-const BLACKLISTS = [
-  { name: 'Spamhaus ZEN',   suffix: 'zen.spamhaus.org' },
-  { name: 'Barracuda',      suffix: 'b.barracudacentral.org' },
-  { name: 'SORBS SPAM',     suffix: 'spam.sorbs.net' },
-  { name: 'SpamCop',        suffix: 'bl.spamcop.net' },
+// Major DNS blacklists — IP-based (DNSBL)
+const IP_BLACKLISTS = [
+  { name: 'Spamhaus ZEN',        suffix: 'zen.spamhaus.org' },
+  { name: 'Spamhaus SBL',        suffix: 'sbl.spamhaus.org' },
+  { name: 'Spamhaus XBL',        suffix: 'xbl.spamhaus.org' },
+  { name: 'Barracuda',           suffix: 'b.barracudacentral.org' },
+  { name: 'SORBS SPAM',          suffix: 'spam.sorbs.net' },
+  { name: 'SORBS DUHL',          suffix: 'dul.sorbs.net' },
+  { name: 'SpamCop',             suffix: 'bl.spamcop.net' },
+  { name: 'SURBL',               suffix: 'multi.surbl.org' },
+  { name: 'URIBL',               suffix: 'multi.uribl.com' },
+  { name: 'NiX Spam',            suffix: 'ix.dnsbl.manitu.net' },
+  { name: 'LASHBACK',            suffix: 'ubl.unsubscore.com' },
+  { name: 'PSBL',                suffix: 'psbl.surriel.com' },
+  { name: 'Truncate',            suffix: 'truncate.gbudb.net' },
+  { name: 'WPBL',                suffix: 'db.wpbl.info' },
+  { name: 'Invaluement IVMSIP',  suffix: 'sip.invaluement.com' },
 ];
+
+// Domain-based blacklists (URIBL-style, lookup by domain)
+const DOMAIN_BLACKLISTS = [
+  { name: 'SURBL Domain',        suffix: 'multi.surbl.org' },
+  { name: 'URIBL Domain',        suffix: 'multi.uribl.com' },
+  { name: 'dbl.spamhaus.org',    suffix: 'dbl.spamhaus.org' },
+  { name: 'Spamhaus DBL',        suffix: 'dbl.spamhaus.org' },
+  { name: 'URIBL Black',         suffix: 'black.uribl.com' },
+];
+
+// Keep the old name for backward compatibility inside this module
+const BLACKLISTS = IP_BLACKLISTS;
 
 // Cache to avoid redundant DNS lookups for same domain in bulk jobs
 const domainCache = new Map<string, DeliverabilityResult>();
@@ -177,4 +200,64 @@ async function checkBlacklists(domain: string): Promise<{ blacklisted: boolean; 
 
   const unique = [...new Set(listed)];
   return { blacklisted: unique.length > 0, lists: unique };
+}
+
+// ─── Comprehensive domain blacklist check (for monitoring) ────────────────────
+
+export interface DomainBlacklistResult {
+  domain: string;
+  ips: string[];
+  blacklisted: boolean;
+  ipListings: Array<{ blacklist: string; ip: string }>;
+  domainListings: string[];
+  checkedAt: Date;
+  totalChecked: number;
+}
+
+export async function checkDomainBlacklists(domain: string): Promise<DomainBlacklistResult> {
+  const checkedAt = new Date();
+  const ipListings: Array<{ blacklist: string; ip: string }> = [];
+  const domainListings: string[] = [];
+
+  let ips: string[] = [];
+  try {
+    ips = await dns.resolve4(domain);
+  } catch { /* no A record */ }
+
+  const checks: Array<Promise<void>> = [];
+
+  // IP-based checks
+  for (const ip of ips) {
+    for (const bl of IP_BLACKLISTS) {
+      checks.push((async () => {
+        try {
+          const reversed = ip.split('.').reverse().join('.');
+          await dns.resolve4(`${reversed}.${bl.suffix}`);
+          ipListings.push({ blacklist: bl.name, ip });
+        } catch { /* not listed */ }
+      })());
+    }
+  }
+
+  // Domain-based checks
+  for (const bl of DOMAIN_BLACKLISTS) {
+    checks.push((async () => {
+      try {
+        await dns.resolve4(`${domain}.${bl.suffix}`);
+        domainListings.push(bl.name);
+      } catch { /* not listed */ }
+    })());
+  }
+
+  await Promise.allSettled(checks);
+
+  return {
+    domain,
+    ips,
+    blacklisted: ipListings.length > 0 || domainListings.length > 0,
+    ipListings,
+    domainListings: [...new Set(domainListings)],
+    checkedAt,
+    totalChecked: IP_BLACKLISTS.length * ips.length + DOMAIN_BLACKLISTS.length,
+  };
 }

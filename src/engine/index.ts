@@ -7,6 +7,7 @@ import { isRoleAccount } from './roleAccount.js';
 import { smtpProbe } from './smtp.js';
 import { smtpVerifyWithCache } from './smtpCache.js';
 import { checkDeliverability } from './deliverability.js';
+import { checkToxic } from './toxic.js';
 import { score } from './scorer.js';
 import { logger } from '../lib/logger.js';
 import type {
@@ -129,15 +130,14 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   }
   const smtpMs = Date.now() - t3;
 
-  // ── 6b. Deliverability checks (SPF/DKIM/DMARC/Blacklist) ─────────────────────
-  // Run for bulk too — checkDeliverability is cached per-domain, so a big list
-  // only pays the DNS cost once per unique domain (and these are free DNS
-  // lookups, not provider credits). Skipping them left bulk exports blank on 4
-  // of the 12 signals, which is exactly what customers need to see.
-  const deliverability = await checkDeliverability(domain).catch(() => ({
-    spfValid: false, spfRecord: null, dmarcValid: false, dmarcRecord: null,
-    dkimFound: false, dkimSelectors: [], blacklisted: false, blacklists: [],
-  }));
+  // ── 6b. Deliverability checks (SPF/DKIM/DMARC/Blacklist) + toxic ──────────
+  const [deliverability, toxicResult] = await Promise.all([
+    checkDeliverability(domain).catch(() => ({
+      spfValid: false, spfRecord: null, dmarcValid: false, dmarcRecord: null,
+      dkimFound: false, dkimSelectors: [], blacklisted: false, blacklists: [],
+    })),
+    Promise.resolve(checkToxic(domain)),
+  ]);
 
   // ── 7. Score ───────────────────────────────────────────────────────────────
   const scored = score({
@@ -152,6 +152,8 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
     spfValid:      deliverability.spfValid,
     dmarcValid:    deliverability.dmarcValid,
     blacklisted:   deliverability.blacklisted,
+    isToxic:       toxicResult.isToxic,
+    isAbuse:       toxicResult.isAbuse,
   });
 
   // ── 8. Persist + return ────────────────────────────────────────────────────
@@ -173,6 +175,9 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
     dkimFound:       deliverability.dkimFound,
     blacklisted:     deliverability.blacklisted,
     blacklists:      deliverability.blacklists,
+    isToxic:         toxicResult.isToxic,
+    isAbuse:         toxicResult.isAbuse,
+    toxicReason:     toxicResult.reason,
     subStatus:       scored.subStatus,
     wallStart,
     timings: { syntaxMs, mxMs, disposableMs, roleMs, smtpMs, totalMs: 0 },
@@ -200,6 +205,9 @@ interface PersistInput {
   dkimFound?:      boolean;
   blacklisted?:    boolean;
   blacklists?:     string[];
+  isToxic?:        boolean;
+  isAbuse?:        boolean;
+  toxicReason?:    string | null;
   subStatus:       string  | null;
   wallStart:       number;
   timings:         Omit<EngineTimings, 'totalMs'> & { totalMs: number };
@@ -294,6 +302,10 @@ async function persistAndReturn(raw: PersistInput): Promise<VerificationResult> 
       dkimFound:     raw.dkimFound,
       dmarcValid:    raw.dmarcValid,
       ...(raw.blacklisted !== undefined ? { blacklisted: raw.blacklisted } : {}),
+      ...(raw.blacklists !== undefined ? { blacklists: raw.blacklists } : {}),
+      ...(raw.isToxic !== undefined ? { isToxic: raw.isToxic } : {}),
+      ...(raw.isAbuse !== undefined ? { isAbuse: raw.isAbuse } : {}),
+      ...(raw.toxicReason !== undefined ? { toxicReason: raw.toxicReason } : {}),
     } as never,
     score:      scored.score,
     durationMs,

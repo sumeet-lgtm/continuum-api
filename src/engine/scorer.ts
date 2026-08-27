@@ -36,8 +36,10 @@ export function score(input: ScorerInput): ScorerOutput {
   if (!syntaxValid) return out('invalid', 'syntax_invalid', 0);
   if (!mxFound)     return out('invalid', 'no_mx_records',  5);
 
-  // ── 1b. Blacklisted domain ────────────────────────────────────────────────
+  // ── 1b. Blacklisted or toxic domain ──────────────────────────────────────
   if (blacklisted) return out('risky', 'blacklisted_domain', 10);
+  if (input.isToxic) return out('risky', 'toxic_domain', 8);
+  if (input.isAbuse) return out('risky', 'abuse_tld', 15);
 
   // ── 2. SMTP permanently rejected ──────────────────────────────────────────
   if (smtpChecked && smtpReachable === false && !greylisted) {

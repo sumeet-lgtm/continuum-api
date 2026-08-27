@@ -6,6 +6,7 @@ import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { generateDkimKeyPair, dnsPublicKeyValue } from '../../lib/dkim.js';
 import { getDomainHealth } from '../../lib/deliverability.js';
+import { checkDomainBlacklists } from '../../engine/deliverability.js';
 import { config } from '../../config.js';
 
 const createSchema = z.object({
@@ -175,6 +176,35 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
 
       await prisma.sendingDomain.delete({ where: { id } });
       return reply.status(200).send({ deleted: true, id });
+    },
+  );
+
+  // GET /v1/domains/:id/blacklist-status — comprehensive blacklist check (15+ providers)
+  fastify.get(
+    '/domains/:id/blacklist-status',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+
+      const domain = await prisma.sendingDomain.findFirst({ where: { id, apiKeyId } });
+      if (!domain) throw Errors.notFound('Domain not found.');
+
+      const result = await checkDomainBlacklists(domain.name);
+      return reply.status(200).send(result);
+    },
+  );
+
+  // GET /v1/domains/blacklist-check?domain=example.com — ad-hoc check for any domain
+  fastify.get(
+    '/domains/blacklist-check',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const q = request.query as { domain?: string };
+      if (!q.domain) throw Errors.validationFailed([{ field: 'domain', message: 'domain query param required' }]);
+
+      const result = await checkDomainBlacklists(q.domain.toLowerCase());
+      return reply.status(200).send(result);
     },
   );
 }
