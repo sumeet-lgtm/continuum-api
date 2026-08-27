@@ -8,7 +8,7 @@ import { prisma } from '../../lib/prisma.js';
 import { config, isProd } from '../../config.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
-import { sendEmail, upgradeConfirmEmail } from '../../lib/email.js';
+import { sendEmail, upgradeConfirmEmail, planDowngradedEmail, paymentFailedEmail, subscriptionCancelledEmail, paymentReceiptEmail } from '../../lib/email.js';
 
 // ─── Plan → Dodo product mapping ─────────────────────────────────────────────
 
@@ -282,8 +282,6 @@ async function applyPlanChange(event: DodoEvent, eventType: string): Promise<voi
   logger.info({ plan, monthlyLimit, updated, apiKeyId, userId }, 'Plan upgraded via Dodo');
 
   if (email) {
-    // Best-effort — the upgrade is already applied; a failed email never
-    // fails the webhook (Dodo would retry and hit the idempotency guard)
     const msg = upgradeConfirmEmail(plan, monthlyLimit);
     void sendEmail(email, msg.subject, msg.html);
   }
@@ -299,6 +297,11 @@ async function applyDowngrade(event: DodoEvent, eventType: string): Promise<void
       .catch(() => { /* profile plan is display-only */ });
   }
   logger.info({ eventType, updated, apiKeyId, userId }, 'Plan downgraded to free via Dodo');
+
+  if (email) {
+    const msg = planDowngradedEmail('free');
+    void sendEmail(email, msg.subject, msg.html);
+  }
 }
 
 /** Update the target api_keys row(s); most-specific identity wins. */

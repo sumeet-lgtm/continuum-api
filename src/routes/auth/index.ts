@@ -4,6 +4,7 @@ import { prisma } from '../../lib/prisma.js';
 import { signSession, verifySession } from '../../lib/session.js';
 import { config } from '../../config.js';
 import { Errors } from '../../plugins/errorHandler.js';
+import { sendEmail, welcomeEmail, loginAlertEmail } from '../../lib/email.js';
 
 let _workos: WorkOS | null = null;
 
@@ -118,6 +119,23 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
           },
         });
       }
+
+      // Welcome email on first sign-in (new key = new user)
+      const isNewUser = !await prisma.apiKey.findFirst({ where: { ownerId: user.id, isActive: true, NOT: { id: apiKey.id } } });
+      if (isNewUser) {
+        const msg = welcomeEmail(apiKey.keyPrefix, workosUser.firstName);
+        void sendEmail(user.email, msg.subject, msg.html);
+      }
+
+      // Login alert on every sign-in
+      const loginMsg = loginAlertEmail({
+        browser: request.headers['user-agent']?.slice(0, 80) ?? 'Unknown browser',
+        location: 'Unknown location',
+        ip: (request.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ?? request.ip ?? 'Unknown',
+        time: new Date().toUTCString(),
+        firstName: workosUser.firstName,
+      });
+      void sendEmail(user.email, loginMsg.subject, loginMsg.html);
 
       const token = await signSession({
         userId: user.id,

@@ -5,6 +5,7 @@ import {
   welcomeEmail,
   quotaWarningEmail,
   quotaExceededEmail,
+  weeklyDigestEmail,
 } from '../lib/email.js';
 import { getPlanLimit } from '../plugins/usageMeter.js';
 import { config } from '../config.js';
@@ -59,7 +60,7 @@ async function sendOnce(
 }
 
 export async function runEmailSweep(): Promise<void> {
-  if (!config.RESEND_API_KEY) return; // email is off — skip the queries too
+  if (!config.AWS_ACCESS_KEY_ID) return; // SES not configured — skip
 
   try {
     const keys = await prisma.$queryRaw<KeyRow[]>`
