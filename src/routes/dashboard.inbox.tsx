@@ -29,7 +29,7 @@ function InboxPage() {
     setLoading(true);
     api.withKey
       .get<{ replies: Reply[]; total: number }>("/v1/inbox?page=1&limit=50", primaryKey.keyRaw)
-      .then((r) => setReplies(r.replies ?? []))
+      .then((r) => setReplies(r.data ?? r.replies ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };

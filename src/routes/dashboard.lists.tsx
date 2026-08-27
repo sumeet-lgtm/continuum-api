@@ -27,7 +27,7 @@ function ListsPage() {
     if (!primaryKey?.keyRaw) return;
     api.withKey
       .get<{ lists: MailingList[] }>("/v1/lists", primaryKey.keyRaw)
-      .then((r) => setLists(r.lists ?? []))
+      .then((r) => setLists(r.data ?? r.lists ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };

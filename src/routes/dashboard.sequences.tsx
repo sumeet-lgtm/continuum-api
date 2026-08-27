@@ -38,7 +38,7 @@ function SequencesPage() {
     if (!primaryKey?.keyRaw) return;
     api.withKey
       .get<{ sequences: Sequence[] }>("/v1/sequences", primaryKey.keyRaw)
-      .then((r) => setSequences(r.sequences ?? []))
+      .then((r) => setSequences(r.data ?? r.sequences ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };

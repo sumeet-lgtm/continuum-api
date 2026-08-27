@@ -37,7 +37,7 @@ function MailboxesPage() {
     if (!primaryKey?.keyRaw) return;
     api.withKey
       .get<{ mailboxes: Mailbox[] }>("/v1/mailboxes", primaryKey.keyRaw)
-      .then((r) => setMailboxes(r.mailboxes ?? []))
+      .then((r) => setMailboxes(r.data ?? r.mailboxes ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };

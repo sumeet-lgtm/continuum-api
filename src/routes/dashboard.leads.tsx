@@ -38,7 +38,7 @@ function LeadsPage() {
     if (!primaryKey?.keyRaw) return;
     api.withKey
       .get<{ leads: Lead[]; total: number }>("/v1/leads?page=1&limit=50", primaryKey.keyRaw)
-      .then((r) => { setLeads(r.leads ?? []); setTotal(r.total ?? 0); })
+      .then((r) => { setLeads(r.data ?? r.leads ?? []); setTotal(r.total ?? 0); })
       .catch(() => {})
       .finally(() => setLoading(false));
   };

@@ -68,10 +68,11 @@ const PLANS: PlanDef[] = [
   },
 ];
 
+interface UsageDetail { used: number; limit: number; resets_at: string | null; }
 interface Usage {
   plan: string | null;
-  currentMonthUsage: number | null;
-  monthlyLimit: number | null;
+  verifications: UsageDetail;
+  sends: UsageDetail;
   usageResetAt: string | null;
 }
 
@@ -89,16 +90,16 @@ function BillingPage() {
     let cancelled = false;
     (async () => {
       try {
-        const data = await api.withKey.get<{ verifications: { used: number; limit: number; resetsAt: string | null } }>(
+        const data = await api.withKey.get<{ plan: string; verifications: UsageDetail; sends: UsageDetail }>(
           "/v1/usage",
           apiKey.keyRaw!,
         );
         if (!cancelled) {
           setUsage({
-            plan: apiKey.plan ?? "free",
-            currentMonthUsage: data.verifications.used,
-            monthlyLimit: data.verifications.limit,
-            usageResetAt: data.verifications.resetsAt,
+            plan: data.plan ?? apiKey.plan ?? "free",
+            verifications: data.verifications,
+            sends: data.sends,
+            usageResetAt: data.verifications.resets_at,
           });
           setUsageLoading(false);
         }
@@ -162,31 +163,18 @@ function BillingPage() {
               {currentPlan}
             </span>
           </div>
-          {usage && (
-            <span className="text-sm tabular-nums text-muted-foreground">
-              {(usage.currentMonthUsage ?? 0).toLocaleString()} of {(usage.monthlyLimit ?? 0).toLocaleString()} used
-            </span>
-          )}
         </div>
-        {usage && (usage.monthlyLimit ?? 0) > 0 && (() => {
-          const pct = Math.max(0, Math.min(100, ((usage.currentMonthUsage ?? 0) / (usage.monthlyLimit ?? 1)) * 100));
-          const atLimit = (usage.currentMonthUsage ?? 0) >= (usage.monthlyLimit ?? 0);
-          const warn = !atLimit && pct >= 80;
-          const barColor = atLimit ? "bg-red-500" : warn ? "bg-yellow-500" : "bg-foreground";
-          const reset = usage.usageResetAt
-            ? new Date(usage.usageResetAt)
-            : (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth() + 1, 1); })();
-          return (
-            <>
-              <div className="mt-3 h-2 rounded-full bg-muted overflow-hidden">
-                <div className={`h-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Resets on {reset.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}
+        {usage && (
+          <div className="mt-4 space-y-3">
+            <UsageBar label="Verifications" used={usage.verifications.used} limit={usage.verifications.limit} />
+            <UsageBar label="Sends" used={usage.sends.used} limit={usage.sends.limit} />
+            {usage.usageResetAt && (
+              <p className="text-xs text-muted-foreground">
+                Resets on {new Date(usage.usageResetAt).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}
               </p>
-            </>
-          );
-        })()}
+            )}
+          </div>
+        )
       </div>
 
       {/* Plan grid */}
@@ -238,9 +226,26 @@ function BillingPage() {
       <p className="text-xs text-muted-foreground">
         Payments are processed securely by Dodo Payments. You can change or cancel your plan at any time.
       </p>
-      {/* refetch to keep TS happy about unused */}
       <button className="hidden" onClick={() => { void refetch(); }} />
       {usageLoading ? null : null}
+    </div>
+  );
+}
+
+function UsageBar({ label, used, limit }: { label: string; used: number; limit: number }) {
+  const pct = limit > 0 ? Math.max(0, Math.min(100, (used / limit) * 100)) : 0;
+  const atLimit = used >= limit && limit > 0;
+  const warn = !atLimit && pct >= 80;
+  const barColor = atLimit ? "bg-red-500" : warn ? "bg-yellow-500" : "bg-foreground";
+  return (
+    <div>
+      <div className="flex justify-between text-xs text-muted-foreground mb-1">
+        <span>{label}</span>
+        <span className="tabular-nums">{used.toLocaleString()} / {limit.toLocaleString()}</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+        <div className={`h-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+      </div>
     </div>
   );
 }

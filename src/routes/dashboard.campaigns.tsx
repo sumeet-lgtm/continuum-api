@@ -36,7 +36,7 @@ function CampaignsPage() {
     if (!primaryKey?.keyRaw) return;
     api.withKey
       .get<{ campaigns: Campaign[] }>("/v1/campaigns?page=1&limit=50", primaryKey.keyRaw)
-      .then((r) => setCampaigns(r.campaigns ?? []))
+      .then((r) => setCampaigns(r.data ?? r.campaigns ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [primaryKey]);
