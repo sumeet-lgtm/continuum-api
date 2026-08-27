@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export const Route = createFileRoute("/dashboard/verify")({
+  head: () => ({ meta: [{ title: "Email Verify — Continuum API" }] }),
   component: VerifyPage,
 });
 

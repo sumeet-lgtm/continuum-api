@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
+import { toast } from "sonner";
 import { API_BASE } from "@/lib/supabase";
 import { useApiKey } from "@/lib/use-api-key";
 import { Button } from "@/components/ui/button";
@@ -113,7 +114,7 @@ function WebhooksPage() {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        alert(`Failed to add webhook (${res.status}) ${text}`);
+        toast.error(`Failed to add webhook (${res.status}) ${text}`);
         return;
       }
       // Optimistically add the new hook so the UI updates immediately,
@@ -141,7 +142,7 @@ function WebhooksPage() {
       setOpen(false);
       await load();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to add webhook");
+      toast.error(e instanceof Error ? e.message : "Failed to add webhook");
     }
   };
 
@@ -176,9 +177,9 @@ function WebhooksPage() {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey.keyRaw}`, "x-api-key": apiKey.keyRaw },
       });
-      alert("Test ping sent.");
+      toast.success("Test ping sent");
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed");
+      toast.error(e instanceof Error ? e.message : "Failed");
     }
   };
 

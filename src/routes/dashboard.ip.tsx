@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export const Route = createFileRoute("/dashboard/ip")({
+  head: () => ({ meta: [{ title: "IP Intelligence — Continuum API" }] }),
   component: IpPage,
 });
 

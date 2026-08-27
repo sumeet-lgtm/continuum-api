@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { trackEvent, PLAN_VALUES } from "@/lib/analytics";
 
 export const Route = createFileRoute("/dashboard/billing")({
+  head: () => ({ meta: [{ title: "Billing — Continuum API" }] }),
   component: BillingPage,
 });
 
