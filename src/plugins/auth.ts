@@ -124,11 +124,22 @@ async function authPluginFn(fastify: FastifyInstance): Promise<void> {
  * Prehandler — attach to any route requiring authentication:
  *   { preHandler: [requireAuth] }
  */
+// Routes a sending_access key may call (starts-with match on request.url)
+const SEND_ONLY_ALLOWED = ['/v1/send', '/track/', '/v1/unsubscribe'];
+
 export async function requireAuth(
   request: FastifyRequest,
   _reply: FastifyReply,
 ): Promise<void> {
   await resolveApiKey(request);
+  if (
+    request.apiKey.permission === 'sending_access' &&
+    !SEND_ONLY_ALLOWED.some((prefix) => request.url.startsWith(prefix))
+  ) {
+    throw Errors.forbidden(
+      'This API key only has sending access. A full_access key is required for this endpoint.',
+    );
+  }
 }
 
 /**
