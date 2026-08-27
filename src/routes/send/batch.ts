@@ -76,11 +76,23 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
           }
 
           const unsubToken = generateUnsubToken(to, apiKeyId);
-          const msgId = `batch_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+          const listUnsubscribeHeader = `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`;
+
+          // Pre-create DB record to get real ID for tracking tokens
+          const record = await prisma.sendMessage.create({
+            data: {
+              apiKeyId, to, from, subject,
+              replyTo: reply_to ?? null, sesMessageId: null, status: 'queued',
+              tags: tags ?? {}, idempotencyKey: msg.idempotency_key ?? null,
+              trackingToken: 'pending',
+            },
+            select: { id: true },
+          });
+
           let htmlBody = html_body;
           if (htmlBody) {
             htmlBody = htmlBody.replace(/<\/body>/i, `${generateUnsubHtml(unsubToken)}</body>`);
-            htmlBody = injectTracking(htmlBody, generateOpenToken(msgId), (url) => generateClickToken(msgId, url));
+            htmlBody = injectTracking(htmlBody, generateOpenToken(record.id), (url) => generateClickToken(record.id, url));
           }
 
           const { sesMessageId } = await sendViaSes({
@@ -88,17 +100,12 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
             ...(reply_to ? { replyTo: reply_to } : {}),
             ...(htmlBody !== undefined ? { htmlBody } : {}),
             ...(text_body ? { textBody: text_body } : {}),
-            listUnsubscribeHeader: `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`,
+            listUnsubscribeHeader,
           });
 
-          const record = await prisma.sendMessage.create({
-            data: {
-              apiKeyId, to, from, subject,
-              replyTo: reply_to ?? null, sesMessageId, status: 'sent',
-              sentAt: new Date(), tags: tags ?? {}, idempotencyKey: msg.idempotency_key ?? null,
-              trackingToken: msgId,
-            },
-            select: { id: true },
+          await prisma.sendMessage.update({
+            where: { id: record.id },
+            data: { sesMessageId, status: 'sent', sentAt: new Date(), trackingToken: record.id },
           });
 
           successCount++;
@@ -113,6 +120,7 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
         } catch (err) {
           const message = err instanceof SesNotConfiguredError ? err.message : (err instanceof Error ? err.message : 'Unknown error');
           logger.error({ err, to, apiKeyId }, 'Batch send item failed');
+          // Attempt to mark pre-created record as failed (best-effort)
           results.push({ id: '', status: 'failed', error: message });
         }
       }

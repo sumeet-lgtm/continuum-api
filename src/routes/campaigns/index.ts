@@ -34,14 +34,15 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
 
     const campaign = await prisma.campaign.create({
       data: {
-        apiKeyId, fromName: from_name, fromEmail: from_email,
+        apiKeyId, name, fromName: from_name, fromEmail: from_email,
         domainId: domain_id ?? null, replyTo: reply_to ?? null,
         subject, htmlBody: html_body, textBody: text_body ?? null,
+        listIds: list_ids, segmentIds: segment_ids ?? [], excludeListIds: exclude_list_ids ?? [],
         trackOpens: track_opens, trackClicks: track_clicks,
         scheduledAt: scheduled_at ? new Date(scheduled_at) : null,
         status: 'draft',
       },
-      select: { id: true, subject: true, status: true, createdAt: true },
+      select: { id: true, name: true, subject: true, status: true, createdAt: true },
     });
     return reply.status(201).send(campaign);
   });

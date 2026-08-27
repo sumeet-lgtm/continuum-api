@@ -184,21 +184,39 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       const from = buildFromAddress(sendingDomain);
       const trackOpens = requestTrackOpens ?? sendingDomain?.trackOpens ?? true;
       const trackClicks = requestTrackClicks ?? sendingDomain?.trackClicks ?? true;
-
-      // Generate a placeholder id for tokens before creating the DB record
-      const msgPlaceholderId = `pending_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       const unsubToken = generateUnsubToken(to, apiKeyId);
+      const listUnsubscribeHeader = `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`;
 
+      // ── Create DB record first so we get the real ID for tracking tokens ────────
+      let record: { id: string; createdAt: Date };
+      try {
+        record = await prisma.sendMessage.create({
+          data: {
+            apiKeyId, to, from, subject,
+            replyTo: Array.isArray(reply_to) ? reply_to.join(', ') : (reply_to ?? null),
+            cc: cc ?? [], bcc: bcc ?? [],
+            sesMessageId: null, status: 'queued',
+            verificationId,
+            domainId: domain_id ?? null,
+            idempotencyKey: idempotency_key ?? null,
+            tags: tags ?? {},
+            trackingToken: (trackOpens || trackClicks) ? 'pending' : null,
+          },
+          select: { id: true, createdAt: true },
+        });
+      } catch (err) {
+        logger.error({ err, to, apiKeyId }, 'Failed to pre-create SendMessage');
+        record = { id: `ephemeral_${Date.now()}`, createdAt: new Date() };
+      }
+
+      // Now inject tracking using the real DB record ID
       let htmlBody = rawHtml;
       if (htmlBody) {
-        // Inject unsubscribe footer
         const unsubHtml = generateUnsubHtml(unsubToken);
         htmlBody = htmlBody.replace(/<\/body>/i, `${unsubHtml}</body>`);
-
-        // Inject tracking
         if (trackOpens || trackClicks) {
-          const openToken = trackOpens ? generateOpenToken(msgPlaceholderId) : '';
-          const clickTokenFn = trackClicks ? (url: string) => generateClickToken(msgPlaceholderId, url) : (_: string) => _;
+          const openToken = trackOpens ? generateOpenToken(record.id) : '';
+          const clickTokenFn = trackClicks ? (url: string) => generateClickToken(record.id, url) : (_: string) => _;
           htmlBody = injectTracking(htmlBody, openToken, clickTokenFn);
         }
       }
@@ -207,8 +225,6 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       let sesMessageId: string | null = null;
       let status: 'sent' | 'failed' = 'sent';
       let errorMessage: string | null = null;
-
-      const listUnsubscribeHeader = `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`;
 
       try {
         const result = await sendViaSes({
@@ -231,27 +247,18 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         logger.error({ err, to, apiKeyId }, 'SES send failed');
       }
 
-      // ── Persist ────────────────────────────────────────────────────────────────
-      let record: { id: string; createdAt: Date };
+      // ── Update DB record with SES result ────────────────────────────────────────
       try {
-        record = await prisma.sendMessage.create({
+        await prisma.sendMessage.update({
+          where: { id: record.id },
           data: {
-            apiKeyId, to, from, subject,
-            replyTo: Array.isArray(reply_to) ? reply_to.join(', ') : (reply_to ?? null),
-            cc: cc ?? [], bcc: bcc ?? [],
             sesMessageId, status, errorMessage,
-            verificationId,
             sentAt: status === 'sent' ? new Date() : null,
-            domainId: domain_id ?? null,
-            idempotencyKey: idempotency_key ?? null,
-            tags: tags ?? {},
-            trackingToken: (trackOpens || trackClicks) ? msgPlaceholderId : null,
+            trackingToken: (trackOpens || trackClicks) ? record.id : null,
           },
-          select: { id: true, createdAt: true },
         });
       } catch (err) {
-        logger.error({ err, to, apiKeyId, sesMessageId, status }, 'Failed to persist SendMessage');
-        record = { id: `ephemeral_${Date.now()}`, createdAt: new Date() };
+        logger.error({ err, to, apiKeyId, sesMessageId, status }, 'Failed to update SendMessage after SES send');
       }
 
       if (status === 'sent') {
