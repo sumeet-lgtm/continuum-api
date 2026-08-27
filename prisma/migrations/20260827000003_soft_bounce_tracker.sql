@@ -1,4 +1,4 @@
--- Soft bounce tracker: count transient bounces per email; suppress after 3 strikes
+-- Soft bounce tracker: count transient bounces per email, suppress after 3 strikes
 CREATE TABLE soft_bounce_tracks (
   id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
   email           TEXT NOT NULL UNIQUE,
