@@ -1,6 +1,6 @@
-// Spintax: {A|B|C} → random choice
+// Spintax: {A|B|C} → random choice. Requires | so {{var}} double-braces are not consumed.
 export function resolveSpintax(text: string): string {
-  return text.replace(/\{([^{}]+)\}/g, (_, group: string) => {
+  return text.replace(/\{([^{}]*\|[^{}]*)\}/g, (_, group: string) => {
     const options = group.split('|');
     return options[Math.floor(Math.random() * options.length)] ?? '';
   });
