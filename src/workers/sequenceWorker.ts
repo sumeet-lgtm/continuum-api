@@ -5,6 +5,7 @@ import { sendViaSes } from '../lib/ses.js';
 import { generateUnsubToken, generateUnsubHtml } from '../lib/unsubscribe.js';
 import { generateOpenToken, generateClickToken, injectTracking } from '../lib/tracking.js';
 import { processTemplate } from '../lib/spintax.js';
+import { detectESP, rankMailboxesByESP } from '../lib/espMatch.js';
 import { logger } from '../lib/logger.js';
 
 interface SequenceTickPayload {
@@ -145,6 +146,20 @@ async function processSequenceTick(): Promise<void> {
         sequence.trackOpens ? generateOpenToken(trackingId) : '',
         url => sequence.trackClicks ? generateClickToken(trackingId, url) : url,
       );
+    }
+
+    // ESP-aware mailbox selection: detect recipient ESP for observability + future routing
+    const recipientESP = await detectESP(enrollment.email);
+    if (sequence.mailboxId) {
+      // When a specific mailbox is assigned, prefer ESP-matched mailboxes from the pool
+      const poolMailboxes = await prisma.mailbox.findMany({
+        where: { apiKeyId: sequence.apiKeyId, status: 'active' },
+        select: { id: true, type: true, username: true },
+      });
+      const ranked = rankMailboxesByESP(poolMailboxes, recipientESP);
+      logger.debug({ recipientESP, preferredMailboxId: ranked[0]?.id }, 'ESP-aware mailbox rank');
+    } else {
+      logger.debug({ recipientESP, email: enrollment.email }, 'Sequence ESP detection');
     }
 
     const fromAddress = `${sequence.fromName} <${sequence.fromEmail}>`;

@@ -5,6 +5,7 @@ import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
+import { detectESP } from '../../lib/espMatch.js';
 
 const GROWTH_PLANS = new Set(['growth', 'scale']);
 
@@ -278,6 +279,26 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
         logger.error({ err: msg }, 'AI classify-reply failed');
         throw Errors.serviceUnavailable('AI classification failed. Please try again.');
       }
+    },
+  );
+
+  // POST /v1/ai/detect-esp — detect email service provider for a list of email addresses
+  fastify.post(
+    '/ai/detect-esp',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const body = request.body as { emails?: unknown };
+      const parsed = z.object({ emails: z.array(z.string().email()).min(1).max(100) }).safeParse(body);
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+      const results = await Promise.all(
+        parsed.data.emails.map(async (email) => ({
+          email,
+          esp: await detectESP(email),
+        })),
+      );
+
+      return reply.status(200).send({ results });
     },
   );
 }
