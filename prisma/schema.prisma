@@ -882,13 +882,13 @@ model SequenceTemplate {
 // ─── Email Automations (event-triggered drip — Resend parity) ────────────────
 
 model Automation {
-  id          String   @id @default(cuid())
-  apiKeyId    String
-  name        String
-  triggerEvent String  // e.g. "user.created", "trial.expiring", "payment.failed"
-  status      String   @default("active") // active|paused|archived
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(cuid())
+  apiKeyId     String   @map("api_key_id")
+  name         String
+  triggerEvent String   @map("trigger_event")
+  status       String   @default("active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   apiKey      ApiKey   @relation(fields: [apiKeyId], references: [id])
   steps       AutomationStep[]
@@ -900,16 +900,16 @@ model Automation {
 }
 
 model AutomationStep {
-  id            String   @id @default(cuid())
-  automationId  String   @map("automation_id")
-  stepOrder     Int
-  delayHours    Int      @default(0)
-  subject       String
-  htmlBody      String
-  textBody      String?
-  fromName      String?
-  fromEmail     String?
-  domainId      String?
+  id           String  @id @default(cuid())
+  automationId String  @map("automation_id")
+  stepOrder    Int     @map("step_order")
+  delayHours   Int     @default(0) @map("delay_hours")
+  subject      String
+  htmlBody     String  @map("html_body")
+  textBody     String? @map("text_body")
+  fromName     String? @map("from_name")
+  fromEmail    String? @map("from_email")
+  domainId     String? @map("domain_id")
 
   automation    Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
 
@@ -918,15 +918,15 @@ model AutomationStep {
 }
 
 model AutomationEnrollment {
-  id            String    @id @default(cuid())
-  automationId  String    @map("automation_id")
-  email         String
-  data          Json?     // arbitrary event data passed at trigger time
-  status        String    @default("active") // active|completed|unsubscribed|bounced
-  currentStep   Int       @default(0)
-  nextSendAt    DateTime?
-  enrolledAt    DateTime  @default(now())
-  completedAt   DateTime?
+  id           String    @id @default(cuid())
+  automationId String    @map("automation_id")
+  email        String
+  data         Json?
+  status       String    @default("active")
+  currentStep  Int       @default(0) @map("current_step")
+  nextSendAt   DateTime? @map("next_send_at")
+  enrolledAt   DateTime  @default(now()) @map("enrolled_at")
+  completedAt  DateTime? @map("completed_at")
 
   automation    Automation @relation(fields: [automationId], references: [id])
 
