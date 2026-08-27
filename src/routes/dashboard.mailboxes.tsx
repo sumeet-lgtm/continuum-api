@@ -7,13 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Send, Zap, TestTube } from "lucide-react";
+import { Plus, Send, Zap, TestTube, ZapOff } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/mailboxes")({
   head: () => ({ meta: [{ title: "Mailboxes — Continuum API" }] }),
   component: MailboxesPage,
 });
 
+interface WarmupConfig { enabled: boolean; currentPerDay: number; targetPerDay: number; }
 interface Mailbox {
   id: string;
   type: string;
@@ -22,7 +23,7 @@ interface Mailbox {
   sentToday: number;
   status: string;
   lastCheckedAt: string | null;
-  warmupConfig?: { enabled: boolean; currentPerDay: number; targetPerDay: number } | null;
+  warmupConfig?: WarmupConfig | null;
 }
 
 function MailboxesPage() {
@@ -32,6 +33,7 @@ function MailboxesPage() {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ type: "smtp", host: "", port: "587", username: "", password: "", dailyLimit: "100" });
   const [saving, setSaving] = useState(false);
+  const [warmupBusy, setWarmupBusy] = useState<string | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -69,6 +71,29 @@ function MailboxesPage() {
       await api.withKey.post(`/v1/mailboxes/${id}/test`, {}, primaryKey.keyRaw);
       toast.success("Test email sent successfully");
     } catch (e: unknown) { toast.error((e as Error).message); }
+  };
+
+  const toggleWarmup = async (m: Mailbox) => {
+    if (!primaryKey?.keyRaw) return;
+    setWarmupBusy(m.id);
+    try {
+      if (m.warmupConfig?.enabled) {
+        await fetch(`https://api.continuumapi.com/v1/mailboxes/${m.id}/warmup`, {
+          method: "DELETE",
+          headers: { "X-API-Key": primaryKey.keyRaw! },
+        });
+        toast.success("Warmup disabled");
+        setMailboxes((prev) => prev.map((x) => x.id === m.id ? { ...x, warmupConfig: x.warmupConfig ? { ...x.warmupConfig, enabled: false } : null } : x));
+      } else {
+        await api.withKey.post(`/v1/mailboxes/${m.id}/warmup`, { target_per_day: 40, ramp_up_days: 30 }, primaryKey.keyRaw);
+        toast.success("Warmup enabled — ramping up from 5 → 40 emails/day over 30 days");
+        setMailboxes((prev) => prev.map((x) => x.id === m.id ? { ...x, warmupConfig: { enabled: true, currentPerDay: 5, targetPerDay: 40 } } : x));
+      }
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setWarmupBusy(null);
+    }
   };
 
   return (
@@ -137,14 +162,26 @@ function MailboxesPage() {
                     <div className="text-xs text-muted-foreground capitalize">{m.type} · {m.sentToday}/{m.dailyLimit} today</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 shrink-0">
+                <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
                   <StatusBadge status={m.status} />
                   {m.warmupConfig?.enabled && (
                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <Zap className="h-3 w-3" /> Warmup {m.warmupConfig.currentPerDay}/{m.warmupConfig.targetPerDay}/day
+                      <Zap className="h-3 w-3 text-amber-500" /> {m.warmupConfig.currentPerDay}/{m.warmupConfig.targetPerDay}/day
                     </span>
                   )}
-                  <Button variant="outline" size="sm" className="gap-1" onClick={() => test(m.id)}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1 text-xs h-7 px-2"
+                    disabled={warmupBusy === m.id}
+                    onClick={() => toggleWarmup(m)}
+                  >
+                    {m.warmupConfig?.enabled
+                      ? <><ZapOff className="h-3 w-3" /> Warmup off</>
+                      : <><Zap className="h-3 w-3" /> Enable warmup</>
+                    }
+                  </Button>
+                  <Button variant="outline" size="sm" className="gap-1 h-7 px-2 text-xs" onClick={() => test(m.id)}>
                     <TestTube className="h-3 w-3" /> Test
                   </Button>
                 </div>

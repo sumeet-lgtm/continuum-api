@@ -174,7 +174,7 @@ function BillingPage() {
               </p>
             )}
           </div>
-        )
+        )}
       </div>
 
       {/* Plan grid */}
