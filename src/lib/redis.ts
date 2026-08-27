@@ -69,9 +69,9 @@ export function getRedis(): typeof redis {
  */
 export async function pingRedis(): Promise<boolean> {
   try {
-    const result = await redis.ping();
-    // ioredis returns 'PONG' as a string; accept any truthy response
-    return typeof result === 'string' && result.toUpperCase().includes('PONG');
+    await redis.ping();
+    // Any response without throwing = Redis is reachable
+    return true;
   } catch (err) {
     logger.warn({ err }, 'Redis ping failed');
     return false;
