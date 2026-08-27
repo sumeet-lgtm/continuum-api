@@ -5,8 +5,13 @@ import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
+const STATIC_FIELDS = ['email', 'first_name', 'last_name', 'status', 'subscribed_after', 'subscribed_before'];
+
 const filterRuleSchema = z.object({
-  field: z.enum(['email', 'first_name', 'last_name', 'status', 'subscribed_after', 'subscribed_before']),
+  field: z.string().refine(
+    v => STATIC_FIELDS.includes(v) || /^custom\..+$/.test(v),
+    { message: `field must be one of: ${STATIC_FIELDS.join(', ')}, or a custom.<key> field` },
+  ),
   operator: z.enum(['equals', 'not_equals', 'contains', 'starts_with', 'before', 'after']),
   value: z.string(),
 });
@@ -84,12 +89,17 @@ export async function segmentRoutes(fastify: FastifyInstance): Promise<void> {
   });
 }
 
-function matchRules(contact: { email: string; firstName: string | null; lastName: string | null }, rules: Array<{ field: string; operator: string; value: string }>): boolean {
+function matchRules(contact: { email: string; firstName: string | null; lastName: string | null; customFields?: unknown }, rules: Array<{ field: string; operator: string; value: string }>): boolean {
   return rules.every(rule => {
-    const fieldVal = rule.field === 'email' ? contact.email
-      : rule.field === 'first_name' ? (contact.firstName ?? '')
-      : rule.field === 'last_name' ? (contact.lastName ?? '')
-      : '';
+    let fieldVal: string;
+    if (rule.field === 'email') fieldVal = contact.email;
+    else if (rule.field === 'first_name') fieldVal = contact.firstName ?? '';
+    else if (rule.field === 'last_name') fieldVal = contact.lastName ?? '';
+    else if (rule.field.startsWith('custom.')) {
+      const key = rule.field.slice(7);
+      const cf = contact.customFields as Record<string, unknown> | null | undefined;
+      fieldVal = cf ? String(cf[key] ?? '') : '';
+    } else fieldVal = '';
 
     switch (rule.operator) {
       case 'equals': return fieldVal.toLowerCase() === rule.value.toLowerCase();

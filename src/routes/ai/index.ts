@@ -162,9 +162,12 @@ async function classifyReplyContent(subject: string, body: string, apiKey: strin
 
   if (!resp.ok) throw new Error('Anthropic classify error');
   const data = await resp.json() as { content?: Array<{ text?: string }> };
-  const text = data.content?.[0]?.text?.trim() ?? '{}';
+  const raw = data.content?.[0]?.text?.trim() ?? '{}';
+  const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  const jsonMatch = stripped.match(/\{[\s\S]*\}/);
   try {
-    return JSON.parse(text) as { category: string; confidence: number; suggested_action: string };
+    const jsonStr = jsonMatch ? jsonMatch[0] : stripped;
+    return JSON.parse(jsonStr) as { category: string; confidence: number; suggested_action: string };
   } catch {
     return { category: 'unknown', confidence: 0, suggested_action: 'reply' };
   }
