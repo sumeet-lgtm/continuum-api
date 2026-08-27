@@ -20,9 +20,52 @@ interface PlanDef {
   features: string[];
 }
 const PLANS: PlanDef[] = [
-  { id: "starter", name: "Starter", price: "$25", quota: "5,000 verifications / month", features: ["Email verification API", "Phone & IP intelligence", "Transactional email sending", "Bulk jobs & webhooks", "Mailing lists & campaigns"] },
-  { id: "growth", name: "Growth", price: "$49", quota: "15,000 verifications / month", features: ["Everything in Starter", "Cold outreach sequences", "Multi-mailbox rotation", "Reply detection", "Analytics & tracking", "Priority support"] },
-  { id: "scale", name: "Scale", price: "$199", quota: "100,000 verifications / month", features: ["Everything in Growth", "Email warmup", "Inbox placement testing", "AI personalization", "Dedicated throughput", "SLA & onboarding"] },
+  {
+    id: "starter",
+    name: "Starter",
+    price: "$29",
+    quota: "10,000 verifications · 10,000 sends · 5 mailboxes",
+    features: [
+      "Email verification API",
+      "Phone & IP intelligence",
+      "Transactional email + templates",
+      "Newsletter campaigns & mailing lists",
+      "Cold outreach sequences",
+      "Inbox warmup",
+      "50 monitors · Webhooks",
+      "Custom sending domains · SMTP relay",
+    ],
+  },
+  {
+    id: "growth",
+    name: "Growth",
+    price: "$79",
+    quota: "50,000 verifications · 50,000 sends · 25 mailboxes",
+    features: [
+      "Everything in Starter",
+      "AI first-line personalization",
+      "Inbox placement testing",
+      "Reply detection (IMAP) · Unified inbox",
+      "A/B testing for sequences",
+      "Campaign health score",
+      "Subsequences & trigger automation",
+      "200 monitors · Priority support",
+    ],
+  },
+  {
+    id: "scale",
+    name: "Scale",
+    price: "$199",
+    quota: "200,000 verifications · 200,000 sends · 100 mailboxes",
+    features: [
+      "Everything in Growth",
+      "99.9% uptime SLA",
+      "Dedicated Slack support",
+      "Dedicated IP on request",
+      "Highest monitor caps",
+      "Custom overage rates",
+    ],
+  },
 ];
 
 interface Usage {
@@ -107,7 +150,7 @@ function BillingPage() {
     <div className="space-y-6">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Billing</h1>
-        <p className="text-sm text-muted-foreground">Manage your plan and monthly verification quota.</p>
+        <p className="text-sm text-muted-foreground">Manage your plan — email verification, transactional sending, newsletter campaigns, and cold outreach sequences.</p>
       </header>
 
       {/* Current plan card */}

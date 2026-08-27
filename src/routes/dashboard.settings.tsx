@@ -77,12 +77,14 @@ function SettingsPage() {
       <Section title="Plan">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <p className="text-sm font-medium">Free Beta — expires May 17, 2026</p>
+            <p className="text-sm font-medium capitalize">{profile?.plan ?? "Free"} plan</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Paid plans start May 18. We&apos;ll email you before your access changes.
+              {(profile?.plan ?? "free") === "free"
+                ? "Upgrade to unlock cold outreach sequences, multi-mailbox warmup, AI personalization, and higher quotas."
+                : "Manage your quota, billing, and plan details from the Billing tab."}
             </p>
           </div>
-          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2.5 py-0.5 text-xs font-medium">
+          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2.5 py-0.5 text-xs font-medium capitalize">
             {profile?.plan ?? "free"}
           </span>
         </div>
