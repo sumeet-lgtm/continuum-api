@@ -708,6 +708,9 @@ model WarmupConfig {
   targetPerDay  Int      @default(40)
   currentPerDay Int      @default(5)
   rampUpDays    Int      @default(30)
+  dailyRampUp   Int      @default(2)   // emails to add per day
+  replyRatePct  Int      @default(20)  // % of warmup emails that get auto-replied
+  lastRampDate  String?  // ISO date YYYY-MM-DD; prevents double-ramp per day
   poolTier      String   @default("standard") // basic|standard|premium
   startedAt     DateTime @default(now())
 
@@ -728,19 +731,25 @@ model Sequence {
   status       String   @default("active") // active|paused|archived
   trackOpens   Boolean  @default(true)
   trackClicks  Boolean  @default(true)
-  stopOnReply  Boolean  @default(true)
-  sendDays     String[] @default(["monday","tuesday","wednesday","thursday","friday"])
-  sendStartHour Int     @default(8)
-  sendEndHour   Int     @default(17)
-  timezone      String  @default("UTC")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  stopOnReply       Boolean  @default(true)
+  stopOnOpen        Boolean  @default(false)
+  stopOnClick       Boolean  @default(false)
+  sendDays          String[] @default(["monday","tuesday","wednesday","thursday","friday"])
+  sendStartHour     Int      @default(8)
+  sendEndHour       Int      @default(17)
+  timezone          String   @default("UTC")
+  parentSequenceId  String?  // subsequence: links to parent sequence
+  triggerEvent      String?  // REPLIED|OPENED|CLICKED|NOT_REPLIED_IN_DAYS|NOT_OPENED_IN_DAYS
+  triggerDelayDays  Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   apiKey      ApiKey               @relation(fields: [apiKeyId], references: [id])
   steps       SequenceStep[]
   enrollments SequenceEnrollment[]
 
   @@index([apiKeyId])
+  @@index([parentSequenceId])
   @@map("sequences")
 }
 
@@ -779,17 +788,19 @@ model SequenceVariant {
 }
 
 model SequenceEnrollment {
-  id          String    @id @default(cuid())
-  sequenceId  String
-  email       String
-  leadId      String?
-  status      String    @default("active") // active|paused|completed|unsubscribed|bounced|replied
-  currentStep Int       @default(0)
-  nextSendAt  DateTime?
-  variables   Json?
-  enrolledAt  DateTime  @default(now())
-  completedAt DateTime?
-  repliedAt   DateTime?
+  id                               String    @id @default(cuid())
+  sequenceId                       String
+  email                            String
+  leadId                           String?
+  status                           String    @default("active") // active|paused|completed|unsubscribed|bounced|replied
+  currentStep                      Int       @default(0)
+  nextSendAt                       DateTime?
+  variables                        Json?
+  enrolledAt                       DateTime  @default(now())
+  completedAt                      DateTime?
+  repliedAt                        DateTime?
+  ignoreBlockList                  Boolean   @default(false)
+  ignoreDuplicateInOtherSequences  Boolean   @default(false)
 
   sequence    Sequence     @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
   replyEvents ReplyEvent[]

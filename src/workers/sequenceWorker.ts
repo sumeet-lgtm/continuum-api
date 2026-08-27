@@ -91,6 +91,44 @@ async function processSequenceTick(): Promise<void> {
     // Check send window
     if (!isWithinSendWindow(sequence)) continue;
 
+    // Check stopOnOpen: if any open event for this enrollment email, stop
+    const seqAny = sequence as { stopOnOpen?: boolean; stopOnClick?: boolean; stopOnReply: boolean };
+    if (seqAny.stopOnOpen) {
+      const openTrackId = `${sequence.id}_step${enrollment.currentStep - 1}_${enrollment.email}`;
+      const opened = await prisma.trackingEvent.findFirst({ where: { sendMessageId: openTrackId, type: 'open' } });
+      if (opened) {
+        await prisma.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } });
+        // Trigger OPENED subsequences
+        const openedSubseqs = await prisma.sequence.findMany({ where: { parentSequenceId: sequence.id, triggerEvent: 'OPENED' }, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
+        for (const sub of openedSubseqs) {
+          const exists = await prisma.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: sub.id, email: enrollment.email } } });
+          if (!exists) {
+            const delay = (sub.triggerDelayDays ?? 0) * 24 * 60 * 60 * 1000;
+            await prisma.sequenceEnrollment.create({ data: { sequenceId: sub.id, email: enrollment.email, variables: enrollment.variables ?? {}, nextSendAt: sub.steps.length > 0 ? new Date(Date.now() + delay) : null, status: 'active', currentStep: 0 } }).catch(() => {});
+          }
+        }
+        continue;
+      }
+    }
+
+    // Check stopOnClick: if any click event for this enrollment email, stop
+    if (seqAny.stopOnClick) {
+      const clickTrackId = `${sequence.id}_step${enrollment.currentStep - 1}_${enrollment.email}`;
+      const clicked = await prisma.trackingEvent.findFirst({ where: { sendMessageId: clickTrackId, type: 'click' } });
+      if (clicked) {
+        await prisma.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } });
+        const clickedSubseqs = await prisma.sequence.findMany({ where: { parentSequenceId: sequence.id, triggerEvent: 'CLICKED' }, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
+        for (const sub of clickedSubseqs) {
+          const exists = await prisma.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: sub.id, email: enrollment.email } } });
+          if (!exists) {
+            const delay = (sub.triggerDelayDays ?? 0) * 24 * 60 * 60 * 1000;
+            await prisma.sequenceEnrollment.create({ data: { sequenceId: sub.id, email: enrollment.email, variables: enrollment.variables ?? {}, nextSendAt: sub.steps.length > 0 ? new Date(Date.now() + delay) : null, status: 'active', currentStep: 0 } }).catch(() => {});
+          }
+        }
+        continue;
+      }
+    }
+
     const nextStepIndex = enrollment.currentStep;
     const steps = sequence.steps;
 
@@ -219,14 +257,30 @@ async function processSequenceTick(): Promise<void> {
         nextSendAt = new Date(now.getTime() + (nextStep.delayDays * 24 * 60 * 60 * 1000) + (nextStep.delayHours * 60 * 60 * 1000));
       }
 
+      const isLastStep = nextStep === undefined;
       await prisma.sequenceEnrollment.update({
         where: { id: enrollment.id },
         data: {
           currentStep: nextStepIndex + 1,
           nextSendAt,
-          ...(nextStep === undefined && { status: 'completed', completedAt: now }),
+          ...(isLastStep && { status: 'completed', completedAt: now }),
         },
       });
+
+      // On last step completion: trigger NOT_REPLIED_IN_DAYS / NOT_OPENED_IN_DAYS subsequences
+      if (isLastStep) {
+        const notRepliedSubseqs = await prisma.sequence.findMany({
+          where: { parentSequenceId: sequence.id, triggerEvent: { in: ['NOT_REPLIED_IN_DAYS', 'NOT_OPENED_IN_DAYS'] } },
+          include: { steps: { orderBy: { stepOrder: 'asc' } } },
+        });
+        for (const sub of notRepliedSubseqs) {
+          const exists = await prisma.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: sub.id, email: enrollment.email } } });
+          if (!exists) {
+            const delay = (sub.triggerDelayDays ?? 3) * 24 * 60 * 60 * 1000;
+            await prisma.sequenceEnrollment.create({ data: { sequenceId: sub.id, email: enrollment.email, variables: enrollment.variables ?? {}, nextSendAt: sub.steps.length > 0 ? new Date(Date.now() + delay) : null, status: 'active', currentStep: 0 } }).catch(() => {});
+          }
+        }
+      }
     } catch (err) {
       logger.error({ err, enrollmentId: enrollment.id, email: enrollment.email }, 'Sequence step send failed');
     }

@@ -13,10 +13,24 @@ const createSchema = z.object({
   track_opens: z.boolean().default(true),
   track_clicks: z.boolean().default(true),
   stop_on_reply: z.boolean().default(true),
+  stop_on_open: z.boolean().default(false),
+  stop_on_click: z.boolean().default(false),
   send_days: z.array(z.enum(['monday','tuesday','wednesday','thursday','friday','saturday','sunday'])).optional(),
   send_start_hour: z.coerce.number().int().min(0).max(23).default(8),
   send_end_hour: z.coerce.number().int().min(0).max(23).default(17),
   timezone: z.string().default('UTC'),
+});
+
+const subsequenceSchema = z.object({
+  name: z.string().min(1).max(200),
+  trigger_event: z.enum(['REPLIED', 'OPENED', 'CLICKED', 'NOT_REPLIED_IN_DAYS', 'NOT_OPENED_IN_DAYS']),
+  trigger_delay_days: z.coerce.number().int().min(0).max(365).default(0),
+  mailbox_id: z.string().optional(),
+  from_name: z.string().min(1).max(200),
+  from_email: z.string().email(),
+  track_opens: z.boolean().default(true),
+  track_clicks: z.boolean().default(true),
+  stop_on_reply: z.boolean().default(true),
 });
 
 const stepSchema = z.object({
@@ -41,12 +55,13 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
     const apiKeyId = request.apiKey.id;
-    const { name, mailbox_id, from_name, from_email, track_opens, track_clicks, stop_on_reply, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
+    const { name, mailbox_id, from_name, from_email, track_opens, track_clicks, stop_on_reply, stop_on_open, stop_on_click, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
 
     const seq = await prisma.sequence.create({
       data: {
         apiKeyId, name, mailboxId: mailbox_id ?? null, fromName: from_name, fromEmail: from_email,
         trackOpens: track_opens, trackClicks: track_clicks, stopOnReply: stop_on_reply,
+        stopOnOpen: stop_on_open, stopOnClick: stop_on_click,
         sendDays: send_days ?? ['monday','tuesday','wednesday','thursday','friday'],
         sendStartHour: send_start_hour, sendEndHour: send_end_hour, timezone,
       },
@@ -88,7 +103,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     if (!seq) throw Errors.notFound('Sequence not found.');
     const parsed = createSchema.partial().safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
-    const { name, mailbox_id, from_name, from_email, track_opens, track_clicks, stop_on_reply, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
+    const { name, mailbox_id, from_name, from_email, track_opens, track_clicks, stop_on_reply, stop_on_open, stop_on_click, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
     const updateData: Record<string, unknown> = {};
     if (name !== undefined) updateData['name'] = name;
     if (mailbox_id !== undefined) updateData['mailboxId'] = mailbox_id;
@@ -97,6 +112,8 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     if (track_opens !== undefined) updateData['trackOpens'] = track_opens;
     if (track_clicks !== undefined) updateData['trackClicks'] = track_clicks;
     if (stop_on_reply !== undefined) updateData['stopOnReply'] = stop_on_reply;
+    if (stop_on_open !== undefined) updateData['stopOnOpen'] = stop_on_open;
+    if (stop_on_click !== undefined) updateData['stopOnClick'] = stop_on_click;
     if (send_days !== undefined) updateData['sendDays'] = send_days;
     if (send_start_hour !== undefined) updateData['sendStartHour'] = send_start_hour;
     if (send_end_hour !== undefined) updateData['sendEndHour'] = send_end_hour;
@@ -347,5 +364,103 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
 
     await prisma.sequenceVariant.delete({ where: { id: variantId } });
     return reply.status(200).send({ deleted: true, id: variantId });
+  });
+
+  // ─── Subsequence routes ─────────────────────────────────────────────────────
+  // Subsequences are child sequences triggered automatically when a lead in the
+  // parent sequence takes a specific action (replies, opens, clicks, or doesn't).
+
+  // POST /v1/sequences/:id/subsequences — create a child subsequence
+  fastify.post('/sequences/:id/subsequences', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+
+    const parent = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
+    if (!parent) throw Errors.notFound('Parent sequence not found.');
+
+    const parsed = subsequenceSchema.safeParse(request.body);
+    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+    const { name, trigger_event, trigger_delay_days, mailbox_id, from_name, from_email, track_opens, track_clicks, stop_on_reply } = parsed.data;
+
+    const child = await prisma.sequence.create({
+      data: {
+        apiKeyId, name,
+        parentSequenceId: id,
+        triggerEvent: trigger_event,
+        triggerDelayDays: trigger_delay_days,
+        mailboxId: mailbox_id ?? parent.mailboxId,
+        fromName: from_name, fromEmail: from_email,
+        trackOpens: track_opens, trackClicks: track_clicks, stopOnReply: stop_on_reply,
+        sendDays: parent.sendDays, sendStartHour: parent.sendStartHour, sendEndHour: parent.sendEndHour, timezone: parent.timezone,
+      },
+      select: { id: true, name: true, status: true, parentSequenceId: true, triggerEvent: true, triggerDelayDays: true, createdAt: true },
+    });
+    return reply.status(201).send(child);
+  });
+
+  // GET /v1/sequences/:id/subsequences — list child subsequences of a parent
+  fastify.get('/sequences/:id/subsequences', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+
+    const parent = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
+    if (!parent) throw Errors.notFound('Sequence not found.');
+
+    const subsequences = await prisma.sequence.findMany({
+      where: { parentSequenceId: id, apiKeyId },
+      include: {
+        _count: { select: { steps: true, enrollments: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    return reply.status(200).send({ data: subsequences });
+  });
+
+  // POST /v1/sequences/:id/leads/:email/trigger-subsequence — manually trigger subsequence for a lead
+  fastify.post('/sequences/:id/leads/:email/trigger-subsequence', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id, email: rawEmail } = request.params as { id: string; email: string };
+    const email = decodeURIComponent(rawEmail).toLowerCase();
+    const apiKeyId = request.apiKey.id;
+    const body = request.body as { subsequence_id?: string } | undefined;
+
+    const parent = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
+    if (!parent) throw Errors.notFound('Sequence not found.');
+
+    const enrollment = await prisma.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: id, email } } });
+    if (!enrollment) throw Errors.notFound('Lead not enrolled in this sequence.');
+
+    // Find the target subsequence
+    const whereSubseq = body?.subsequence_id
+      ? { id: body.subsequence_id, parentSequenceId: id, apiKeyId }
+      : { parentSequenceId: id, apiKeyId };
+
+    const subsequence = await prisma.sequence.findFirst({ where: whereSubseq, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
+    if (!subsequence) throw Errors.notFound('Subsequence not found.');
+
+    // Enroll lead in the subsequence if not already enrolled
+    const existingSubEnrollment = await prisma.sequenceEnrollment.findUnique({
+      where: { sequenceId_email: { sequenceId: subsequence.id, email } },
+    });
+
+    if (existingSubEnrollment) {
+      return reply.status(200).send({ already_enrolled: true, enrollment_id: existingSubEnrollment.id });
+    }
+
+    const firstStep = subsequence.steps[0];
+    const nextSendAt = firstStep
+      ? new Date(Date.now() + ((subsequence.triggerDelayDays ?? 0) * 24 * 60 * 60 * 1000))
+      : null;
+
+    const subEnrollment = await prisma.sequenceEnrollment.create({
+      data: {
+        sequenceId: subsequence.id, email,
+        variables: enrollment.variables ?? {},
+        nextSendAt, status: 'active', currentStep: 0,
+      },
+      select: { id: true, sequenceId: true, email: true, status: true, nextSendAt: true },
+    });
+
+    return reply.status(201).send({ enrolled: true, enrollment: subEnrollment });
   });
 }

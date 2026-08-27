@@ -10,10 +10,13 @@ interface WarmupTickPayload {
   tick: true;
 }
 
-function getTodayTarget(wc: { targetPerDay: number; rampUpDays: number; startedAt: Date }): number {
+function getTodayTarget(wc: { targetPerDay: number; currentPerDay: number; rampUpDays: number; dailyRampUp?: number | null; startedAt: Date }): number {
+  const dailyRampUp = wc.dailyRampUp ?? 2;
   const daysRunning = Math.floor((Date.now() - wc.startedAt.getTime()) / (1000 * 60 * 60 * 24));
   if (daysRunning >= wc.rampUpDays) return wc.targetPerDay;
-  return Math.max(5, Math.round(5 + (wc.targetPerDay - 5) * daysRunning / wc.rampUpDays));
+  // Use explicit dailyRampUp increment if provided, otherwise use linear interpolation
+  const rampTarget = Math.min(wc.targetPerDay, wc.currentPerDay + dailyRampUp);
+  return Math.max(5, rampTarget);
 }
 
 const WARMUP_SUBJECTS = [
@@ -182,7 +185,8 @@ async function processWarmupTick(): Promise<void> {
       const subject = randomItem(WARMUP_SUBJECTS);
       const body = randomItem(WARMUP_BODIES);
       const poolTier = wc.poolTier ?? 'standard';
-      const shouldReply = poolTier === 'premium' && Math.random() < 0.4; // 40% reply rate for premium
+      const replyRate = (wc.replyRatePct ?? 20) / 100;
+      const shouldReply = Math.random() < replyRate;
 
       try {
         // Send warmup email FROM this mailbox TO the target mailbox via SMTP
@@ -231,11 +235,15 @@ async function processWarmupTick(): Promise<void> {
       }
     }
 
-    // Update currentPerDay on warmup config
-    await prisma.warmupConfig.update({
-      where: { id: wc.id },
-      data: { currentPerDay: todayTarget },
-    });
+    // Update currentPerDay on warmup config — ramp once per day
+    const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const wcAny = wc as { lastRampDate?: string | null };
+    if (wcAny.lastRampDate !== todayStr) {
+      await prisma.warmupConfig.update({
+        where: { id: wc.id },
+        data: { currentPerDay: todayTarget, lastRampDate: todayStr } as never,
+      });
+    }
   }
 }
 
