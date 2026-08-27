@@ -42,6 +42,7 @@ import { inboxTestRoutes } from './routes/inbox-test/index.js';
 import { aiRoutes } from './routes/ai/index.js';
 import { mcpRoutes } from './routes/mcp/index.js';
 import { connectorRoutes } from './routes/connectors/index.js';
+import { automationRoutes } from './routes/automations/index.js';
 import { loadDisposableList } from './engine/disposable.js';
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -152,6 +153,7 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(inboxRoutes, { prefix: '/v1' });
   await app.register(inboxTestRoutes, { prefix: '/v1' });
   await app.register(aiRoutes, { prefix: '/v1' });
+  await app.register(automationRoutes, { prefix: '/v1' });
   await app.register(connectorRoutes, { prefix: '/v1' });
   // MCP at root (no /v1 prefix — standard MCP endpoint is /mcp)
   await app.register(mcpRoutes);

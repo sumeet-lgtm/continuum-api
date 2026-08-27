@@ -51,6 +51,7 @@ model ApiKey {
   sequences      Sequence[]
   leads          Lead[]
   inboxTests     InboxTest[]
+  automations    Automation[]
 
   @@map("api_keys")
 }
@@ -847,4 +848,60 @@ model SequenceTemplate {
   createdAt   DateTime @default(now())
 
   @@map("sequence_templates")
+}
+
+// ─── Email Automations (event-triggered drip — Resend parity) ────────────────
+
+model Automation {
+  id          String   @id @default(cuid())
+  apiKeyId    String
+  name        String
+  triggerEvent String  // e.g. "user.created", "trial.expiring", "payment.failed"
+  status      String   @default("active") // active|paused|archived
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  apiKey      ApiKey   @relation(fields: [apiKeyId], references: [id])
+  steps       AutomationStep[]
+  enrollments AutomationEnrollment[]
+
+  @@index([apiKeyId])
+  @@index([apiKeyId, triggerEvent])
+  @@map("automations")
+}
+
+model AutomationStep {
+  id            String   @id @default(cuid())
+  automationId  String
+  stepOrder     Int
+  delayHours    Int      @default(0)
+  subject       String
+  htmlBody      String
+  textBody      String?
+  fromName      String?
+  fromEmail     String?
+  domainId      String?
+
+  automation    Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@unique([automationId, stepOrder])
+  @@map("automation_steps")
+}
+
+model AutomationEnrollment {
+  id            String    @id @default(cuid())
+  automationId  String
+  email         String
+  data          Json?     // arbitrary event data passed at trigger time
+  status        String    @default("active") // active|completed|unsubscribed|bounced
+  currentStep   Int       @default(0)
+  nextSendAt    DateTime?
+  enrolledAt    DateTime  @default(now())
+  completedAt   DateTime?
+
+  automation    Automation @relation(fields: [automationId], references: [id])
+
+  @@unique([automationId, email])
+  @@index([status, nextSendAt])
+  @@map("automation_enrollments")
 }

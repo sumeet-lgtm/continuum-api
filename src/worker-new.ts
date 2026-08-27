@@ -2,6 +2,7 @@ import { startCampaignWorker } from './workers/campaignWorker.js';
 import { startSequenceWorker } from './workers/sequenceWorker.js';
 import { startWarmupWorker } from './workers/warmupWorker.js';
 import { startImapWorker } from './workers/imapWorker.js';
+import { runAutomationWorker } from './workers/automationWorker.js';
 
 const closable: Array<{ close(): Promise<void> }> = [];
 
@@ -16,7 +17,18 @@ if (process.env['IMAP_POLL_ENABLED'] === 'true') {
   closable.push(startImapWorker());
 }
 
-console.log('[worker-new] campaign + sequence + warmup + IMAP workers started');
+// Automation worker runs every 5 minutes via setInterval
+const automationInterval = setInterval(() => {
+  runAutomationWorker().catch((err: unknown) => {
+    console.error('[automation-worker] error:', err);
+  });
+}, 5 * 60 * 1000);
+// Run once immediately on startup
+void runAutomationWorker();
+
+closable.push({ close: async () => { clearInterval(automationInterval); } });
+
+console.log('[worker-new] campaign + sequence + warmup + IMAP + automation workers started');
 
 const shutdown = async () => {
   console.log('[worker-new] shutting down...');

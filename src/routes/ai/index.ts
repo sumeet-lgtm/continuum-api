@@ -65,6 +65,110 @@ async function generateFirstLine(
   return data.content?.[0]?.text?.trim() ?? '';
 }
 
+const emailGenerateSchema = z.object({
+  type: z.enum(['cold_outreach', 'follow_up', 'newsletter', 'transactional', 're_engagement']),
+  about: z.string().min(1).max(500),
+  recipient: z.object({
+    name: z.string().optional(),
+    company: z.string().optional(),
+    title: z.string().optional(),
+  }).optional(),
+  sender: z.object({
+    name: z.string().optional(),
+    company: z.string().optional(),
+    product: z.string().optional(),
+  }).optional(),
+  tone: z.enum(['professional', 'casual', 'friendly', 'urgent']).default('professional'),
+  subject_only: z.boolean().default(false),
+  num_variants: z.number().int().min(1).max(5).default(1),
+});
+
+const classifyReplySchema = z.object({
+  subject: z.string().optional(),
+  body: z.string().min(1).max(10000),
+});
+
+async function generateEmailContent(
+  opts: z.infer<typeof emailGenerateSchema>,
+  apiKey: string,
+): Promise<Array<{ subject: string; body?: string }>> {
+  const recipientCtx = opts.recipient
+    ? `Recipient: ${[opts.recipient.name, opts.recipient.title, opts.recipient.company].filter(Boolean).join(', ')}`
+    : '';
+  const senderCtx = opts.sender
+    ? `Sender: ${[opts.sender.name, opts.sender.product].filter(Boolean).join(', ')} at ${opts.sender.company ?? 'the company'}`
+    : '';
+
+  const system = `You are an expert email copywriter. Write high-converting ${opts.type} emails. Tone: ${opts.tone}. Be specific, human, and avoid corporate clichés. Never use "I hope this email finds you well" or similar filler openers.`;
+
+  const task = opts.subject_only
+    ? `Write ${opts.num_variants} compelling email subject line(s) for an email about: ${opts.about}. ${recipientCtx}. ${senderCtx}. Return as JSON array: [{"subject":"..."}]`
+    : `Write ${opts.num_variants} complete email(s) about: ${opts.about}. ${recipientCtx}. ${senderCtx}. Include subject line and body. Return as JSON array: [{"subject":"...","body":"<full HTML email body>"}]`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: opts.subject_only ? 300 : 2000,
+      system,
+      messages: [{ role: 'user', content: task }],
+    }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text().catch(() => '');
+    throw new Error(`Anthropic API error: ${resp.status} ${err}`);
+  }
+
+  const data = await resp.json() as { content?: Array<{ text?: string }> };
+  const text = data.content?.[0]?.text?.trim() ?? '[]';
+
+  try {
+    const match = text.match(/\[[\s\S]*\]/);
+    return match ? JSON.parse(match[0]) as Array<{ subject: string; body?: string }> : [];
+  } catch {
+    return [{ subject: text.slice(0, 200) }];
+  }
+}
+
+async function classifyReplyContent(subject: string, body: string, apiKey: string): Promise<{
+  category: string;
+  confidence: number;
+  suggested_action: string;
+}> {
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 100,
+      system: 'You are an email intent classifier for sales outreach. Classify the reply and return ONLY valid JSON.',
+      messages: [{
+        role: 'user',
+        content: `Classify this email reply.\nSubject: ${subject}\nBody: ${body.slice(0, 2000)}\n\nReturn JSON: {"category":"interested|not_interested|out_of_office|referral|meeting_request|unsubscribe|question","confidence":0.0-1.0,"suggested_action":"reply|close|pause|escalate|unsubscribe"}`,
+      }],
+    }),
+  });
+
+  if (!resp.ok) throw new Error('Anthropic classify error');
+  const data = await resp.json() as { content?: Array<{ text?: string }> };
+  const text = data.content?.[0]?.text?.trim() ?? '{}';
+  try {
+    return JSON.parse(text) as { category: string; confidence: number; suggested_action: string };
+  } catch {
+    return { category: 'unknown', confidence: 0, suggested_action: 'reply' };
+  }
+}
+
 export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/ai/personalize
   fastify.post(
@@ -112,6 +216,68 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
         model: 'claude-haiku-4-5-20251001',
         usage: { leads_processed: leads.length, successful: results.filter(r => r.first_line !== null).length },
       });
+    },
+  );
+
+  // POST /v1/ai/generate-email — generate full email content (Growth+ plan)
+  fastify.post(
+    '/ai/generate-email',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!config.AI_PERSONALIZATION_ENABLED) {
+        throw Errors.forbidden('AI features are not enabled on this account.');
+      }
+      const plan: string = (request.apiKey as { plan?: string }).plan ?? 'free';
+      if (!GROWTH_PLANS.has(plan)) {
+        throw Errors.forbidden('AI email generation requires a Growth or Scale plan.');
+      }
+      const anthropicKey = config.ANTHROPIC_API_KEY;
+      if (!anthropicKey) throw Errors.serviceUnavailable('AI service temporarily unavailable.');
+
+      const parsed = emailGenerateSchema.safeParse(request.body);
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+      try {
+        const variants = await generateEmailContent(parsed.data, anthropicKey);
+        return reply.status(200).send({
+          variants,
+          model: 'claude-haiku-4-5-20251001',
+          usage: { variants_generated: variants.length },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'generation failed';
+        logger.error({ err: msg }, 'AI generate-email failed');
+        throw Errors.serviceUnavailable('AI generation failed. Please try again.');
+      }
+    },
+  );
+
+  // POST /v1/ai/classify-reply — classify an inbound reply email (Growth+ plan)
+  fastify.post(
+    '/ai/classify-reply',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!config.AI_PERSONALIZATION_ENABLED) {
+        throw Errors.forbidden('AI features are not enabled on this account.');
+      }
+      const plan: string = (request.apiKey as { plan?: string }).plan ?? 'free';
+      if (!GROWTH_PLANS.has(plan)) {
+        throw Errors.forbidden('AI reply classification requires a Growth or Scale plan.');
+      }
+      const anthropicKey = config.ANTHROPIC_API_KEY;
+      if (!anthropicKey) throw Errors.serviceUnavailable('AI service temporarily unavailable.');
+
+      const parsed = classifyReplySchema.safeParse(request.body);
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+      try {
+        const result = await classifyReplyContent(parsed.data.subject ?? '', parsed.data.body, anthropicKey);
+        return reply.status(200).send({ ...result, model: 'claude-haiku-4-5-20251001' });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'classify failed';
+        logger.error({ err: msg }, 'AI classify-reply failed');
+        throw Errors.serviceUnavailable('AI classification failed. Please try again.');
+      }
     },
   );
 }
