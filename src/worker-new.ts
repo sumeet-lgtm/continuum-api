@@ -1,13 +1,19 @@
 import { startCampaignWorker } from './workers/campaignWorker.js';
-import { startSequenceWorker } from './workers/sequenceWorker.js';
+import { startSequenceWorker, scheduleSequenceTicks } from './workers/sequenceWorker.js';
 import { startWarmupWorker } from './workers/warmupWorker.js';
 import { startImapWorker } from './workers/imapWorker.js';
 import { runAutomationWorker } from './workers/automationWorker.js';
+import { sequenceQueue } from './lib/queue.js';
 
 const closable: Array<{ close(): Promise<void> }> = [];
 
 closable.push(startCampaignWorker());
 closable.push(startSequenceWorker());
+
+// Schedule recurring sequence ticks (every 5 minutes) — idempotent, safe to call on every restart
+void scheduleSequenceTicks(sequenceQueue).catch((err: unknown) => {
+  console.error('[worker-new] failed to schedule sequence ticks:', err);
+});
 
 if (process.env['WARMUP_POOL_ENABLED'] === 'true') {
   closable.push(startWarmupWorker());
