@@ -25,6 +25,7 @@ import {
   ChevronRight,
   FlaskConical,
   UserRound,
+  ShieldOff,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Logo } from "@/components/Logo";
@@ -56,6 +57,7 @@ const NAV: NavItem[] = [
       { to: "/dashboard/messages", label: "Message History", icon: Mail },
       { to: "/dashboard/templates", label: "Templates", icon: FileText },
       { to: "/dashboard/domains", label: "Sending Domains", icon: ServerCog },
+      { to: "/dashboard/suppressions", label: "Suppressions", icon: ShieldOff },
     ],
   },
   {
