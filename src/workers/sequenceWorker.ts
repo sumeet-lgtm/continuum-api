@@ -156,16 +156,21 @@ async function processSequenceTick(): Promise<void> {
     let selectedMailbox: { id: string; host: string | null; port: number | null; username: string; passwordEnc: string | null } | null = null;
     const poolMailboxes = await prisma.mailbox.findMany({
       where: { apiKeyId: sequence.apiKeyId, status: 'active', passwordEnc: { not: null }, host: { not: null } },
-      select: { id: true, type: true, host: true, port: true, username: true, passwordEnc: true },
+      select: { id: true, type: true, host: true, port: true, username: true, passwordEnc: true, sentToday: true, dailyLimit: true },
     });
 
-    if (poolMailboxes.length > 0) {
+    // Only pick mailboxes that haven't hit their daily limit
+    const availableMailboxes = poolMailboxes.filter(m => m.sentToday < m.dailyLimit);
+
+    if (availableMailboxes.length > 0) {
       const ranked = rankMailboxesByESP(
-        poolMailboxes.map(m => ({ id: m.id, type: m.type, username: m.username })),
+        availableMailboxes.map(m => ({ id: m.id, type: m.type, username: m.username })),
         recipientESP,
       );
-      const preferredId = sequence.mailboxId ?? ranked[0]?.id;
-      selectedMailbox = poolMailboxes.find(m => m.id === preferredId) ?? poolMailboxes[0] ?? null;
+      const preferredId = sequence.mailboxId && availableMailboxes.find(m => m.id === sequence.mailboxId)
+        ? sequence.mailboxId
+        : ranked[0]?.id;
+      selectedMailbox = availableMailboxes.find(m => m.id === preferredId) ?? availableMailboxes[0] ?? null;
     }
     logger.debug({ recipientESP, selectedMailboxId: selectedMailbox?.id, email: enrollment.email }, 'Sequence mailbox selected');
 
