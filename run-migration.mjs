@@ -1,41 +1,65 @@
-// One-shot migration runner — runs each SQL statement in the migration file
+// Applies all standalone SQL migration files in order (idempotent)
 import { PrismaClient } from '@prisma/client';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 const prisma = new PrismaClient({
   datasources: { db: { url: process.env.DATABASE_URL } },
 });
 
-const sql = readFileSync('./prisma/migrations/20260827_phase2_phase3_phase4.sql', 'utf8');
+const MIGRATIONS_DIR = './prisma/migrations';
 
-// Split on semicolons, filter blanks and comments
-const statements = sql
-  .split(';')
-  .map(s => s.trim())
-  .filter(s => s.length > 0 && !s.startsWith('--'));
+// All standalone .sql files (not inside subdirectories) sorted by name
+const files = readdirSync(MIGRATIONS_DIR)
+  .filter(f => f.endsWith('.sql'))
+  .sort();
 
-let ok = 0;
-let errors = 0;
+console.log(`Found ${files.length} standalone SQL migration(s): ${files.join(', ')}`);
 
-for (const stmt of statements) {
-  try {
-    await prisma.$executeRawUnsafe(stmt + ';');
-    ok++;
-    process.stdout.write('.');
-  } catch (err) {
-    const msg = err.message ?? String(err);
-    // Ignore "already exists" errors (idempotent)
-    if (msg.includes('already exists') || msg.includes('duplicate') || msg.includes('IF NOT EXISTS')) {
+let totalOk = 0;
+let totalErrors = 0;
+
+for (const file of files) {
+  const path = join(MIGRATIONS_DIR, file);
+  console.log(`\nApplying: ${file}`);
+  const sql = readFileSync(path, 'utf8');
+
+  const statements = sql
+    .split(';')
+    .map(s => s.trim())
+    .filter(s => s.length > 0 && !s.startsWith('--'));
+
+  let ok = 0;
+  let errors = 0;
+
+  for (const stmt of statements) {
+    try {
+      await prisma.$executeRawUnsafe(stmt + ';');
       ok++;
-      process.stdout.write('s');
-    } else {
-      errors++;
-      console.error(`\nERROR: ${msg.slice(0, 120)}`);
-      console.error(`Statement: ${stmt.slice(0, 100)}`);
+      process.stdout.write('.');
+    } catch (err) {
+      const msg = err.message ?? String(err);
+      if (
+        msg.includes('already exists') ||
+        msg.includes('duplicate') ||
+        msg.includes('IF NOT EXISTS') ||
+        msg.includes('does not exist')  // DROP IF EXISTS when table missing
+      ) {
+        ok++;
+        process.stdout.write('s');
+      } else {
+        errors++;
+        console.error(`\nERROR in ${file}: ${msg.slice(0, 200)}`);
+        console.error(`Statement: ${stmt.slice(0, 150)}`);
+      }
     }
   }
+
+  console.log(`\n  ${file}: ${ok} ok, ${errors} errors`);
+  totalOk += ok;
+  totalErrors += errors;
 }
 
 await prisma.$disconnect();
-console.log(`\nDone: ${ok} ok, ${errors} errors`);
-if (errors > 0) process.exit(1);
+console.log(`\nTotal: ${totalOk} ok, ${totalErrors} errors`);
+if (totalErrors > 0) process.exit(1);
