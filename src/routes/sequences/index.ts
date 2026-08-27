@@ -280,4 +280,68 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     });
     return reply.status(201).send(seq);
   });
+
+  // ─── A/B Variant routes ─────────────────────────────────────────────────────
+
+  const variantCreateSchema = z.object({
+    variant_label: z.string().min(1).max(5),
+    subject: z.string().min(1).max(500),
+    html_body: z.string().min(1),
+    text_body: z.string().optional(),
+    weight: z.number().int().min(1).max(100).default(50),
+  });
+
+  // POST /v1/sequences/:id/steps/:stepId/variants
+  fastify.post('/sequences/:id/steps/:stepId/variants', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id, stepId } = request.params as { id: string; stepId: string };
+    const apiKeyId = request.apiKey.id;
+
+    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
+    if (!seq) throw Errors.notFound('Sequence not found.');
+
+    const step = await prisma.sequenceStep.findFirst({ where: { id: stepId, sequenceId: id } });
+    if (!step) throw Errors.notFound('Step not found.');
+
+    const parsed = variantCreateSchema.safeParse(request.body);
+    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+    const { variant_label, subject, html_body, text_body, weight } = parsed.data;
+
+    const variant = await prisma.sequenceVariant.create({
+      data: { stepId, variantLabel: variant_label, subject, htmlBody: html_body, textBody: text_body ?? null, weight },
+      select: { id: true, stepId: true, variantLabel: true, subject: true, weight: true },
+    });
+    return reply.status(201).send(variant);
+  });
+
+  // GET /v1/sequences/:id/steps/:stepId/variants
+  fastify.get('/sequences/:id/steps/:stepId/variants', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id, stepId } = request.params as { id: string; stepId: string };
+    const apiKeyId = request.apiKey.id;
+
+    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
+    if (!seq) throw Errors.notFound('Sequence not found.');
+
+    const variants = await prisma.sequenceVariant.findMany({
+      where: { stepId },
+      orderBy: { variantLabel: 'asc' },
+      select: { id: true, stepId: true, variantLabel: true, subject: true, htmlBody: true, textBody: true, weight: true },
+    });
+    return reply.status(200).send({ data: variants });
+  });
+
+  // DELETE /v1/sequences/:id/steps/:stepId/variants/:variantId
+  fastify.delete('/sequences/:id/steps/:stepId/variants/:variantId', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id, stepId, variantId } = request.params as { id: string; stepId: string; variantId: string };
+    const apiKeyId = request.apiKey.id;
+
+    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
+    if (!seq) throw Errors.notFound('Sequence not found.');
+
+    const variant = await prisma.sequenceVariant.findFirst({ where: { id: variantId, stepId } });
+    if (!variant) throw Errors.notFound('Variant not found.');
+
+    await prisma.sequenceVariant.delete({ where: { id: variantId } });
+    return reply.status(200).send({ deleted: true, id: variantId });
+  });
 }
