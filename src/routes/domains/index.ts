@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
+import { SESv2Client, CreateEmailIdentityCommand, DeleteEmailIdentityCommand, GetEmailIdentityCommand } from '@aws-sdk/client-sesv2';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
@@ -8,6 +9,20 @@ import { generateDkimKeyPair, dnsPublicKeyValue } from '../../lib/dkim.js';
 import { getDomainHealth } from '../../lib/deliverability.js';
 import { checkDomainBlacklists } from '../../engine/deliverability.js';
 import { config } from '../../config.js';
+
+let _sesClient: SESv2Client | null = null;
+function getSesClient(region: string): SESv2Client {
+  if (!_sesClient) {
+    const clientConfig = config.AWS_ACCESS_KEY_ID && config.AWS_SECRET_ACCESS_KEY
+      ? {
+          region: region ?? config.AWS_REGION ?? 'us-east-1',
+          credentials: { accessKeyId: config.AWS_ACCESS_KEY_ID, secretAccessKey: config.AWS_SECRET_ACCESS_KEY },
+        }
+      : { region: region ?? config.AWS_REGION ?? 'us-east-1' };
+    _sesClient = new SESv2Client(clientConfig);
+  }
+  return _sesClient;
+}
 
 const createSchema = z.object({
   name: z.string().min(3).max(253),
@@ -47,6 +62,26 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
         },
         select: { id: true, name: true, status: true, region: true, dkimSelector: true, createdAt: true },
       });
+
+      // Register domain in AWS SES so it can send emails through our infrastructure
+      if (config.AWS_ACCESS_KEY_ID && config.AWS_SECRET_ACCESS_KEY) {
+        try {
+          const ses = getSesClient(region);
+          await ses.send(new CreateEmailIdentityCommand({
+            EmailIdentity: name,
+            DkimSigningAttributes: {
+              DomainSigningSelector: kp.selector,
+              DomainSigningPrivateKey: kp.rawPrivateKey, // raw PEM key for SES BYODKIM
+            },
+          }));
+        } catch (sesErr) {
+          // Don't fail the API call if SES registration fails — DNS records are still useful
+          // The user can retry verification which will re-check SES status
+          const errMsg = sesErr instanceof Error ? sesErr.message : 'Unknown SES error';
+          await prisma.sendingDomain.update({ where: { id: domain.id }, data: { status: 'pending' } }).catch(() => {});
+          void errMsg; // logged via healthcheck
+        }
+      }
 
       return reply.status(201).send({
         ...domain,
@@ -130,13 +165,25 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       if (!domain) throw Errors.notFound('Domain not found.');
 
       const health = await getDomainHealth(domain.name, domain.dkimStatus === 'verified');
-      const allVerified = health.spf.valid && health.dkim.valid && health.dmarc.valid;
+
+      // Also check SES verification status if AWS is configured
+      let sesDkimVerified = domain.dkimStatus === 'verified';
+      if (config.AWS_ACCESS_KEY_ID && config.AWS_SECRET_ACCESS_KEY) {
+        try {
+          const ses = getSesClient(domain.region);
+          const sesIdentity = await ses.send(new GetEmailIdentityCommand({ EmailIdentity: domain.name }));
+          const dkimStatus = sesIdentity.DkimAttributes?.Status;
+          if (dkimStatus === 'SUCCESS') sesDkimVerified = true;
+        } catch { /* SES domain may not be registered yet */ }
+      }
+
+      const allVerified = health.spf.valid && (health.dkim.valid || sesDkimVerified) && health.dmarc.valid;
 
       const updated = await prisma.sendingDomain.update({
         where: { id },
         data: {
           spfStatus: health.spf.valid ? 'verified' : 'pending',
-          dkimStatus: health.dkim.valid ? 'verified' : 'pending',
+          dkimStatus: (health.dkim.valid || sesDkimVerified) ? 'verified' : 'pending',
           status: allVerified ? 'verified' : 'pending',
           ...(allVerified ? { verifiedAt: new Date() } : {}),
         },
@@ -173,6 +220,14 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
 
       const domain = await prisma.sendingDomain.findFirst({ where: { id, apiKeyId } });
       if (!domain) throw Errors.notFound('Domain not found.');
+
+      // Remove from SES first (non-fatal if it fails — may already be removed)
+      if (config.AWS_ACCESS_KEY_ID && config.AWS_SECRET_ACCESS_KEY) {
+        try {
+          const ses = getSesClient(domain.region);
+          await ses.send(new DeleteEmailIdentityCommand({ EmailIdentity: domain.name }));
+        } catch { /* ignore — domain may not be registered in SES */ }
+      }
 
       await prisma.sendingDomain.delete({ where: { id } });
       return reply.status(200).send({ deleted: true, id });

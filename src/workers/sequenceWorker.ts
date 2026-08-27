@@ -2,6 +2,7 @@ import { Worker, type Job } from 'bullmq';
 import { QUEUE_SEQUENCE, redisConnection } from '../lib/queue.js';
 import { prisma } from '../lib/prisma.js';
 import { sendViaSes } from '../lib/ses.js';
+import { sendViaSmtp } from '../lib/smtp.js';
 import { generateUnsubToken, generateUnsubHtml } from '../lib/unsubscribe.js';
 import { generateOpenToken, generateClickToken, injectTracking } from '../lib/tracking.js';
 import { processTemplate } from '../lib/spintax.js';
@@ -150,26 +151,61 @@ async function processSequenceTick(): Promise<void> {
 
     // ESP-aware mailbox selection: detect recipient ESP for observability + future routing
     const recipientESP = await detectESP(enrollment.email);
-    if (sequence.mailboxId) {
-      // When a specific mailbox is assigned, prefer ESP-matched mailboxes from the pool
-      const poolMailboxes = await prisma.mailbox.findMany({
-        where: { apiKeyId: sequence.apiKeyId, status: 'active' },
-        select: { id: true, type: true, username: true },
-      });
-      const ranked = rankMailboxesByESP(poolMailboxes, recipientESP);
-      logger.debug({ recipientESP, preferredMailboxId: ranked[0]?.id }, 'ESP-aware mailbox rank');
-    } else {
-      logger.debug({ recipientESP, email: enrollment.email }, 'Sequence ESP detection');
-    }
 
-    const fromAddress = `${sequence.fromName} <${sequence.fromEmail}>`;
+    // Resolve sending mailbox: prefer ESP-matched mailbox from the pool
+    let selectedMailbox: { id: string; host: string | null; port: number | null; username: string; passwordEnc: string | null } | null = null;
+    const poolMailboxes = await prisma.mailbox.findMany({
+      where: { apiKeyId: sequence.apiKeyId, status: 'active', passwordEnc: { not: null }, host: { not: null } },
+      select: { id: true, type: true, host: true, port: true, username: true, passwordEnc: true },
+    });
+
+    if (poolMailboxes.length > 0) {
+      const ranked = rankMailboxesByESP(
+        poolMailboxes.map(m => ({ id: m.id, type: m.type, username: m.username })),
+        recipientESP,
+      );
+      const preferredId = sequence.mailboxId ?? ranked[0]?.id;
+      selectedMailbox = poolMailboxes.find(m => m.id === preferredId) ?? poolMailboxes[0] ?? null;
+    }
+    logger.debug({ recipientESP, selectedMailboxId: selectedMailbox?.id, email: enrollment.email }, 'Sequence mailbox selected');
+
+    const fromAddress = sequence.mailboxId && selectedMailbox
+      ? selectedMailbox.username  // Send FROM the actual mailbox address for cold outreach
+      : `${sequence.fromName} <${sequence.fromEmail}>`;
 
     try {
-      await sendViaSes({
-        to: enrollment.email, from: fromAddress, subject, htmlBody,
-        ...(textBody ? { textBody } : {}),
-        listUnsubscribeHeader: `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`,
-      });
+      if (selectedMailbox?.host && selectedMailbox?.passwordEnc) {
+        // Cold outreach path: send via user's own SMTP mailbox
+        await sendViaSmtp(
+          {
+            host: selectedMailbox.host,
+            port: selectedMailbox.port ?? 587,
+            username: selectedMailbox.username,
+            passwordEnc: selectedMailbox.passwordEnc,
+          },
+          {
+            from: fromAddress,
+            to: enrollment.email,
+            subject,
+            htmlBody,
+            ...(textBody ? { textBody } : {}),
+            listUnsubscribeHeader: `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`,
+          },
+        );
+
+        // Update mailbox daily sent count
+        await prisma.mailbox.update({
+          where: { id: selectedMailbox.id },
+          data: { sentToday: { increment: 1 } },
+        }).catch(() => {});
+      } else {
+        // Fallback: send via shared SES
+        await sendViaSes({
+          to: enrollment.email, from: fromAddress, subject, htmlBody,
+          ...(textBody ? { textBody } : {}),
+          listUnsubscribeHeader: `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`,
+        });
+      }
 
       // Move to next step
       const nextStep = steps[nextStepIndex + 1];

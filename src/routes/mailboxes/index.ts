@@ -5,6 +5,7 @@ import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { encryptValue } from '../../lib/crypto.js';
+import { testSmtpConnection } from '../../lib/smtp.js';
 import { config } from '../../config.js';
 
 const createSchema = z.object({
@@ -91,18 +92,28 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
     const mailbox = await prisma.mailbox.findFirst({ where: { id, apiKeyId } });
     if (!mailbox) throw Errors.notFound('Mailbox not found.');
 
-    // Basic connectivity test — just verify the config looks valid
-    // Full SMTP test would require actual connection (done via worker)
-    const hasCredentials = !!mailbox.passwordEnc;
-    const hasHost = !!(mailbox.host || mailbox.type !== 'smtp');
-
-    if (!hasHost || (mailbox.type === 'smtp' && !hasCredentials)) {
+    if (!mailbox.host || !mailbox.passwordEnc) {
       await prisma.mailbox.update({ where: { id }, data: { status: 'error', lastErrorMsg: 'Missing host or credentials' } });
-      return reply.status(200).send({ ok: false, error: 'Missing host or credentials' });
+      return reply.status(200).send({ ok: false, error: 'Missing SMTP host or credentials' });
     }
 
-    await prisma.mailbox.update({ where: { id }, data: { status: 'active', lastErrorMsg: null, lastCheckedAt: new Date() } });
-    return reply.status(200).send({ ok: true });
+    // Real SMTP connectivity test
+    const result = await testSmtpConnection({
+      host: mailbox.host,
+      port: mailbox.port ?? 587,
+      username: mailbox.username,
+      passwordEnc: mailbox.passwordEnc,
+    });
+
+    await prisma.mailbox.update({
+      where: { id },
+      data: {
+        status: result.ok ? 'active' : 'error',
+        lastErrorMsg: result.ok ? null : (result.error ?? 'SMTP test failed'),
+        lastCheckedAt: new Date(),
+      },
+    });
+    return reply.status(200).send(result);
   });
 
   // POST /v1/mailboxes/:id/warmup — enable warmup

@@ -5,6 +5,7 @@ export interface DkimKeyPair {
   selector: string;
   publicKey: string;        // PEM, put in DNS TXT record
   privateKeyEnc: string;    // AES-256-GCM encrypted PEM
+  rawPrivateKey: string;    // plain PEM (use immediately for SES registration, then discard)
 }
 
 export function generateDkimKeyPair(secret: string): DkimKeyPair {
@@ -20,6 +21,7 @@ export function generateDkimKeyPair(secret: string): DkimKeyPair {
     selector,
     publicKey,
     privateKeyEnc: encryptValue(privateKey, secret),
+    rawPrivateKey: privateKey,
   };
 }
 
