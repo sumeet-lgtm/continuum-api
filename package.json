@@ -22,6 +22,7 @@
     "db:seed": "tsx scripts/generate-api-key.ts",
     "worker": "tsx src/worker.ts",
     "worker:new": "tsx src/worker-new.ts",
+    "smtp:relay": "tsx src/smtp-relay.ts",
     "worker:bulk": "tsx src/workers/bulkWorker.ts",
     "worker:monitor": "tsx src/workers/monitorWorker.ts",
     "worker:webhook": "tsx src/workers/webhookWorker.ts",
@@ -41,6 +42,8 @@
     "@supabase/supabase-js": "^2.43.1",
     "@types/imap": "^0.8.43",
     "@types/imap-simple": "^4.2.10",
+    "@types/mailparser": "^3.4.6",
+    "@types/smtp-server": "^3.5.13",
     "bullmq": "^5.8.1",
     "fastify": "^4.27.0",
     "fastify-plugin": "^4.5.1",
@@ -48,8 +51,10 @@
     "imap-simple": "^5.1.0",
     "ioredis": "^5.10.1",
     "libphonenumber-js": "^1.12.42",
+    "mailparser": "^3.9.16",
     "pino": "^9.1.0",
     "pino-pretty": "^11.0.0",
+    "smtp-server": "^3.19.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {

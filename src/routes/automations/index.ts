@@ -216,6 +216,30 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     return reply.status(200).send({ data: items, total, page, limit });
   });
 
+  // GET /v1/automations/:id/stats — aggregate analytics
+  fastify.get('/automations/:id/stats', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+
+    const automation = await prisma.automation.findFirst({ where: { id, apiKeyId } });
+    if (!automation) throw Errors.notFound('Automation not found.');
+
+    const [total, active, completed, unsubscribed, bounced] = await Promise.all([
+      prisma.automationEnrollment.count({ where: { automationId: id } }),
+      prisma.automationEnrollment.count({ where: { automationId: id, status: 'active' } }),
+      prisma.automationEnrollment.count({ where: { automationId: id, status: 'completed' } }),
+      prisma.automationEnrollment.count({ where: { automationId: id, status: 'unsubscribed' } }),
+      prisma.automationEnrollment.count({ where: { automationId: id, status: 'bounced' } }),
+    ]);
+
+    return reply.status(200).send({
+      automationId: id,
+      enrollments: { total, active, completed, unsubscribed, bounced },
+      completion_rate: total > 0 ? Math.round((completed / total) * 100) : 0,
+      unsubscribe_rate: total > 0 ? Math.round((unsubscribed / total) * 100) : 0,
+    });
+  });
+
   // DELETE /v1/automations/:id/enrollments/:email — unenroll
   fastify.delete('/automations/:id/enrollments/:email', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id, email } = request.params as { id: string; email: string };

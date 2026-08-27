@@ -62,7 +62,7 @@ export async function runAutomationWorker(): Promise<void> {
     const fromName = step.fromName ?? 'Continuum';
 
     try {
-      await sesClient.send(new SendEmailCommand({
+      const sesResp = await sesClient.send(new SendEmailCommand({
         FromEmailAddress: `${fromName} <${fromEmail}>`,
         Destination: { ToAddresses: [enrollment.email] },
         Content: {
@@ -75,6 +75,21 @@ export async function runAutomationWorker(): Promise<void> {
           },
         },
       }));
+
+      // Persist SendMessage record so open/click tracking + bounce handling works
+      const apiKeyId = enrollment.automation.apiKeyId;
+      if (sesResp.MessageId && apiKeyId) {
+        await prisma.sendMessage.create({
+          data: {
+            apiKeyId,
+            sesMessageId: sesResp.MessageId,
+            from: `${fromName} <${fromEmail}>`,
+            to: enrollment.email,
+            subject,
+            status: 'sent',
+          },
+        }).catch(() => { /* non-fatal — tracking optional */ });
+      }
 
       logger.info({ enrollmentId: enrollment.id, email: enrollment.email, stepOrder: step.stepOrder }, 'Automation step sent');
 

@@ -439,6 +439,20 @@ enum SuppressionReason {
   unsubscribed
 }
 
+// ─── Soft Bounce Tracker (3-strike suppression) ──────────────────────────────
+
+model SoftBounceTrack {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  apiKeyId      String?
+  bounceCount   Int      @default(1)
+  lastBounceAt  DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  @@index([email])
+  @@map("soft_bounce_tracks")
+}
+
 // ─── Custom Sending Domains ───────────────────────────────────────────────────
 
 model SendingDomain {

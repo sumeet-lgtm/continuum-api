@@ -122,6 +122,8 @@ async function handleSesEvent(
     for (const email of recipients) {
       if (bounceType === 'Permanent') {
         await suppress(email, 'hard_bounce', apiKeyId);
+      } else if (bounceType === 'Transient') {
+        await trackSoftBounce(email, apiKeyId);
       }
       const payload: EmailBouncedPayload = {
         event: 'email.bounced', id: sendMessageId, to: email, bounceType, apiKeyId, occurredAt, apiVersion: '2',
@@ -177,7 +179,7 @@ async function handleSesEvent(
 }
 
 /** Upsert-by-email: the unique constraint on Suppression.email makes a repeat bounce a no-op. */
-async function suppress(email: string, reason: 'hard_bounce' | 'complaint', apiKeyId: string): Promise<void> {
+async function suppress(email: string, reason: 'hard_bounce' | 'complaint' | 'soft_bounce', apiKeyId: string): Promise<void> {
   await prisma.suppression.upsert({
     where: { email },
     update: {}, // first reason wins; don't overwrite an existing suppression's cause
@@ -185,4 +187,28 @@ async function suppress(email: string, reason: 'hard_bounce' | 'complaint', apiK
   }).catch((err) => {
     logger.error({ err, email, reason }, 'Failed to write suppression');
   });
+}
+
+/** 3-strike soft bounce suppression: track transient bounces, suppress after 3 consecutive. */
+async function trackSoftBounce(email: string, apiKeyId: string): Promise<void> {
+  try {
+    // Check if already hard-suppressed — skip if so
+    const existing = await prisma.suppression.findUnique({ where: { email } });
+    if (existing) return;
+
+    const track = await prisma.softBounceTrack.upsert({
+      where: { email },
+      create: { email, apiKeyId: apiKeyId ?? null, bounceCount: 1, lastBounceAt: new Date() },
+      update: { bounceCount: { increment: 1 }, lastBounceAt: new Date() },
+    });
+
+    logger.info({ email, bounceCount: track.bounceCount }, 'Soft bounce tracked');
+
+    if (track.bounceCount >= 3) {
+      await suppress(email, 'soft_bounce', apiKeyId);
+      logger.info({ email }, 'Soft bounce threshold reached — email suppressed');
+    }
+  } catch (err) {
+    logger.error({ err, email }, 'Failed to track soft bounce');
+  }
 }
