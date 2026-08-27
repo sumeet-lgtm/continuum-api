@@ -21,6 +21,7 @@
     "db:studio": "prisma studio",
     "db:seed": "tsx scripts/generate-api-key.ts",
     "worker": "tsx src/worker.ts",
+    "worker:new": "tsx src/worker-new.ts",
     "worker:bulk": "tsx src/workers/bulkWorker.ts",
     "worker:monitor": "tsx src/workers/monitorWorker.ts",
     "worker:webhook": "tsx src/workers/webhookWorker.ts",
