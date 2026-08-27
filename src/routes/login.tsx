@@ -12,6 +12,9 @@ export const Route = createFileRoute("/login")({
 function LoginPage() {
   const { user, loading, signIn } = useAuth();
   const navigate = useNavigate();
+  const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const hasError = params?.get("error") === "sso_failed";
+  const errorDetail = params?.get("detail") ?? null;
 
   useEffect(() => {
     if (!loading && user) navigate({ to: "/dashboard" });
@@ -28,6 +31,14 @@ function LoginPage() {
           <p className="text-sm text-muted-foreground">
             Use your company email — Google, Microsoft, or any SSO provider.
           </p>
+          {hasError && (
+            <div className="rounded-md bg-destructive/10 border border-destructive/20 px-3 py-2 text-left">
+              <p className="text-xs font-medium text-destructive">Sign-in failed</p>
+              {errorDetail && (
+                <p className="text-xs text-destructive/80 mt-1 break-all">{errorDetail}</p>
+              )}
+            </div>
+          )}
           <Button className="w-full" size="lg" onClick={signIn} disabled={loading}>
             Continue with SSO →
           </Button>
