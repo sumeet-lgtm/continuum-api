@@ -56,6 +56,8 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       const keyHash = hashApiKey(rawKey);
       const keyPrefix = rawKey.slice(0, 12);
 
+      const effectiveOwnerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
+
       const newKey = await prisma.apiKey.create({
         data: {
           keyHash,
@@ -65,7 +67,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
           label: name,
           permission,
           restrictedDomainId: domain_id ?? null,
-          ownerId: parentKey.ownerId,
+          ownerId: effectiveOwnerId,
           userId: parentKey.userId,
           plan: parentKey.plan,
           rateLimit: parentKey.rateLimit,

@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { requireAuth } from '../../plugins/auth.js';
+import { requireAuth, requireFullAccess } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { requireMonthlyQuota, incrementUsage } from '../../plugins/usageMeter.js';
 import { verifyEmail } from '../../engine/index.js';
@@ -65,7 +65,7 @@ export async function verifySingleRoute(fastify: FastifyInstance): Promise<void>
   fastify.post<VerifyRoute>(
     '/verify',
     {
-      preHandler: [requireAuth, requireRateLimit, requireMonthlyQuota],
+      preHandler: [requireAuth, requireFullAccess, requireRateLimit, requireMonthlyQuota],
       schema: {
         body: {
           type: 'object',

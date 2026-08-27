@@ -131,6 +131,19 @@ export async function requireAuth(
   await resolveApiKey(request);
 }
 
+/**
+ * Prehandler — blocks sending_access keys from non-send routes (verify, monitor, lists, etc.)
+ * Chain AFTER requireAuth: { preHandler: [requireAuth, requireFullAccess] }
+ */
+export async function requireFullAccess(
+  request: FastifyRequest,
+  _reply: FastifyReply,
+): Promise<void> {
+  if (request.apiKey.permission !== 'full_access') {
+    throw Errors.forbidden('This API key only has sending access. A full_access key is required for this endpoint.');
+  }
+}
+
 export const authPlugin = fp(authPluginFn, {
   name: 'auth',
 });
