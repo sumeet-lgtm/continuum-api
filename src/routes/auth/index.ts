@@ -146,8 +146,10 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       const separator = redirectTarget.includes('?') ? '&' : '?';
       return reply.redirect(302, `${redirectTarget}${separator}token=${encodeURIComponent(token)}`);
     } catch (err) {
-      fastify.log.error(err, 'SSO callback failed');
-      return reply.redirect(302, `${config.DASHBOARD_URL}/login?error=sso_failed`);
+      const msg = err instanceof Error ? err.message : String(err);
+      fastify.log.error({ err, msg }, 'SSO callback failed');
+      const errParam = encodeURIComponent(msg.slice(0, 120));
+      return reply.redirect(302, `${config.DASHBOARD_URL}/login?error=sso_failed&detail=${errParam}`);
     }
   });
 
