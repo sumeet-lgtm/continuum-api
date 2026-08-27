@@ -12,12 +12,12 @@ datasource db {
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
-  workosId  String?  @unique
-  firstName String?
-  lastName  String?
-  orgId     String?  // WorkOS organization ID
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  workosId  String?  @unique @map("workos_id")
+  firstName String?  @map("first_name")
+  lastName  String?  @map("last_name")
+  orgId     String?  @map("org_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("users")
 }
