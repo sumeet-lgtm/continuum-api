@@ -47,8 +47,8 @@ const TRANSPARENT_GIF = Buffer.from(
 export { TRANSPARENT_GIF };
 
 export function injectTracking(html: string, openToken: string, clickTokenFn: (url: string) => string): string {
-  // Inject open pixel before </body>
-  const pixel = `<img src="https://api.continuumapi.com/track/open/${encodeURIComponent(openToken)}" width="1" height="1" style="display:none" alt="" />`;
+  // Inject open pixel before </body>. Use ?t= query param — Railway proxy truncates path segments >100 chars.
+  const pixel = `<img src="https://api.continuumapi.com/track/open?t=${encodeURIComponent(openToken)}" width="1" height="1" style="display:none" alt="" />`;
   let result = html.includes('</body>')
     ? html.replace('</body>', `${pixel}</body>`)
     : `${html}${pixel}`;
@@ -57,7 +57,7 @@ export function injectTracking(html: string, openToken: string, clickTokenFn: (u
   result = result.replace(/href="(https?:\/\/[^"]+)"/gi, (match, url: string) => {
     if (url.includes('unsubscribe') || url.includes('continuumapi.com/track')) return match;
     const clickToken = clickTokenFn(url);
-    return `href="https://api.continuumapi.com/track/click/${encodeURIComponent(clickToken)}"`;
+    return `href="https://api.continuumapi.com/track/click?t=${encodeURIComponent(clickToken)}"`;
   });
 
   return result;
