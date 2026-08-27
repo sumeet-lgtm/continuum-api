@@ -143,7 +143,28 @@ function LeadsPage() {
                   <td className="px-5 py-3">{[l.firstName, l.lastName].filter(Boolean).join(" ") || "—"}</td>
                   <td className="px-5 py-3 text-muted-foreground">{l.company ?? "—"}</td>
                   <td className="px-5 py-3 text-muted-foreground">{l.title ?? "—"}</td>
-                  <td className="px-5 py-3"><StatusBadge status={l.status} /></td>
+                  <td className="px-5 py-3">
+                  <select
+                    className="rounded border border-input bg-background px-2 py-0.5 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={l.status}
+                    onChange={async (e) => {
+                      const newStatus = e.target.value;
+                      if (!primaryKey?.keyRaw) return;
+                      try {
+                        await fetch(`https://api.continuumapi.com/v1/leads/${l.id}/status`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
+                          body: JSON.stringify({ status: newStatus }),
+                        });
+                        setLeads((prev) => prev.map((x) => x.id === l.id ? { ...x, status: newStatus } : x));
+                      } catch { /* ignore */ }
+                    }}
+                  >
+                    {["active","interested","not_interested","replied","unsubscribed","bounced","do_not_contact"].map((s) => (
+                      <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
+                    ))}
+                  </select>
+                </td>
                   <td className="px-5 py-3 text-muted-foreground">{new Date(l.createdAt).toLocaleDateString()}</td>
                 </tr>
               ))}
