@@ -16,7 +16,7 @@ const SPAM_WORDS = [
   'order now','special promotion','cash bonus','earn extra','work from home',
   'no credit check','guaranteed income','winner','you have been selected',
   'congratulations','urgent','no questions asked','risk free','100% free',
-  'unsubscribe','opt out','you are receiving this','this is not spam',
+  'opt out','you are receiving this','this is not spam',
   'dear friend','dear valued customer','million dollars','nigerian',
   'weight loss','lose weight fast','casino','online pharmacy','prescription',
 ];
@@ -190,8 +190,8 @@ function scoreSpamContent(subject: string, body: string): {
   const dollars = (text.match(/\$/g) ?? []).length;
   if (dollars > 1) { score += dollars * 3; flags.push(`${dollars} dollar signs`); }
 
-  // No plain text alternative
-  if (!body.includes('unsubscribe')) { score += 5; flags.push('No unsubscribe link detected'); }
+  // No unsubscribe link is a spam signal; having one is good
+  if (!body.toLowerCase().includes('unsubscribe')) { score += 5; flags.push('No unsubscribe link detected'); }
 
   score = Math.min(100, score);
   const recommendation = score === 0
