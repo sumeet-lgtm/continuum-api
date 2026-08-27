@@ -1,0 +1,203 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { Check, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { useApiKey } from "@/lib/use-api-key";
+import { api } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { trackEvent, PLAN_VALUES } from "@/lib/analytics";
+
+export const Route = createFileRoute("/dashboard/billing")({
+  component: BillingPage,
+});
+
+type PlanId = "starter" | "growth" | "scale";
+interface PlanDef {
+  id: PlanId;
+  name: string;
+  price: string;
+  quota: string;
+  features: string[];
+}
+const PLANS: PlanDef[] = [
+  { id: "starter", name: "Starter", price: "$25", quota: "5,000 verifications / month", features: ["Email verification API", "Phone & IP intelligence", "Bulk jobs & webhooks"] },
+  { id: "growth", name: "Growth", price: "$49", quota: "15,000 verifications / month", features: ["Everything in Starter", "Higher rate limits", "Priority support"] },
+  { id: "scale", name: "Scale", price: "$199", quota: "100,000 verifications / month", features: ["Everything in Growth", "Dedicated throughput", "SLA & onboarding"] },
+];
+
+interface Usage {
+  plan: string | null;
+  currentMonthUsage: number | null;
+  monthlyLimit: number | null;
+  usageResetAt: string | null;
+}
+
+function BillingPage() {
+  const { apiKey, loading, refetch } = useApiKey();
+  const [usage, setUsage] = useState<Usage | null>(null);
+  const [usageLoading, setUsageLoading] = useState(true);
+  const [checkoutLoading, setCheckoutLoading] = useState<PlanId | null>(null);
+
+  useEffect(() => {
+    if (!apiKey?.keyRaw) {
+      if (!loading) setUsageLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.withKey.get<{ verifications: { used: number; limit: number; resetsAt: string | null } }>(
+          "/v1/usage",
+          apiKey.keyRaw!,
+        );
+        if (!cancelled) {
+          setUsage({
+            plan: apiKey.plan ?? "free",
+            currentMonthUsage: data.verifications.used,
+            monthlyLimit: data.verifications.limit,
+            usageResetAt: data.verifications.resetsAt,
+          });
+          setUsageLoading(false);
+        }
+      } catch {
+        if (!cancelled) setUsageLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [apiKey?.keyRaw, loading]);
+
+  const currentPlan = (usage?.plan ?? "free").toLowerCase();
+
+  const upgrade = async (plan: PlanId) => {
+    if (!apiKey?.keyRaw) {
+      toast.error("Your API key isn't ready yet. Please try again in a moment.");
+      return;
+    }
+    setCheckoutLoading(plan);
+    trackEvent("begin_checkout", {
+      value: PLAN_VALUES[plan],
+      currency: "USD",
+      items: [{ item_id: plan, item_name: plan }],
+    });
+    try {
+      const res = await fetch("https://api.continuumapi.com/v1/billing/checkout", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey.keyRaw}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ plan }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { url?: string; error?: string; code?: string };
+      if (!res.ok || !json.url) {
+        toast.error(json.error ?? "Could not start checkout. Please try again.");
+        setCheckoutLoading(null);
+        return;
+      }
+      window.location.href = json.url;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Network error");
+      setCheckoutLoading(null);
+    }
+  };
+
+  if (loading) return <div className="text-sm text-muted-foreground">Loading…</div>;
+
+  return (
+    <div className="space-y-6">
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight">Billing</h1>
+        <p className="text-sm text-muted-foreground">Manage your plan and monthly verification quota.</p>
+      </header>
+
+      {/* Current plan card */}
+      <div className="rounded-lg border border-border bg-card p-5">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-medium">Current plan</h2>
+            <span className="inline-flex items-center rounded-full border border-border bg-background px-2.5 py-0.5 text-xs font-medium capitalize">
+              {currentPlan}
+            </span>
+          </div>
+          {usage && (
+            <span className="text-sm tabular-nums text-muted-foreground">
+              {(usage.currentMonthUsage ?? 0).toLocaleString()} of {(usage.monthlyLimit ?? 0).toLocaleString()} used
+            </span>
+          )}
+        </div>
+        {usage && (usage.monthlyLimit ?? 0) > 0 && (() => {
+          const pct = Math.max(0, Math.min(100, ((usage.currentMonthUsage ?? 0) / (usage.monthlyLimit ?? 1)) * 100));
+          const atLimit = (usage.currentMonthUsage ?? 0) >= (usage.monthlyLimit ?? 0);
+          const warn = !atLimit && pct >= 80;
+          const barColor = atLimit ? "bg-red-500" : warn ? "bg-yellow-500" : "bg-foreground";
+          const reset = usage.usageResetAt
+            ? new Date(usage.usageResetAt)
+            : (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth() + 1, 1); })();
+          return (
+            <>
+              <div className="mt-3 h-2 rounded-full bg-muted overflow-hidden">
+                <div className={`h-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Resets on {reset.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}
+              </p>
+            </>
+          );
+        })()}
+      </div>
+
+      {/* Plan grid */}
+      <div className="grid gap-4 md:grid-cols-3">
+        {PLANS.map((p) => {
+          const isCurrent = currentPlan === p.id;
+          const busy = checkoutLoading === p.id;
+          return (
+            <div
+              key={p.id}
+              className={`rounded-lg border bg-card p-5 flex flex-col ${
+                isCurrent ? "border-foreground" : "border-border"
+              }`}
+            >
+              <div className="flex items-baseline justify-between">
+                <h3 className="text-base font-semibold">{p.name}</h3>
+                {isCurrent && (
+                  <span className="text-[11px] font-medium text-muted-foreground">CURRENT</span>
+                )}
+              </div>
+              <div className="mt-2 flex items-baseline gap-1">
+                <span className="text-3xl font-semibold tracking-tight">{p.price}</span>
+                <span className="text-sm text-muted-foreground">/mo</span>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">{p.quota}</p>
+              <ul className="mt-4 space-y-1.5 text-sm flex-1">
+                {p.features.map((f) => (
+                  <li key={f} className="flex items-start gap-2">
+                    <Check className="h-4 w-4 mt-0.5 text-foreground shrink-0" />
+                    <span>{f}</span>
+                  </li>
+                ))}
+              </ul>
+              <Button
+                className="mt-5"
+                disabled={isCurrent || busy || !apiKey?.keyRaw}
+                variant={isCurrent ? "outline" : "default"}
+                onClick={() => upgrade(p.id)}
+              >
+                {isCurrent ? "Current plan" : busy ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Redirecting…</>
+                ) : "Upgrade"}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Payments are processed securely by Dodo Payments. You can change or cancel your plan at any time.
+      </p>
+      {/* refetch to keep TS happy about unused */}
+      <button className="hidden" onClick={() => { void refetch(); }} />
+      {usageLoading ? null : null}
+    </div>
+  );
+}

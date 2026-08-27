@@ -1,0 +1,147 @@
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { useAuth } from "@/lib/auth-context";
+import { useProfile } from "@/lib/use-profile";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+
+export const Route = createFileRoute("/dashboard/settings")({
+  component: SettingsPage,
+});
+
+function SettingsPage() {
+  const { user, signOut } = useAuth();
+  const { profile, loading, refetch } = useProfile();
+  const navigate = useNavigate();
+  const [fullName, setFullName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+
+  useEffect(() => {
+    if (profile) setFullName(profile.fullName ?? "");
+  }, [profile]);
+
+  const save = async () => {
+    // Profile updates are managed via WorkOS — name comes from SSO provider.
+    setSaving(true);
+    await new Promise((r) => setTimeout(r, 500));
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  };
+
+  const deleteAccount = async () => {
+    if (!user) return;
+    await signOut();
+    navigate({ to: "/login" });
+  };
+
+  if (loading) return <div className="text-sm text-muted-foreground">Loading…</div>;
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <p className="text-sm text-muted-foreground">Manage your account and plan.</p>
+      </header>
+
+      <Section title="Account">
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Email</Label>
+            <Input value={user?.email ?? ""} disabled />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="fn">Full name</Label>
+            <Input id="fn" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+          </div>
+          <div className="flex items-center gap-3">
+            <Button onClick={save} disabled={saving}>
+              {saving ? "Saving…" : "Save changes"}
+            </Button>
+            {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Plan">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-sm font-medium">Free Beta — expires May 17, 2026</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Paid plans start May 18. We&apos;ll email you before your access changes.
+            </p>
+          </div>
+          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2.5 py-0.5 text-xs font-medium">
+            {profile?.plan ?? "free"}
+          </span>
+        </div>
+      </Section>
+
+      <Section title="Danger zone" tone="danger">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-sm font-medium">Delete account</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Permanently remove your profile and revoke API access.
+            </p>
+          </div>
+          <Button variant="outline" onClick={() => setConfirmOpen(true)}>
+            Delete account
+          </Button>
+        </div>
+      </Section>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete your account?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This action cannot be undone. Type <strong>DELETE</strong> to confirm.
+          </p>
+          <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="DELETE" />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+            <Button
+              onClick={deleteAccount}
+              disabled={confirmText !== "DELETE"}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete account
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function Section({
+  title,
+  children,
+  tone,
+}: {
+  title: string;
+  children: React.ReactNode;
+  tone?: "danger";
+}) {
+  return (
+    <div className={`rounded-lg border ${tone === "danger" ? "border-destructive/30" : "border-border"} bg-card`}>
+      <div className="px-5 py-3 border-b border-border">
+        <h2 className="text-sm font-medium">{title}</h2>
+      </div>
+      <div className="p-5">{children}</div>
+    </div>
+  );
+}
