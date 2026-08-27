@@ -23,6 +23,8 @@ import {
   FileText,
   ChevronDown,
   ChevronRight,
+  FlaskConical,
+  UserRound,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Logo } from "@/components/Logo";
@@ -63,6 +65,7 @@ const NAV: NavItem[] = [
     children: [
       { to: "/dashboard/campaigns", label: "All Campaigns", icon: Megaphone, exact: true },
       { to: "/dashboard/lists", label: "Mailing Lists", icon: Users },
+      { to: "/dashboard/contacts", label: "Contacts", icon: UserRound },
     ],
   },
   {
@@ -74,6 +77,7 @@ const NAV: NavItem[] = [
       { to: "/dashboard/leads", label: "Leads", icon: Users },
       { to: "/dashboard/mailboxes", label: "Mailboxes", icon: Send },
       { to: "/dashboard/inbox", label: "Unified Inbox", icon: Inbox },
+      { to: "/dashboard/inbox-test", label: "Inbox Placement", icon: FlaskConical },
     ],
   },
   { to: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },

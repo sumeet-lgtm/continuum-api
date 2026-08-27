@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -100,7 +100,9 @@ function ListsPage() {
               <div className="flex items-center justify-between pt-1">
                 <span className="text-xs text-muted-foreground">{new Date(l.createdAt).toLocaleDateString()}</span>
                 <div className="flex gap-1">
-                  <Button variant="outline" size="sm">Manage</Button>
+                  <Link to="/dashboard/contacts" search={{ list: l.id }}>
+                    <Button variant="outline" size="sm">Manage</Button>
+                  </Link>
                   <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive"><Trash2 className="h-3.5 w-3.5" /></Button>
                 </div>
               </div>
