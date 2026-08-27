@@ -29,6 +29,7 @@ const createSchema = z.object({
   region: z.enum(['us-east-1', 'eu-west-1', 'ap-southeast-1']).default('us-east-1'),
   track_opens: z.boolean().default(true),
   track_clicks: z.boolean().default(true),
+  tracking_domain: z.string().min(3).max(253).optional(), // custom tracking subdomain e.g. "track.yourdomain.com"
 });
 
 function getDkimSecret(): string {
@@ -44,7 +45,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const parsed = createSchema.safeParse(request.body);
       if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-      const { name, region, track_opens, track_clicks } = parsed.data;
+      const { name, region, track_opens, track_clicks, tracking_domain } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
       const existing = await prisma.sendingDomain.findUnique({ where: { apiKeyId_name: { apiKeyId, name } } });
@@ -56,6 +57,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const domain = await prisma.sendingDomain.create({
         data: {
           apiKeyId, name, region, trackOpens: track_opens, trackClicks: track_clicks,
+          trackingDomain: tracking_domain ?? null,
           dkimSelector: kp.selector,
           dkimPublicKey: kp.publicKey,
           dkimPrivateKeyEnc: kp.privateKeyEnc,

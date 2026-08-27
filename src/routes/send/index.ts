@@ -139,11 +139,11 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       }
 
       // ── Resolve sending domain ────────────────────────────────────────────────
-      let sendingDomain: { id: string; name: string; trackOpens: boolean; trackClicks: boolean } | null = null;
+      let sendingDomain: { id: string; name: string; trackOpens: boolean; trackClicks: boolean; trackingDomain: string | null } | null = null;
       if (domain_id) {
         sendingDomain = await prisma.sendingDomain.findFirst({
           where: { id: domain_id, apiKeyId, status: 'verified' },
-          select: { id: true, name: true, trackOpens: true, trackClicks: true },
+          select: { id: true, name: true, trackOpens: true, trackClicks: true, trackingDomain: true },
         });
         if (!sendingDomain) throw Errors.validationFailed([{ field: 'domain_id', message: 'Domain not found or not verified.' }]);
       }
@@ -220,7 +220,8 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         if (trackOpens || trackClicks) {
           const openToken = trackOpens ? generateOpenToken(record.id) : '';
           const clickTokenFn = trackClicks ? (url: string) => generateClickToken(record.id, url) : (_: string) => _;
-          htmlBody = injectTracking(htmlBody, openToken, clickTokenFn);
+          const trackingBase = sendingDomain?.trackingDomain ? `https://${sendingDomain.trackingDomain}` : null;
+          htmlBody = injectTracking(htmlBody, openToken, clickTokenFn, trackingBase);
         }
       }
 

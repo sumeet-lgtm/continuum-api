@@ -484,6 +484,7 @@ model SendingDomain {
   returnPathStatus  String    @default("pending")
   trackOpens        Boolean   @default(true)
   trackClicks       Boolean   @default(true)
+  trackingDomain    String?   // custom tracking domain e.g. "track.yourdomain.com" — overrides api.continuumapi.com for pixels/redirects
   createdAt         DateTime  @default(now())
   verifiedAt        DateTime?
 

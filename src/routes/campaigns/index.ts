@@ -169,4 +169,66 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     });
     return reply.status(201).send(copy);
   });
+
+  // GET /v1/campaigns/:id/health — real-time deliverability health for a campaign
+  // Returns bounce rate, complaint rate, open rate, spam signal score 0-100
+  fastify.get('/campaigns/:id/health', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+
+    const campaign = await prisma.campaign.findFirst({
+      where: { id, apiKeyId },
+      select: {
+        id: true, name: true, status: true, totalRecipients: true,
+        sentCount: true, deliveredCount: true, openCount: true, clickCount: true,
+        bounceCount: true, complaintCount: true, sentAt: true,
+      },
+    });
+    if (!campaign) throw Errors.notFound('Campaign not found.');
+
+    const sent = campaign.sentCount || 1; // avoid div-by-zero
+    const bounceRate = campaign.bounceCount / sent;
+    const complaintRate = campaign.complaintCount / sent;
+    const openRate = campaign.openCount / sent;
+    const clickRate = campaign.clickCount / sent;
+    const deliveryRate = campaign.deliveredCount / sent;
+
+    // Spam signal score: 0 (bad) to 100 (perfect)
+    // Weights: bounce rate 50pts, complaint rate 30pts, delivery rate 20pts
+    const bounceScore = Math.max(0, 50 - Math.round(bounceRate * 1000)); // 5% bounce = 0pts
+    const complaintScore = Math.max(0, 30 - Math.round(complaintRate * 3000)); // 1% complaint = 0pts
+    const deliveryScore = Math.round(deliveryRate * 20);
+    const healthScore = Math.min(100, bounceScore + complaintScore + deliveryScore);
+
+    // Signal flags
+    const signals: Array<{ type: 'warning' | 'critical' | 'good'; message: string }> = [];
+    if (bounceRate > 0.05) signals.push({ type: 'critical', message: `High bounce rate: ${(bounceRate * 100).toFixed(1)}% (limit: 5%)` });
+    else if (bounceRate > 0.02) signals.push({ type: 'warning', message: `Elevated bounce rate: ${(bounceRate * 100).toFixed(1)}%` });
+    if (complaintRate > 0.001) signals.push({ type: 'critical', message: `Complaint rate above threshold: ${(complaintRate * 100).toFixed(2)}% (limit: 0.1%)` });
+    if (deliveryRate < 0.9) signals.push({ type: 'warning', message: `Low delivery rate: ${(deliveryRate * 100).toFixed(1)}%` });
+    if (signals.length === 0 && sent > 10) signals.push({ type: 'good', message: 'All deliverability metrics within healthy range' });
+
+    return reply.status(200).send({
+      campaign_id: campaign.id,
+      campaign_name: campaign.name,
+      status: campaign.status,
+      health_score: healthScore,
+      signals,
+      metrics: {
+        total_recipients: campaign.totalRecipients,
+        sent: campaign.sentCount,
+        delivered: campaign.deliveredCount,
+        opened: campaign.openCount,
+        clicked: campaign.clickCount,
+        bounced: campaign.bounceCount,
+        complained: campaign.complaintCount,
+        delivery_rate: parseFloat((deliveryRate * 100).toFixed(2)),
+        open_rate: parseFloat((openRate * 100).toFixed(2)),
+        click_rate: parseFloat((clickRate * 100).toFixed(2)),
+        bounce_rate: parseFloat((bounceRate * 100).toFixed(2)),
+        complaint_rate: parseFloat((complaintRate * 100).toFixed(3)),
+      },
+      sent_at: campaign.sentAt,
+    });
+  });
 }
