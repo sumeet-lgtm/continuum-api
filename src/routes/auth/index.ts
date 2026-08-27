@@ -5,6 +5,7 @@ import { signSession, verifySession } from '../../lib/session.js';
 import { config } from '../../config.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { sendEmail, welcomeEmail, loginAlertEmail } from '../../lib/email.js';
+import { hashApiKey } from '../../lib/crypto.js';
 
 let _workos: WorkOS | null = null;
 
@@ -102,11 +103,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
       if (!apiKey) {
         const raw = `cont_live_${crypto.randomUUID().replace(/-/g, '')}`;
-        const hashBuf = await crypto.subtle.digest(
-          'SHA-256',
-          new TextEncoder().encode(config.API_KEY_SALT + raw),
-        );
-        const keyHash = Buffer.from(hashBuf).toString('hex');
+        const keyHash = hashApiKey(raw);
 
         apiKey = await prisma.apiKey.create({
           data: {
