@@ -29,7 +29,7 @@ function LoginPage() {
         <div className="rounded-lg border border-border bg-card p-8 shadow-sm text-center space-y-4">
           <h1 className="text-xl font-semibold tracking-tight">Sign in to Continuum</h1>
           <p className="text-sm text-muted-foreground">
-            Use your company email — Google, Microsoft, or any SSO provider.
+            Sign in with Google, GitHub, email magic link, or your company SSO.
           </p>
           {hasError && (
             <div className="rounded-md bg-destructive/10 border border-destructive/20 px-3 py-2 text-left">
@@ -40,10 +40,10 @@ function LoginPage() {
             </div>
           )}
           <Button className="w-full" size="lg" onClick={signIn} disabled={loading}>
-            Continue with SSO →
+            Continue →
           </Button>
           <p className="text-xs text-muted-foreground">
-            No password needed. We use WorkOS AuthKit for secure sign-in.
+            No password needed.
           </p>
         </div>
         <p className="mt-6 text-center text-sm text-muted-foreground">
