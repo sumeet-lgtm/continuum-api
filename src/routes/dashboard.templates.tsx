@@ -30,7 +30,7 @@ function TemplatesPage() {
     if (!primaryKey?.keyRaw) return;
     api.withKey
       .get<{ templates: Template[] }>("/v1/templates", primaryKey.keyRaw)
-      .then((r) => setTemplates(r.data ?? r.templates ?? []))
+      .then((r) => setTemplates(r.templates ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };
