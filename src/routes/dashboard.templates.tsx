@@ -13,7 +13,7 @@ export const Route = createFileRoute("/dashboard/templates")({
   component: TemplatesPage,
 });
 
-interface Template { id: string; name: string; subject: string; createdAt: string; }
+interface Template { id: string; name: string; subject: string; htmlBody?: string; createdAt: string; }
 
 function TemplatesPage() {
   const { primaryKey } = useAuth();
@@ -22,6 +22,9 @@ function TemplatesPage() {
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ name: "", subject: "", html: "" });
   const [saving, setSaving] = useState(false);
+  const [editTarget, setEditTarget] = useState<Template | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", subject: "", html: "" });
+  const [editSaving, setEditSaving] = useState(false);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -50,6 +53,27 @@ function TemplatesPage() {
     }
   };
 
+  const openEdit = (t: Template) => {
+    setEditTarget(t);
+    setEditForm({ name: t.name, subject: t.subject, html: t.htmlBody ?? "" });
+  };
+
+  const saveEdit = async () => {
+    if (!primaryKey?.keyRaw || !editTarget) return;
+    setEditSaving(true);
+    try {
+      await fetch(`https://api.continuumapi.com/v1/templates/${editTarget.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
+        body: JSON.stringify({ name: editForm.name, subject: editForm.subject, html_body: editForm.html }),
+      });
+      setTemplates((ts) => ts.map((t) => t.id === editTarget.id ? { ...t, name: editForm.name, subject: editForm.subject } : t));
+      toast.success("Template updated");
+      setEditTarget(null);
+    } catch (e: unknown) { toast.error((e as Error).message); }
+    finally { setEditSaving(false); }
+  };
+
   const del = async (id: string) => {
     if (!primaryKey?.keyRaw || !confirm("Delete this template?")) return;
     try {
@@ -75,6 +99,34 @@ function TemplatesPage() {
           <Plus className="h-4 w-4" /> New Template
         </Button>
       </div>
+
+      {editTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="rounded-lg border border-border bg-card p-6 w-full max-w-2xl space-y-4 shadow-xl">
+            <h2 className="text-sm font-semibold">Edit Template</h2>
+            <div className="space-y-1.5">
+              <Label>Name</Label>
+              <Input value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Subject</Label>
+              <Input value={editForm.subject} onChange={(e) => setEditForm((f) => ({ ...f, subject: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>HTML Body</Label>
+              <textarea
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[120px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={editForm.html}
+                onChange={(e) => setEditForm((f) => ({ ...f, html: e.target.value }))}
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={saveEdit} disabled={editSaving}>{editSaving ? "Saving…" : "Save Changes"}</Button>
+              <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {creating && (
         <div className="rounded-lg border border-border bg-card p-6 space-y-4 max-w-2xl">
@@ -130,7 +182,7 @@ function TemplatesPage() {
                   <td className="px-5 py-3 text-muted-foreground">{new Date(t.createdAt).toLocaleDateString()}</td>
                   <td className="px-5 py-3">
                     <div className="flex gap-1">
-                      <Button variant="ghost" size="icon" className="h-7 w-7"><Edit2 className="h-3.5 w-3.5" /></Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(t)}><Edit2 className="h-3.5 w-3.5" /></Button>
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => del(t.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
                     </div>
                   </td>

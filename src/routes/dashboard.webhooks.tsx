@@ -33,9 +33,9 @@ interface Webhook {
 interface Delivery {
   id: string;
   event: string;
-  responseStatus: number | null;
-  attemptCount: number | null;
-  deliveredAt: string | null;
+  statusCode: number | null;
+  attempts: number | null;
+  lastAttemptAt: string | null;
 }
 
 const EVENTS: { value: string; label: string; group: string }[] = [
@@ -81,7 +81,7 @@ function WebhooksPage() {
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/v1/webhooks`, {
-        headers: { Authorization: `Bearer ${apiKey.keyRaw}` },
+        headers: { "X-API-Key": apiKey.keyRaw },
       });
       if (res.ok) {
         const data = await res.json();
@@ -107,7 +107,7 @@ function WebhooksPage() {
       const res = await fetch(`${API_BASE}/v1/webhooks`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiKey.keyRaw}`,
+          "X-API-Key": apiKey.keyRaw,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ url, events: selected }),
@@ -151,7 +151,7 @@ function WebhooksPage() {
     await fetch(`${API_BASE}/v1/webhooks/${w.id}`, {
       method: "PATCH",
       headers: {
-        Authorization: `Bearer ${apiKey.keyRaw}`,
+        "X-API-Key": apiKey.keyRaw,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ isActive: !w.isActive }),
@@ -164,7 +164,7 @@ function WebhooksPage() {
     if (!confirm("Delete this webhook?")) return;
     await fetch(`${API_BASE}/v1/webhooks/${w.id}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${apiKey.keyRaw}` },
+      headers: { "X-API-Key": apiKey.keyRaw },
     });
     if (active?.id === w.id) setActive(null);
     await load();
@@ -173,9 +173,9 @@ function WebhooksPage() {
   const sendPing = async (w: Webhook) => {
     if (!apiKey?.keyRaw) return;
     try {
-      await fetch(`${API_BASE}/v1/webhooks/${w.id}/test`, {
+      await fetch(`${API_BASE}/v1/webhooks/${w.id}/ping`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${apiKey.keyRaw}`, "x-api-key": apiKey.keyRaw },
+        headers: { "X-API-Key": apiKey.keyRaw! },
       });
       toast.success("Test ping sent");
     } catch (e) {
@@ -270,10 +270,10 @@ function WebhooksPage() {
                 {deliveries.map((d) => (
                   <tr key={d.id} className="border-b border-border last:border-0">
                     <td className="px-5 py-2 text-xs font-mono">{d.event}</td>
-                    <td className="px-5 py-2 text-xs tabular-nums">{d.responseStatus ?? "—"}</td>
-                    <td className="px-5 py-2 text-xs tabular-nums">{d.attemptCount ?? 1}</td>
+                    <td className="px-5 py-2 text-xs tabular-nums">{d.statusCode ?? "—"}</td>
+                    <td className="px-5 py-2 text-xs tabular-nums">{d.attempts ?? 1}</td>
                     <td className="px-5 py-2 text-xs text-muted-foreground text-right">
-                      {d.deliveredAt ? new Date(d.deliveredAt).toLocaleString() : "—"}
+                      {d.lastAttemptAt ? new Date(d.lastAttemptAt).toLocaleString() : "—"}
                     </td>
                   </tr>
                 ))}

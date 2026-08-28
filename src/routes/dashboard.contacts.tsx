@@ -74,8 +74,15 @@ function ContactsPage() {
     if (!primaryKey?.keyRaw || !selectedList) return;
     setLoading(true);
     api.withKey
-      .get<{ data: Contact[] }>(`/v1/lists/${selectedList}/contacts?page=1&limit=100${search ? `&search=${encodeURIComponent(search)}` : ""}`, primaryKey.keyRaw)
-      .then((r) => setContacts(r.data ?? []))
+      .get<{ data: { id: string; status: string; subscribedAt: string; contact: { email: string; firstName: string | null; lastName: string | null } }[] }>(`/v1/lists/${selectedList}/contacts?page=1&limit=100${search ? `&search=${encodeURIComponent(search)}` : ""}`, primaryKey.keyRaw)
+      .then((r) => setContacts((r.data ?? []).map((m) => ({
+        id: m.id,
+        email: m.contact?.email ?? "",
+        firstName: m.contact?.firstName ?? null,
+        lastName: m.contact?.lastName ?? null,
+        status: m.status,
+        subscribedAt: m.subscribedAt,
+      }))))
       .catch(() => {})
       .finally(() => setLoading(false));
   };

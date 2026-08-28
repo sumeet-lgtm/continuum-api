@@ -104,11 +104,11 @@ function SequencesPage() {
     try {
       await api.withKey.post("/v1/sequences", {
         name: form.name,
-        fromName: form.fromName,
-        fromEmail: form.fromEmail,
-        stopOnReply: true,
-        trackOpens: true,
-        trackClicks: true,
+        from_name: form.fromName,
+        from_email: form.fromEmail,
+        stop_on_reply: true,
+        track_opens: true,
+        track_clicks: true,
       }, primaryKey.keyRaw);
       toast.success("Sequence created");
       setCreating(false);

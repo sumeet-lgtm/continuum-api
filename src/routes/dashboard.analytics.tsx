@@ -16,7 +16,7 @@ interface SendStats {
   opens: number; clicks: number; delivery_rate: number; open_rate: number;
   click_rate: number; bounce_rate: number; complaint_rate: number;
 }
-interface TimelinePoint { date: string; sent: number; opens: number; clicks: number; }
+interface TimelinePoint { date: string; sent: number; delivered: number; bounced: number; }
 interface CampaignStat { id: string; subject: string; status: string; sentAt: string | null; totalRecipients: number; sentCount: number; deliveredCount: number; openCount: number; clickCount: number; delivery_rate: number; open_rate: number; click_rate: number; bounce_rate: number; }
 interface SequenceStat { id: string; name: string; status: string; total_enrolled: number; active: number; completed: number; replied: number; bounced: number; reply_rate: number; completion_rate: number; }
 interface WarmupConfig { enabled: boolean; targetPerDay: number; currentPerDay: number; rampUpDays: number; startedAt: string; }
@@ -150,8 +150,8 @@ function AnalyticsPage() {
                     <YAxis tick={{ fontSize: 10, fill: "oklch(0.45 0 0)" }} allowDecimals={false} />
                     <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }} />
                     <Area type="monotone" dataKey="sent" stroke="oklch(0.145 0 0)" strokeWidth={2} fill="url(#sent)" dot={false} name="Sent" />
-                    <Area type="monotone" dataKey="opens" stroke="oklch(0.55 0.15 250)" strokeWidth={1.5} fill="none" dot={false} name="Opens" />
-                    <Area type="monotone" dataKey="clicks" stroke="oklch(0.55 0.15 300)" strokeWidth={1.5} fill="none" dot={false} name="Clicks" />
+                    <Area type="monotone" dataKey="delivered" stroke="oklch(0.55 0.15 250)" strokeWidth={1.5} fill="none" dot={false} name="Delivered" />
+                    <Area type="monotone" dataKey="bounced" stroke="oklch(0.55 0.15 300)" strokeWidth={1.5} fill="none" dot={false} name="Bounced" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>

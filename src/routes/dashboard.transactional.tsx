@@ -52,7 +52,7 @@ function TransactionalPage() {
     try {
       const body: Record<string, unknown> = {
         from: form.from,
-        to: form.to.split(",").map((s) => s.trim()).filter(Boolean),
+        to: form.to.trim(),
         subject: form.subject || undefined,
         html_body: form.html || undefined,
         text_body: form.text || undefined,
@@ -94,7 +94,7 @@ function TransactionalPage() {
             <Input placeholder="noreply@yourapp.com" value={form.from} onChange={set("from")} />
           </div>
           <div className="space-y-1.5">
-            <Label>To * (comma-separated)</Label>
+            <Label>To *</Label>
             <Input placeholder="user@example.com" value={form.to} onChange={set("to")} />
           </div>
         </div>

@@ -55,6 +55,24 @@ function csvEscape(v: string | number | null | undefined) {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+const jobIdsKey = (keyId: string) => `continuum_bulk_job_ids_${keyId}`;
+
+function storeJobId(keyId: string, jobId: string) {
+  try {
+    const stored: string[] = JSON.parse(localStorage.getItem(jobIdsKey(keyId)) ?? "[]");
+    if (!stored.includes(jobId)) {
+      stored.unshift(jobId);
+      localStorage.setItem(jobIdsKey(keyId), JSON.stringify(stored.slice(0, 50)));
+    }
+  } catch { /* localStorage unavailable */ }
+}
+
+function getJobIds(keyId: string): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(jobIdsKey(keyId)) ?? "[]");
+  } catch { return []; }
+}
+
 function BulkPage() {
   const { apiKey } = useApiKey();
   const [jobs, setJobs] = useState<BulkJob[]>([]);
@@ -67,14 +85,24 @@ function BulkPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
-    if (!apiKey) {
+    if (!apiKey?.keyRaw) {
       setLoading(false);
       return;
     }
     setLoading(true);
-    const res = await fetch(`${API_BASE}/v1/bulk-jobs?limit=50`, { headers: { "X-API-Key": apiKey.keyRaw ?? "" } });
-    const data = res.ok ? await res.json() : [];
-    setJobs((data ?? []) as BulkJob[]);
+    const ids = getJobIds(apiKey.id);
+    if (ids.length === 0) {
+      setJobs([]);
+      setLoading(false);
+      return;
+    }
+    const fetched = await Promise.all(ids.map(async (id) => {
+      try {
+        const res = await fetch(`${API_BASE}/v1/bulk-jobs/${id}`, { headers: { "X-API-Key": apiKey.keyRaw! } });
+        return res.ok ? (await res.json()) as BulkJob : null;
+      } catch { return null; }
+    }));
+    setJobs(fetched.filter(Boolean) as BulkJob[]);
     setLoading(false);
   };
 
@@ -109,7 +137,7 @@ function BulkPage() {
         const updates = await Promise.all(
           activeJobs.map(async (j) => {
             const res = await fetch(`${API_BASE}/v1/bulk-jobs/${j.id}`, {
-              headers: { Authorization: `Bearer ${key}` },
+              headers: { "X-API-Key": key },
             });
             if (!res.ok) return null;
             const body = (await res.json()) as Partial<BulkJob> & { id: string };
@@ -158,12 +186,11 @@ function BulkPage() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const status = await new Promise<number>((resolve, reject) => {
+      const [status, responseText] = await new Promise<[number, string]>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         const timeoutId = setTimeout(() => xhr.abort(), 60_000);
         xhr.open("POST", `${API_BASE}/v1/bulk-jobs`);
-        xhr.setRequestHeader("Authorization", `Bearer ${apiKey.keyRaw!}`);
-        xhr.setRequestHeader("x-api-key", apiKey.keyRaw!);
+        xhr.setRequestHeader("X-API-Key", apiKey.keyRaw!);
         xhr.upload.onprogress = (ev) => {
           if (ev.lengthComputable) {
             setUploadProgress(Math.round((ev.loaded / ev.total) * 100));
@@ -172,7 +199,7 @@ function BulkPage() {
         xhr.upload.onload = () => setUploadProgress(100);
         xhr.onload = () => {
           clearTimeout(timeoutId);
-          resolve(xhr.status);
+          resolve([xhr.status, xhr.responseText]);
         };
         xhr.onerror = () => {
           clearTimeout(timeoutId);
@@ -186,6 +213,12 @@ function BulkPage() {
       });
       if (status < 200 || status >= 300) {
         alert(`Upload failed (${status})`);
+      } else {
+        try {
+          const parsed = JSON.parse(responseText);
+          const jobId = parsed.id ?? parsed.job_id;
+          if (jobId) storeJobId(apiKey.id, jobId);
+        } catch { /* response not JSON */ }
       }
       await load();
     } catch (e) {
@@ -205,8 +238,8 @@ function BulkPage() {
     setActive(job);
     setResults([]);
     const res = await fetch(`${API_BASE}/v1/bulk-jobs/${job.id}/results?limit=200`, { headers: { "X-API-Key": apiKey?.keyRaw ?? "" } });
-    const data = res.ok ? await res.json() : [];
-    setResults((data ?? []) as BulkRow[]);
+    const data = res.ok ? await res.json() : {};
+    setResults((Array.isArray(data) ? data : (data?.data ?? [])) as BulkRow[]);
   };
 
   const downloadResults = async () => {

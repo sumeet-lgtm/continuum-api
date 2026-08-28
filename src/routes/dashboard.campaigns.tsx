@@ -37,7 +37,7 @@ function CampaignsPage() {
   const [lists, setLists] = useState<MailingList[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "" });
+  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "" });
   const [saving, setSaving] = useState(false);
   const [testTarget, setTestTarget] = useState<string | null>(null);
   const [testEmail, setTestEmail] = useState("");
@@ -67,6 +67,7 @@ function CampaignsPage() {
     setSaving(true);
     try {
       await api.withKey.post("/v1/campaigns", {
+        name: form.name || form.subject,
         from_name: form.fromName,
         from_email: form.fromEmail,
         subject: form.subject,
@@ -75,7 +76,7 @@ function CampaignsPage() {
       }, primaryKey.keyRaw);
       toast.success("Campaign created as draft");
       setCreating(false);
-      setForm({ fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "" });
+      setForm({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "" });
       load();
     } catch (e: unknown) {
       toast.error((e as Error).message);
@@ -137,6 +138,10 @@ function CampaignsPage() {
       {creating && (
         <div className="rounded-lg border border-border bg-card p-6 space-y-4 max-w-2xl">
           <h2 className="text-sm font-semibold">New Campaign</h2>
+          <div className="space-y-1.5">
+            <Label>Campaign name</Label>
+            <Input placeholder="May Newsletter" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>From name</Label>

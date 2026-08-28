@@ -16,7 +16,7 @@ interface Reply {
   fromEmail: string;
   subject: string | null;
   receivedAt: string;
-  sequenceEnrollmentId: string | null;
+  enrollmentId: string | null;
   mailboxId: string;
 }
 
@@ -101,7 +101,7 @@ function InboxPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-sm truncate">{r.fromEmail}</span>
-                      {r.sequenceEnrollmentId && (
+                      {r.enrollmentId && (
                         <span className="text-xs bg-muted px-1.5 py-0.5 rounded">Sequence reply</span>
                       )}
                       {classification && (

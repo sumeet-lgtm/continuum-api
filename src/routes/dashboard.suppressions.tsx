@@ -38,18 +38,18 @@ function SuppressionsPage() {
   const [search, setSearch] = useState("");
   const [reason, setReason] = useState("manual");
 
-  const load = (q = search) => {
+  const load = () => {
     if (!primaryKey?.keyRaw) return;
-    const params = new URLSearchParams({ page: "1", limit: "100" });
-    if (q) params.set("email", q);
     api.withKey
-      .get<{ data: Suppression[]; total: number }>(`/v1/suppressions?${params}`, primaryKey.keyRaw)
+      .get<{ data: Suppression[]; total: number }>("/v1/suppressions?page=1&limit=200", primaryKey.keyRaw)
       .then((r) => { setSuppressions(r.data ?? []); setTotal(r.total ?? 0); })
       .catch(() => {})
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); }, [primaryKey]);
+
+  const filtered = search ? suppressions.filter((s) => s.email.toLowerCase().includes(search.toLowerCase())) : suppressions;
 
   const add = async () => {
     if (!primaryKey?.keyRaw || !email.trim()) return;
@@ -110,9 +110,6 @@ function SuppressionsPage() {
               onChange={(e) => setReason(e.target.value)}
             >
               <option value="manual">Manual block</option>
-              <option value="bounce">Hard bounce</option>
-              <option value="complaint">Spam complaint</option>
-              <option value="unsubscribe">Unsubscribed</option>
             </select>
           </div>
           <div className="flex gap-2">
@@ -129,7 +126,7 @@ function SuppressionsPage() {
             placeholder="Search by email…"
             className="pl-9"
             value={search}
-            onChange={(e) => { setSearch(e.target.value); load(e.target.value); }}
+            onChange={(e) => setSearch(e.target.value)}
           />
         </div>
         <span className="text-sm text-muted-foreground tabular-nums">{total.toLocaleString()} total</span>
@@ -137,10 +134,10 @@ function SuppressionsPage() {
 
       {loading ? (
         <div className="text-sm text-muted-foreground">Loading…</div>
-      ) : suppressions.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <div className="rounded-lg border border-border bg-card p-10 text-center">
           <ShieldOff className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
-          <p className="text-sm text-muted-foreground">No suppressions yet.</p>
+          <p className="text-sm text-muted-foreground">{search ? "No results match your search." : "No suppressions yet."}</p>
           <p className="text-xs text-muted-foreground mt-1">Emails are auto-added here on hard bounce or spam complaint. You can also add manually.</p>
         </div>
       ) : (
@@ -155,7 +152,7 @@ function SuppressionsPage() {
               </tr>
             </thead>
             <tbody>
-              {suppressions.map((s) => (
+              {filtered.map((s) => (
                 <tr key={s.id} className="border-b border-border last:border-0 hover:bg-muted/20">
                   <td className="px-5 py-3 font-mono text-xs">{s.email}</td>
                   <td className="px-5 py-3">

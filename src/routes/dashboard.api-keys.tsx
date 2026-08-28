@@ -219,9 +219,9 @@ function ApiKeysPage() {
                   <label className="text-xs text-muted-foreground">Key</label>
                   <MaskedKey prefix={k.keyPrefix ?? "cnt_"} raw={k.keyRaw} />
                   <p className="mt-1.5 text-xs text-muted-foreground">
-                    {k.currentMonthUsage.toLocaleString()} API calls this month
+                    {(k.currentMonthUsage ?? 0).toLocaleString()} API calls this month
                     {k.monthlyLimit ? ` / ${k.monthlyLimit.toLocaleString()} limit` : ""}
-                    {k.currentMonthSendUsage > 0
+                    {(k.currentMonthSendUsage ?? 0) > 0
                       ? ` · ${k.currentMonthSendUsage.toLocaleString()} emails sent`
                       : ""}
                   </p>
