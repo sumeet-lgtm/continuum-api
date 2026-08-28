@@ -285,18 +285,28 @@ function LandingPage() {
         </div>
       </section>
 
-      {/* Tools replaced */}
+      {/* What you get */}
       <section style={{ borderTop: `1px solid ${C.border}`, padding: "60px 48px", maxWidth: 1100, margin: "0 auto" }}>
-        <p style={{ fontSize: 11, fontFamily: "ui-monospace, monospace", color: C.dim, letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 24, textAlign: "center" }}>REPLACES</p>
-        <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-          {["Sendgrid", "Mailchimp", "Smartlead", "Instantly", "MillionVerifier", "Warmbox", "Postmark", "Resend"].map(t => (
-            <span key={t} style={{ fontSize: 12, color: C.dim, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 12px", textDecoration: "line-through", textDecorationColor: C.border }}>
-              {t}
-            </span>
+        <p style={{ fontSize: 11, fontFamily: "ui-monospace, monospace", color: C.dim, letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 40, textAlign: "center" }}>ONE API. EIGHT CAPABILITIES.</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, background: C.border }}>
+          {[
+            { api: "POST /v1/verify", label: "Email Verification" },
+            { api: "POST /v1/send", label: "Transactional Send" },
+            { api: "POST /v1/campaigns", label: "Newsletter Campaigns" },
+            { api: "POST /v1/sequences", label: "Cold Outreach Sequences" },
+            { api: "POST /v1/mailboxes/warmup", label: "Inbox Warmup" },
+            { api: "POST /v1/inbox-test", label: "Placement Testing" },
+            { api: "POST /v1/leads", label: "Lead Management" },
+            { api: "GET /v1/analytics", label: "Deliverability Analytics" },
+          ].map((item, i) => (
+            <div key={i} style={{ background: C.bg, padding: "20px 20px" }}>
+              <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 10, color: C.dim, marginBottom: 8 }}>{item.api}</div>
+              <div style={{ fontSize: 12, color: C.muted, fontWeight: 500 }}>{item.label}</div>
+            </div>
           ))}
         </div>
-        <p style={{ textAlign: "center", color: C.muted, fontSize: 13, marginTop: 20 }}>
-          One API key. One invoice. One place to look when deliverability breaks.
+        <p style={{ textAlign: "center", color: C.dim, fontSize: 12, marginTop: 20, fontFamily: "ui-monospace, monospace" }}>
+          One API key. One invoice. One dashboard.
         </p>
       </section>
 
