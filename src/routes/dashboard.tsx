@@ -27,6 +27,7 @@ import {
   UserRound,
   ShieldOff,
   SlidersHorizontal,
+  Layers,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Logo } from "@/components/Logo";
@@ -55,6 +56,7 @@ const NAV: NavItem[] = [
     icon: Send,
     children: [
       { to: "/dashboard/transactional", label: "Send Email", icon: Send, exact: true },
+      { to: "/dashboard/batch-send", label: "Batch Send", icon: Layers },
       { to: "/dashboard/messages", label: "Message History", icon: Mail },
       { to: "/dashboard/templates", label: "Templates", icon: FileText },
       { to: "/dashboard/domains", label: "Sending Domains", icon: ServerCog },
