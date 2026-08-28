@@ -108,6 +108,7 @@ function DashboardLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [openGroups, setOpenGroups] = useState<Set<string>>(DEFAULT_OPEN);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) navigate({ to: "/login" });
@@ -215,15 +216,45 @@ function DashboardLayout() {
       </aside>
 
       {/* Mobile top bar */}
-      <header className="md:hidden flex items-center justify-between border-b border-border bg-[var(--sidebar-bg)] px-4 py-3 sticky top-0 z-10">
+      <header className="md:hidden flex items-center justify-between border-b border-border bg-[var(--sidebar-bg)] px-4 py-3 sticky top-0 z-20">
         <div className="flex items-center gap-2">
           <Logo size={22} />
           <span className="text-sm font-semibold">Continuum API</span>
         </div>
-        <button onClick={signOut} className="text-xs text-muted-foreground">
-          Sign out
+        <button
+          onClick={() => setMobileNavOpen(o => !o)}
+          className="flex items-center justify-center w-8 h-8 rounded-md border border-border text-muted-foreground"
+          aria-label="Menu"
+        >
+          {mobileNavOpen ? (
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+          ) : (
+            <svg width="14" height="12" viewBox="0 0 14 12" fill="none"><path d="M0 1h14M0 6h14M0 11h14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+          )}
         </button>
       </header>
+
+      {/* Mobile nav drawer */}
+      {mobileNavOpen && (
+        <div className="md:hidden fixed inset-0 z-10 bg-background pt-[53px] overflow-y-auto" onClick={(e) => { if (e.target === e.currentTarget) setMobileNavOpen(false); }}>
+          <nav className="px-3 pt-3 pb-8 space-y-0.5">
+            {NAV.map((item) => renderNavItem(item))}
+          </nav>
+          <div className="border-t border-border mx-3 pt-3 pb-6">
+            <div className="px-2 py-1.5 mb-1">
+              <p className="text-xs font-medium truncate">{displayName}</p>
+              <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+            </div>
+            <button
+              onClick={() => { setMobileNavOpen(false); signOut(); }}
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-background hover:text-foreground transition-colors"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main */}
       <main className="md:ml-60 pb-20 md:pb-0">
