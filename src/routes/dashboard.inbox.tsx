@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
-import { Inbox, RefreshCw, MailOpen, Archive } from "lucide-react";
+import { Inbox, RefreshCw, MailOpen, Sparkles } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/inbox")({
   head: () => ({ meta: [{ title: "Unified Inbox — Continuum API" }] }),
@@ -19,22 +20,53 @@ interface Reply {
   mailboxId: string;
 }
 
+interface ClassifyResult {
+  category: string;
+  confidence: number;
+  suggested_action: string;
+}
+
+const CATEGORY_COLORS: Record<string, string> = {
+  interested: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+  not_interested: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  out_of_office: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+  question: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+};
+
 function InboxPage() {
   const { primaryKey } = useAuth();
   const [replies, setReplies] = useState<Reply[]>([]);
   const [loading, setLoading] = useState(true);
+  const [classifyResults, setClassifyResults] = useState<Record<string, ClassifyResult>>({});
+  const [classifyingId, setClassifyingId] = useState<string | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
     setLoading(true);
     api.withKey
-      .get<{ replies: Reply[]; total: number }>("/v1/inbox?page=1&limit=50", primaryKey.keyRaw)
+      .get<{ data?: Reply[]; replies?: Reply[]; total: number }>("/v1/inbox?page=1&limit=50", primaryKey.keyRaw)
       .then((r) => setReplies(r.data ?? r.replies ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); }, [primaryKey]);
+
+  const classify = async (r: Reply) => {
+    if (!primaryKey?.keyRaw || classifyingId) return;
+    setClassifyingId(r.id);
+    try {
+      const res = await fetch("https://api.continuumapi.com/v1/ai/classify-reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
+        body: JSON.stringify({ subject: r.subject ?? undefined, body: r.subject ?? "reply" }),
+      });
+      const data = await res.json().catch(() => null) as ClassifyResult | { error?: string };
+      if (!res.ok) throw new Error((data as { error?: string })?.error ?? `Failed (${res.status})`);
+      setClassifyResults((prev) => ({ ...prev, [r.id]: data as ClassifyResult }));
+    } catch (e: unknown) { toast.error((e as Error).message); }
+    finally { setClassifyingId(null); }
+  };
 
   return (
     <div className="space-y-6">
@@ -59,26 +91,49 @@ function InboxPage() {
       ) : (
         <div className="rounded-lg border border-border bg-card overflow-hidden">
           <div className="divide-y divide-border">
-            {replies.map((r) => (
-              <div key={r.id} className="flex items-start gap-4 p-4 hover:bg-muted/20 transition-colors">
-                <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
-                  <MailOpen className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-sm truncate">{r.fromEmail}</span>
-                    {r.sequenceEnrollmentId && (
-                      <span className="text-xs bg-muted px-1.5 py-0.5 rounded">Sequence reply</span>
+            {replies.map((r) => {
+              const classification = classifyResults[r.id];
+              return (
+                <div key={r.id} className="flex items-start gap-4 p-4 hover:bg-muted/20 transition-colors">
+                  <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
+                    <MailOpen className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm truncate">{r.fromEmail}</span>
+                      {r.sequenceEnrollmentId && (
+                        <span className="text-xs bg-muted px-1.5 py-0.5 rounded">Sequence reply</span>
+                      )}
+                      {classification && (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${CATEGORY_COLORS[classification.category] ?? "bg-muted text-muted-foreground"}`}>
+                          {classification.category.replace(/_/g, " ")}
+                          {" "}· {Math.round(classification.confidence * 100)}%
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-muted-foreground truncate">{r.subject ?? "(no subject)"}</p>
+                    {classification?.suggested_action && (
+                      <p className="text-xs text-muted-foreground mt-0.5 italic">{classification.suggested_action}</p>
                     )}
                   </div>
-                  <p className="text-sm text-muted-foreground truncate">{r.subject ?? "(no subject)"}</p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs text-muted-foreground">{new Date(r.receivedAt).toLocaleString()}</span>
+                    {!classification && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 gap-1 text-xs"
+                        disabled={classifyingId === r.id}
+                        onClick={() => classify(r)}
+                      >
+                        <Sparkles className="h-3 w-3" />
+                        {classifyingId === r.id ? "…" : "Classify"}
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs text-muted-foreground">{new Date(r.receivedAt).toLocaleString()}</span>
-                  <Button variant="ghost" size="icon" className="h-7 w-7"><Archive className="h-3.5 w-3.5" /></Button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

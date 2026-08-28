@@ -1,10 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { useEffect, useState, useCallback } from "react";
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { StatusBadge } from "@/components/StatusBadge";
-import { BarChart3, TrendingUp, MousePointerClick, AlertCircle, GitBranch, Megaphone } from "lucide-react";
+import { BarChart3, TrendingUp, MousePointerClick, AlertCircle, GitBranch, Megaphone, Mail, ChevronDown, ChevronRight } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/analytics")({
   head: () => ({ meta: [{ title: "Analytics — Continuum API" }] }),
@@ -19,8 +19,12 @@ interface SendStats {
 interface TimelinePoint { date: string; sent: number; opens: number; clicks: number; }
 interface CampaignStat { id: string; subject: string; status: string; sentAt: string | null; totalRecipients: number; sentCount: number; deliveredCount: number; openCount: number; clickCount: number; delivery_rate: number; open_rate: number; click_rate: number; bounce_rate: number; }
 interface SequenceStat { id: string; name: string; status: string; total_enrolled: number; active: number; completed: number; replied: number; bounced: number; reply_rate: number; completion_rate: number; }
+interface WarmupConfig { enabled: boolean; targetPerDay: number; currentPerDay: number; rampUpDays: number; startedAt: string; }
+interface MailboxStat { id: string; username: string; type: string; status: string; sentToday: number; dailyLimit: number; warmupConfig: WarmupConfig | null; }
+interface DailyBreakdown { date: string; sent: number; replied: number; bounced: number; }
+interface MailboxDetail extends MailboxStat { daily_breakdown: DailyBreakdown[]; }
 
-type Tab = "overview" | "campaigns" | "sequences";
+type Tab = "overview" | "campaigns" | "sequences" | "mailboxes";
 
 function AnalyticsPage() {
   const { primaryKey } = useAuth();
@@ -30,6 +34,11 @@ function AnalyticsPage() {
   const [campaigns, setCampaigns] = useState<CampaignStat[]>([]);
   const [sequences, setSequences] = useState<SequenceStat[]>([]);
   const [loading, setLoading] = useState(true);
+  const [mailboxes, setMailboxes] = useState<MailboxStat[]>([]);
+  const [mailboxesLoading, setMailboxesLoading] = useState(false);
+  const [expandedMailboxId, setExpandedMailboxId] = useState<string | null>(null);
+  const [mailboxDetail, setMailboxDetail] = useState<MailboxDetail | null>(null);
+  const [mailboxDetailLoading, setMailboxDetailLoading] = useState(false);
 
   useEffect(() => {
     if (!primaryKey?.keyRaw) return;
@@ -53,6 +62,32 @@ function AnalyticsPage() {
       .finally(() => setLoading(false));
   }, [primaryKey]);
 
+  const loadMailboxes = useCallback(() => {
+    if (!primaryKey?.keyRaw) return;
+    setMailboxesLoading(true);
+    api.withKey.get<{ data: MailboxStat[] }>("/v1/analytics/mailboxes", primaryKey.keyRaw)
+      .then((r) => setMailboxes(r.data ?? []))
+      .catch(() => {})
+      .finally(() => setMailboxesLoading(false));
+  }, [primaryKey]);
+
+  const loadMailboxDetail = async (id: string) => {
+    if (!primaryKey?.keyRaw) return;
+    if (expandedMailboxId === id) { setExpandedMailboxId(null); setMailboxDetail(null); return; }
+    setExpandedMailboxId(id);
+    setMailboxDetail(null);
+    setMailboxDetailLoading(true);
+    try {
+      const data = await api.withKey.get<MailboxDetail>(`/v1/analytics/mailboxes/${id}`, primaryKey.keyRaw);
+      setMailboxDetail(data);
+    } catch { /* ignore */ }
+    finally { setMailboxDetailLoading(false); }
+  };
+
+  useEffect(() => {
+    if (tab === "mailboxes" && mailboxes.length === 0) loadMailboxes();
+  }, [tab, mailboxes.length, loadMailboxes]);
+
   const pct = (n: number) => `${n.toFixed(1)}%`;
 
   return (
@@ -64,7 +99,7 @@ function AnalyticsPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border">
-        {(["overview", "campaigns", "sequences"] as Tab[]).map((t) => (
+        {(["overview", "campaigns", "sequences", "mailboxes"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -162,7 +197,7 @@ function AnalyticsPage() {
             </table>
           </div>
         )
-      ) : (
+      ) : tab === "sequences" ? (
         sequences.length === 0 ? (
           <div className="rounded-lg border border-border bg-card p-10 text-center">
             <GitBranch className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
@@ -201,6 +236,85 @@ function AnalyticsPage() {
             </table>
           </div>
         )
+      ) : mailboxesLoading ? (
+        <div className="text-sm text-muted-foreground">Loading…</div>
+      ) : mailboxes.length === 0 ? (
+        <div className="rounded-lg border border-border bg-card p-10 text-center">
+          <Mail className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
+          <p className="text-sm text-muted-foreground">No mailboxes connected. Add a mailbox under Sequences → Mailboxes to start tracking per-mailbox stats.</p>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border bg-card overflow-hidden">
+          <div className="divide-y divide-border">
+            {mailboxes.map((m) => {
+              const usePct = m.dailyLimit > 0 ? Math.min(100, Math.round((m.sentToday / m.dailyLimit) * 100)) : 0;
+              const isExpanded = expandedMailboxId === m.id;
+              return (
+                <div key={m.id}>
+                  <div
+                    className="flex items-center gap-4 px-5 py-4 hover:bg-muted/20 cursor-pointer"
+                    onClick={() => loadMailboxDetail(m.id)}
+                  >
+                    <div className="shrink-0">
+                      {isExpanded
+                        ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-medium text-sm truncate">{m.username}</span>
+                        <span className="text-xs text-muted-foreground uppercase">{m.type}</span>
+                        <StatusBadge status={m.status} />
+                        {m.warmupConfig?.enabled && (
+                          <span className="text-xs rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 font-medium">
+                            Warmup {m.warmupConfig.currentPerDay}/{m.warmupConfig.targetPerDay}/day
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 bg-muted rounded-full h-1.5 max-w-[200px]">
+                          <div
+                            className={`h-1.5 rounded-full transition-all ${usePct >= 90 ? "bg-red-500" : usePct >= 70 ? "bg-amber-500" : "bg-green-500"}`}
+                            style={{ width: `${usePct}%` }}
+                          />
+                        </div>
+                        <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+                          {m.sentToday} / {m.dailyLimit} sent today
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div className="border-t border-border bg-muted/10 px-5 py-4">
+                      {mailboxDetailLoading ? (
+                        <p className="text-xs text-muted-foreground">Loading breakdown…</p>
+                      ) : mailboxDetail?.id === m.id && mailboxDetail.daily_breakdown?.length > 0 ? (
+                        <div>
+                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Last 30 days</p>
+                          <div className="h-40">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={mailboxDetail.daily_breakdown} margin={{ top: 2, right: 4, left: -24, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0 0)" vertical={false} />
+                                <XAxis dataKey="date" tick={{ fontSize: 9, fill: "oklch(0.45 0 0)" }} tickFormatter={(d: string) => d.slice(5)} />
+                                <YAxis tick={{ fontSize: 9, fill: "oklch(0.45 0 0)" }} allowDecimals={false} />
+                                <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 11 }} />
+                                <Bar dataKey="sent" fill="oklch(0.55 0.15 250)" name="Sent" radius={[2, 2, 0, 0]} />
+                                <Bar dataKey="replied" fill="oklch(0.55 0.15 150)" name="Replied" radius={[2, 2, 0, 0]} />
+                                <Bar dataKey="bounced" fill="oklch(0.55 0.15 30)" name="Bounced" radius={[2, 2, 0, 0]} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No activity data yet for this mailbox.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
     </div>
   );

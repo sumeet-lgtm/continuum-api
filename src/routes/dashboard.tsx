@@ -84,6 +84,7 @@ const NAV: NavItem[] = [
       { to: "/dashboard/mailboxes", label: "Mailboxes", icon: Send },
       { to: "/dashboard/inbox", label: "Unified Inbox", icon: Inbox },
       { to: "/dashboard/inbox-test", label: "Inbox Placement", icon: FlaskConical },
+      { to: "/dashboard/ai", label: "AI Tools", icon: Sparkles },
     ],
   },
   { to: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
