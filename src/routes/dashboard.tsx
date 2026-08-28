@@ -29,6 +29,8 @@ import {
   SlidersHorizontal,
   Layers,
   Zap,
+  Building2,
+  ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Logo } from "@/components/Logo";
@@ -96,6 +98,15 @@ const NAV: NavItem[] = [
   { to: "/dashboard/bulk", label: "Bulk Jobs", icon: ListChecks },
   { to: "/dashboard/monitoring", label: "Monitoring", icon: Activity },
   { to: "/dashboard/webhooks", label: "Webhooks", icon: Webhook },
+  {
+    to: "/dashboard/organization",
+    label: "Enterprise",
+    icon: Building2,
+    children: [
+      { to: "/dashboard/organization", label: "Organization", icon: Building2, exact: true },
+      { to: "/dashboard/audit-logs", label: "Audit Logs", icon: ShieldCheck },
+    ],
+  },
   { to: "/dashboard/billing", label: "Billing", icon: CreditCard },
   { to: "/dashboard/settings", label: "Settings", icon: Settings },
 ];

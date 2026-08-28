@@ -45,6 +45,8 @@ import { Route as DashboardTemplatesRouteImport } from './routes/dashboard.templ
 import { Route as DashboardTransactionalRouteImport } from './routes/dashboard.transactional'
 import { Route as DashboardVerifyRouteImport } from './routes/dashboard.verify'
 import { Route as DashboardWebhooksRouteImport } from './routes/dashboard.webhooks'
+import { Route as DashboardOrganizationRouteImport } from './routes/dashboard.organization'
+import { Route as DashboardAuditLogsRouteImport } from './routes/dashboard.audit-logs'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -226,6 +228,16 @@ const DashboardWebhooksRoute = DashboardWebhooksRouteImport.update({
   path: '/webhooks',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardOrganizationRoute = DashboardOrganizationRouteImport.update({
+  id: '/organization',
+  path: '/organization',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardAuditLogsRoute = DashboardAuditLogsRouteImport.update({
+  id: '/audit-logs',
+  path: '/audit-logs',
+  getParentRoute: () => DashboardRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -263,6 +275,8 @@ export interface FileRoutesByFullPath {
   '/dashboard/transactional': typeof DashboardTransactionalRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
+  '/dashboard/organization': typeof DashboardOrganizationRoute
+  '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/': typeof DashboardIndexRoute
 }
 export interface FileRoutesByTo {
@@ -300,6 +314,8 @@ export interface FileRoutesByTo {
   '/dashboard/transactional': typeof DashboardTransactionalRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
+  '/dashboard/organization': typeof DashboardOrganizationRoute
+  '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard': typeof DashboardIndexRoute
 }
 export interface FileRoutesById {
@@ -339,6 +355,8 @@ export interface FileRoutesById {
   '/dashboard/transactional': typeof DashboardTransactionalRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
+  '/dashboard/organization': typeof DashboardOrganizationRoute
+  '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/': typeof DashboardIndexRoute
 }
 export interface FileRouteTypes {
@@ -379,6 +397,8 @@ export interface FileRouteTypes {
     | '/dashboard/transactional'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
+    | '/dashboard/organization'
+    | '/dashboard/audit-logs'
     | '/dashboard/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -416,6 +436,8 @@ export interface FileRouteTypes {
     | '/dashboard/transactional'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
+    | '/dashboard/organization'
+    | '/dashboard/audit-logs'
     | '/dashboard'
   id:
     | '__root__'
@@ -454,6 +476,8 @@ export interface FileRouteTypes {
     | '/dashboard/transactional'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
+    | '/dashboard/organization'
+    | '/dashboard/audit-logs'
     | '/dashboard/'
   fileRoutesById: FileRoutesById
 }
@@ -722,6 +746,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardWebhooksRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/organization': {
+      id: '/dashboard/organization'
+      path: '/organization'
+      fullPath: '/dashboard/organization'
+      preLoaderRoute: typeof DashboardOrganizationRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/audit-logs': {
+      id: '/dashboard/audit-logs'
+      path: '/audit-logs'
+      fullPath: '/dashboard/audit-logs'
+      preLoaderRoute: typeof DashboardAuditLogsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
   }
 }
 
@@ -753,6 +791,8 @@ interface DashboardRouteChildren {
   DashboardTransactionalRoute: typeof DashboardTransactionalRoute
   DashboardVerifyRoute: typeof DashboardVerifyRoute
   DashboardWebhooksRoute: typeof DashboardWebhooksRoute
+  DashboardOrganizationRoute: typeof DashboardOrganizationRoute
+  DashboardAuditLogsRoute: typeof DashboardAuditLogsRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
 }
 
@@ -784,6 +824,8 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardTransactionalRoute: DashboardTransactionalRoute,
   DashboardVerifyRoute: DashboardVerifyRoute,
   DashboardWebhooksRoute: DashboardWebhooksRoute,
+  DashboardOrganizationRoute: DashboardOrganizationRoute,
+  DashboardAuditLogsRoute: DashboardAuditLogsRoute,
   DashboardIndexRoute: DashboardIndexRoute,
 }
 

@@ -2,7 +2,6 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { useProfile } from "@/lib/use-profile";
-import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,19 +18,9 @@ export const Route = createFileRoute("/dashboard/settings")({
   component: SettingsPage,
 });
 
-type SSOStatus = {
-  configured: boolean;
-  eligible: boolean;
-  domain: string;
-  organizationId?: string | null;
-  connectionCount?: number;
-  connectionType?: string | null;
-  reason?: string;
-};
-
 function SettingsPage() {
   const { user, signOut } = useAuth();
-  const { profile, loading, refetch } = useProfile();
+  const { profile, loading } = useProfile();
   const navigate = useNavigate();
   const [fullName, setFullName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -39,46 +28,16 @@ function SettingsPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
 
-  const [ssoStatus, setSsoStatus] = useState<SSOStatus | null>(null);
-  const [ssoLoading, setSsoLoading] = useState(true);
-  const [ssoWorking, setSsoWorking] = useState(false);
-  const [ssoError, setSsoError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.get<SSOStatus>("/auth/enterprise/status")
-      .then(setSsoStatus)
-      .catch(() => setSsoStatus(null))
-      .finally(() => setSsoLoading(false));
-  }, []);
-
   useEffect(() => {
     if (profile) setFullName(profile.fullName ?? "");
   }, [profile]);
 
   const save = async () => {
-    // Profile updates are managed via WorkOS — name comes from SSO provider.
     setSaving(true);
     await new Promise((r) => setTimeout(r, 500));
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
-  };
-
-  const openSSOPortal = async () => {
-    setSsoWorking(true);
-    setSsoError(null);
-    try {
-      const { link } = await api.post<{ link: string }>("/auth/enterprise/portal");
-      window.open(link, "_blank", "noopener");
-      // Re-fetch status after a short delay so the badge updates if they configured quickly
-      setTimeout(() => {
-        api.get<SSOStatus>("/auth/enterprise/status").then(setSsoStatus).catch(() => {});
-      }, 4000);
-    } catch (e: unknown) {
-      setSsoError(e instanceof Error ? e.message : "Something went wrong. Try again.");
-    } finally {
-      setSsoWorking(false);
-    }
   };
 
   const deleteAccount = async () => {
@@ -129,65 +88,6 @@ function SettingsPage() {
             {profile?.plan ?? "free"}
           </span>
         </div>
-      </Section>
-
-      <Section title="Enterprise SSO">
-        {ssoLoading ? (
-          <p className="text-sm text-muted-foreground">Checking SSO status…</p>
-        ) : ssoStatus?.eligible === false ? (
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 h-2 w-2 rounded-full bg-muted-foreground/40 shrink-0 mt-1.5" />
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Not available</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Enterprise SSO requires a company email address.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="flex items-start justify-between gap-4 flex-wrap">
-              <div className="flex items-start gap-3">
-                <div className={`mt-1.5 h-2 w-2 rounded-full shrink-0 ${ssoStatus?.configured ? "bg-green-500" : "bg-yellow-500"}`} />
-                <div>
-                  <p className="text-sm font-medium">
-                    {ssoStatus?.configured
-                      ? `SSO active — ${ssoStatus.domain}`
-                      : `Not configured — ${ssoStatus?.domain ?? user?.email?.split("@")[1] ?? ""}`}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {ssoStatus?.configured
-                      ? `${ssoStatus.connectionCount ?? 1} connection${(ssoStatus.connectionCount ?? 1) > 1 ? "s" : ""} active${ssoStatus.connectionType ? ` · ${ssoStatus.connectionType}` : ""}. Team members at ${ssoStatus.domain} are automatically routed to SSO login.`
-                      : "Connect Okta, Azure AD, Google Workspace, or any SAML 2.0 / OIDC provider. Your team logs in with their existing company credentials."}
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant={ssoStatus?.configured ? "outline" : "default"}
-                onClick={openSSOPortal}
-                disabled={ssoWorking}
-                className="shrink-0"
-              >
-                {ssoWorking
-                  ? "Opening portal…"
-                  : ssoStatus?.configured
-                  ? "Manage SSO"
-                  : "Set up SSO"}
-              </Button>
-            </div>
-
-            {!ssoStatus?.configured && (
-              <div className="rounded-md border border-border bg-muted/40 px-4 py-3 text-xs text-muted-foreground space-y-1">
-                <p className="font-medium text-foreground">Supported providers</p>
-                <p>Okta · Azure AD / Microsoft Entra · Google Workspace · JumpCloud · OneLogin · Any SAML 2.0 or OIDC provider</p>
-              </div>
-            )}
-
-            {ssoError && (
-              <p className="text-xs text-destructive">{ssoError}</p>
-            )}
-          </div>
-        )}
       </Section>
 
       <Section title="Danger zone" tone="danger">
