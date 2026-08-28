@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, Loader2, Phone } from "lucide-react";
 import { toast } from "sonner";
 import { useApiKey } from "@/lib/use-api-key";
 import { api } from "@/lib/api";
@@ -11,6 +11,8 @@ export const Route = createFileRoute("/dashboard/billing")({
   head: () => ({ meta: [{ title: "Billing — Continuum API" }] }),
   component: BillingPage,
 });
+
+const ENTERPRISE_CALL_URL = "https://cal.com/sumeet-sutar-ecfqg3/continuum-api-email-infrastructure-consultation";
 
 type PlanId = "starter" | "growth" | "scale";
 interface PlanDef {
@@ -179,7 +181,7 @@ function BillingPage() {
       </div>
 
       {/* Plan grid */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {PLANS.map((p) => {
           const isCurrent = currentPlan === p.id;
           const busy = checkoutLoading === p.id;
@@ -222,6 +224,44 @@ function BillingPage() {
             </div>
           );
         })}
+
+        {/* Enterprise card */}
+        <div className="rounded-lg border border-border bg-card p-5 flex flex-col">
+          <div className="flex items-baseline justify-between">
+            <h3 className="text-base font-semibold">Enterprise</h3>
+          </div>
+          <div className="mt-2 flex items-baseline gap-1">
+            <span className="text-3xl font-semibold tracking-tight">Custom</span>
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">Unlimited volume · custom SLA</p>
+          <ul className="mt-4 space-y-1.5 text-sm flex-1">
+            {[
+              "Everything in Scale",
+              "Unlimited verifications & sends",
+              "Unlimited mailboxes",
+              "Dedicated infrastructure",
+              "Custom contracts & invoicing",
+              "SSO / SAML support",
+              "Onboarding & migration help",
+              "Named account manager",
+            ].map((f) => (
+              <li key={f} className="flex items-start gap-2">
+                <Check className="h-4 w-4 mt-0.5 text-foreground shrink-0" />
+                <span>{f}</span>
+              </li>
+            ))}
+          </ul>
+          <a
+            href={ENTERPRISE_CALL_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-5"
+          >
+            <Button className="w-full gap-2">
+              <Phone className="h-4 w-4" /> Book a call
+            </Button>
+          </a>
+        </div>
       </div>
 
       <p className="text-xs text-muted-foreground">
