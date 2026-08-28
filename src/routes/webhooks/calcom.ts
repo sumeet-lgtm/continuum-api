@@ -45,8 +45,8 @@ export async function calcomWebhookRoutes(fastify: FastifyInstance): Promise<voi
       const payload = request.body as Record<string, unknown>;
       const triggerEvent = (payload.triggerEvent as string) ?? '';
 
-      // Only act on new bookings
-      if (!['BOOKING_CREATED', 'BOOKING_CONFIRMED'].includes(triggerEvent)) {
+      // Only act on new bookings and cancellations
+      if (!['BOOKING_CREATED', 'BOOKING_CANCELLED'].includes(triggerEvent)) {
         return reply.status(200).send({ ok: true, action: 'ignored' });
       }
 
@@ -84,13 +84,14 @@ export async function calcomWebhookRoutes(fastify: FastifyInstance): Promise<voi
   Booking ID: ${booking.uid ?? 'n/a'} · via Cal.com webhook
 </p>`.trim();
 
+      const isCancellation = triggerEvent === 'BOOKING_CANCELLED';
+      const subject = isCancellation
+        ? `❌ Enterprise call cancelled — ${name}`
+        : `📅 Enterprise call booked — ${name} (${startTime})`;
+
       try {
-        await sendEmail(
-          'sumeet@continuumapi.com',
-          `📅 Enterprise call booked — ${name} (${startTime})`,
-          html,
-        );
-        fastify.log.info({ name, email, startTime }, 'Cal.com enterprise booking alert sent');
+        await sendEmail('sumeet@continuumapi.com', subject, html);
+        fastify.log.info({ name, email, startTime, triggerEvent }, 'Cal.com booking alert sent');
       } catch (err) {
         fastify.log.error({ err }, 'Failed to send Cal.com booking alert');
         // Still return 200 so Cal.com doesn't retry
