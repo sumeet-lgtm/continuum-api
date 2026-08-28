@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   ChevronDown, ChevronRight, CheckCircle2, XCircle, Eye,
-  MousePointerClick, Mail, AlertTriangle, Clock, X, Ban,
+  MousePointerClick, Mail, AlertTriangle, Clock, X, Ban, Pencil, Download,
 } from "lucide-react";
+import { Label } from "@/components/ui/label";
 
 export const Route = createFileRoute("/dashboard/messages")({
   head: () => ({ meta: [{ title: "Message History — Continuum API" }] }),
@@ -80,6 +81,14 @@ function MessagesPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [cancelling, setCancelling] = useState(false);
 
+  // Edit modal
+  const [editTarget, setEditTarget] = useState<Message | null>(null);
+  const [editForm, setEditForm] = useState({ subject: "", scheduled_at: "", html_body: "", text_body: "" });
+  const [saving, setSaving] = useState(false);
+
+  // CSV export
+  const [exporting, setExporting] = useState(false);
+
   const LIMIT = 50;
 
   const load = useCallback(() => {
@@ -135,6 +144,72 @@ function MessagesPage() {
     finally { setCancelling(false); }
   };
 
+  const openEdit = (m: Message) => {
+    setEditForm({
+      subject: m.subject,
+      scheduled_at: "",
+      html_body: "",
+      text_body: "",
+    });
+    setEditTarget(m);
+  };
+
+  const saveEdit = async () => {
+    if (!primaryKey?.keyRaw || !editTarget) return;
+    setSaving(true);
+    try {
+      const payload: Record<string, string> = {};
+      if (editForm.subject.trim() && editForm.subject !== editTarget.subject) payload.subject = editForm.subject.trim();
+      if (editForm.scheduled_at.trim()) payload.scheduled_at = new Date(editForm.scheduled_at).toISOString();
+      if (editForm.html_body.trim()) payload.html_body = editForm.html_body.trim();
+      if (editForm.text_body.trim()) payload.text_body = editForm.text_body.trim();
+      if (Object.keys(payload).length === 0) { setEditTarget(null); return; }
+      const res = await fetch(`https://api.continuumapi.com/v1/messages/${editTarget.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((data as { error?: string })?.error ?? `Failed (${res.status})`);
+      toast.success("Scheduled email updated");
+      setMessages((m) => m.map((x) => x.id === editTarget.id ? { ...x, subject: payload.subject ?? x.subject } : x));
+      setEditTarget(null);
+    } catch (e: unknown) { toast.error((e as Error).message); }
+    finally { setSaving(false); }
+  };
+
+  const exportCsv = async () => {
+    if (!primaryKey?.keyRaw) return;
+    setExporting(true);
+    try {
+      const params = new URLSearchParams({ page: "1", limit: "1000" });
+      if (statusFilter) params.set("status", statusFilter);
+      if (toFilter) params.set("to", toFilter);
+      const res = await fetch(`https://api.continuumapi.com/v1/messages?${params}`, {
+        headers: { "X-API-Key": primaryKey.keyRaw! },
+      });
+      const data = await res.json().catch(() => null) as { data?: Message[] };
+      const rows = data?.data ?? [];
+      const lines = [
+        "id,to,from,subject,status,created_at,sent_at",
+        ...rows.map((r) => [
+          r.id,
+          `"${toArray(r.to).join("; ")}"`,
+          `"${r.from}"`,
+          `"${r.subject.replace(/"/g, '""')}"`,
+          r.status,
+          new Date(r.createdAt).toISOString(),
+          r.sentAt ? new Date(r.sentAt).toISOString() : "",
+        ].join(",")),
+      ];
+      const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = "messages.csv"; a.click();
+      URL.revokeObjectURL(url);
+    } catch { toast.error("Export failed"); }
+    finally { setExporting(false); }
+  };
+
   const applyToFilter = () => { setToFilter(toInput.trim()); setPage(1); };
 
   const totalPages = Math.ceil(total / LIMIT);
@@ -146,8 +221,59 @@ function MessagesPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Message History</h1>
           <p className="text-sm text-muted-foreground">All transactional emails sent through your API key.</p>
         </header>
-        <span className="text-sm text-muted-foreground tabular-nums">{total.toLocaleString()} total</span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-muted-foreground tabular-nums">{total.toLocaleString()} total</span>
+          <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" onClick={exportCsv} disabled={exporting}>
+            <Download className="h-3.5 w-3.5" />{exporting ? "Exporting…" : "Export CSV"}
+          </Button>
+        </div>
       </div>
+
+      {/* Edit scheduled email modal */}
+      {editTarget && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setEditTarget(null)}>
+          <div className="bg-card border border-border rounded-xl shadow-lg w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-sm">Edit Scheduled Email</h2>
+              <button onClick={() => setEditTarget(null)} className="text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Subject</Label>
+                <Input
+                  value={editForm.subject}
+                  onChange={(e) => setEditForm((f) => ({ ...f, subject: e.target.value }))}
+                  className="h-8 text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Reschedule to</Label>
+                <Input
+                  type="datetime-local"
+                  value={editForm.scheduled_at}
+                  onChange={(e) => setEditForm((f) => ({ ...f, scheduled_at: e.target.value }))}
+                  className="h-8 text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">HTML body <span className="text-muted-foreground font-normal">(leave blank to keep existing)</span></Label>
+                <textarea
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[80px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  placeholder="<p>Updated content…</p>"
+                  value={editForm.html_body}
+                  onChange={(e) => setEditForm((f) => ({ ...f, html_body: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" size="sm" onClick={() => setEditTarget(null)}>Cancel</Button>
+              <Button size="sm" onClick={saveEdit} disabled={saving}>{saving ? "Saving…" : "Save Changes"}</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
@@ -226,6 +352,7 @@ function MessagesPage() {
                           <DetailPanel
                             detail={detail}
                             onCancel={() => cancel(detail.id)}
+                            onEdit={() => openEdit(messages.find((x) => x.id === detail.id) ?? detail)}
                             cancelling={cancelling}
                           />
                         ) : null}
@@ -253,7 +380,7 @@ function MessagesPage() {
   );
 }
 
-function DetailPanel({ detail, onCancel, cancelling }: { detail: MessageDetail; onCancel: () => void; cancelling: boolean }) {
+function DetailPanel({ detail, onCancel, onEdit, cancelling }: { detail: MessageDetail; onCancel: () => void; onEdit: () => void; cancelling: boolean }) {
   const allEvents = [
     ...detail.events.map((e) => ({ ...e, source: "delivery" as const })),
     ...detail.trackingEvents.map((e) => ({ ...e, source: "tracking" as const })),
@@ -287,16 +414,27 @@ function DetailPanel({ detail, onCancel, cancelling }: { detail: MessageDetail; 
           </div>
         )}
         {detail.status === "scheduled" && (
-          <Button
-            size="sm"
-            variant="destructive"
-            className="gap-1.5"
-            onClick={onCancel}
-            disabled={cancelling}
-          >
-            <Ban className="h-3.5 w-3.5" />
-            {cancelling ? "Cancelling…" : "Cancel Scheduled Send"}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={onEdit}
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              Edit
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="gap-1.5"
+              onClick={onCancel}
+              disabled={cancelling}
+            >
+              <Ban className="h-3.5 w-3.5" />
+              {cancelling ? "Cancelling…" : "Cancel Send"}
+            </Button>
+          </div>
         )}
       </div>
 
