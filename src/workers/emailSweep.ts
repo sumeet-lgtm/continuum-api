@@ -6,6 +6,10 @@ import {
   quotaWarningEmail,
   quotaExceededEmail,
   weeklyDigestEmail,
+  day1ActivationEmail,
+  day3DiscoveryEmail,
+  day7CheckInEmail,
+  day14ValueEmail,
 } from '../lib/email.js';
 import { getPlanLimit } from '../plugins/usageMeter.js';
 import { config } from '../config.js';
@@ -76,11 +80,33 @@ export async function runEmailSweep(): Promise<void> {
       const to = recipientOf(key);
       if (!to) continue;
 
-      // Welcome — keys created in the last 7 days (older keys predate emails;
-      // don't greet April signups in July)
-      const ageMs = Date.now() - new Date(key.createdAt).getTime();
-      if (ageMs < 7 * 24 * 3600 * 1000) {
+      // Welcome + lifecycle — keys created in the last 14 days
+      const ageMs  = Date.now() - new Date(key.createdAt).getTime();
+      const ageH   = ageMs / 3600_000; // hours since creation
+
+      if (ageH < 7 * 24) {
+        // Send welcome once during the first week window
         await sendOnce(`welcome:${key.id}`, to, welcomeEmail(key.keyPrefix));
+      }
+
+      // Day 1 activation nudge — if they signed up 20-28h ago and haven't made a call
+      if (ageH >= 20 && ageH < 28 && key.currentMonthUsage === 0) {
+        await sendOnce(`day1activation:${key.id}`, to, day1ActivationEmail(key.keyPrefix));
+      }
+
+      // Day 3 feature discovery
+      if (ageH >= 68 && ageH < 76) {
+        await sendOnce(`day3discovery:${key.id}`, to, day3DiscoveryEmail());
+      }
+
+      // Day 7 personal check-in (success manager style)
+      if (ageH >= 164 && ageH < 172) {
+        await sendOnce(`day7checkin:${key.id}`, to, day7CheckInEmail());
+      }
+
+      // Day 14 value proof
+      if (ageH >= 332 && ageH < 340) {
+        await sendOnce(`day14value:${key.id}`, to, day14ValueEmail());
       }
 
       // Quota emails

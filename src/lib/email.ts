@@ -104,11 +104,11 @@ const ROW = (label: string, value: string) =>
 const CODE = (text: string) =>
   `<code style="background:#F3F4F6;border:1px solid #E5E7EB;border-radius:4px;font-family:monospace;font-size:12px;color:#0A0A0A;padding:3px 8px">${text}</code>`;
 
-const ALERT = (color: 'orange' | 'red' | 'green', text: string) => {
+const ALERT = (color: 'warning' | 'red' | 'green', text: string) => {
   const map = {
-    orange: { bg: '#FFF7ED', border: '#F97316', text: '#7C2D12' },
-    red:    { bg: '#FFF1F2', border: '#F43F5E', text: '#881337' },
-    green:  { bg: '#F0FDF4', border: '#22C55E', text: '#14532D' },
+    warning: { bg: '#F9FAFB', border: '#374151', text: '#374151' },
+    red:     { bg: '#FFF1F2', border: '#F43F5E', text: '#881337' },
+    green:   { bg: '#F0FDF4', border: '#22C55E', text: '#14532D' },
   };
   const c = map[color];
   return `<div style="background:${c.bg};border-left:3px solid ${c.border};border-radius:0 4px 4px 0;padding:12px 14px;margin:16px 0;font-family:Inter,-apple-system,sans-serif;font-size:13px;color:${c.text};line-height:1.6">${text}</div>`;
@@ -197,7 +197,7 @@ export function apiKeyCreatedEmail(keyPrefix: string, keyName: string, firstName
       ${ROW('Created', new Date().toUTCString())}
       ${ROW('Permission', 'Full access')}
       ${DIVIDER}
-      ${ALERT('orange', 'If you didn\'t create this key, <a href="https://app.continuumapi.com/dashboard/api-keys" style="color:inherit;font-weight:600">revoke it immediately</a>.')}
+      ${ALERT('warning', 'If you didn\'t create this key, <a href="https://app.continuumapi.com/dashboard/api-keys" style="color:inherit;font-weight:600">revoke it immediately</a>.')}
     `),
   };
 }
@@ -255,7 +255,7 @@ export function planDowngradedEmail(plan: string, firstName?: string | null): { 
       ${ROW('Current plan', plan)}
       ${ROW('Monthly quota', plan === 'free' ? '500 verifications' : 'See billing')}
       ${DIVIDER}
-      ${ALERT('orange', 'If you believe this is an error, reply to this email and we\'ll sort it out.')}
+      ${ALERT('warning', 'If you believe this is an error, reply to this email and we\'ll sort it out.')}
       ${BTN('https://app.continuumapi.com/dashboard/billing', 'Reactivate Plan →')}
     `),
   };
@@ -327,7 +327,7 @@ export function quotaWarningEmail(used: number, limit: number, plan: string, fir
       ${ROW('Remaining', (limit - used).toLocaleString())}
       ${ROW('Plan', plan)}
       <div style="background:#F3F4F6;border-radius:4px;height:6px;margin:8px 0 20px;overflow:hidden">
-        <div style="background:#F97316;width:${pct}%;height:100%;border-radius:4px"></div>
+        <div style="background:#0A0A0A;width:${pct}%;height:100%;border-radius:4px"></div>
       </div>
       ${BTN('https://app.continuumapi.com/dashboard/billing', 'Upgrade Plan →')}
       ${p('<span style="color:#9CA3AF;font-size:12px">Once you hit 100%, API requests return 429 until the quota resets.</span>')}
@@ -523,7 +523,7 @@ export function webhookFailingEmail(endpoint: string, failCount: number, firstNa
 }
 
 export function monitorAlertEmail(opts: { monitorEmail: string; status: 'valid' | 'invalid' | 'risky'; previousStatus: string; firstName?: string | null }): { subject: string; html: string } {
-  const color = opts.status === 'valid' ? 'green' : opts.status === 'risky' ? 'orange' : 'red';
+  const color = opts.status === 'valid' ? 'green' : opts.status === 'risky' ? 'warning' : 'red';
   const statusLabel = { valid: '✓ Valid', invalid: '✗ Invalid', risky: '⚠ Risky' }[opts.status];
   return {
     subject: `Monitor alert: ${opts.monitorEmail} is now ${opts.status}`,
@@ -556,7 +556,7 @@ export function weeklyDigestEmail(opts: {
       ${h1('Here\'s your week.')}
       ${ROW('Emails verified', opts.verified.toLocaleString())}
       ${ROW('Emails sent', opts.sent.toLocaleString())}
-      ${ROW('Delivery rate', `<strong style="color:${opts.deliveryRate >= 95 ? '#16A34A' : '#D97706'}">${opts.deliveryRate.toFixed(1)}%</strong>`)}
+      ${ROW('Delivery rate', `<strong style="color:${opts.deliveryRate >= 95 ? '#16A34A' : '#374151'}">${opts.deliveryRate.toFixed(1)}%</strong>`)}
       ${ROW('Open rate', `${opts.openRate.toFixed(1)}%`)}
       ${DIVIDER}
       ${ROW('Monthly quota used', `${opts.used.toLocaleString()} / ${opts.limit.toLocaleString()}`)}
@@ -564,6 +564,127 @@ export function weeklyDigestEmail(opts: {
         <div style="background:#000;width:${Math.min(usedPct, 100)}%;height:100%;border-radius:4px"></div>
       </div>
       ${BTN('https://app.continuumapi.com/dashboard/analytics', 'View Full Analytics →')}
+    `),
+  };
+}
+
+// ─── Lifecycle / success-manager emails ──────────────────────────────────────────
+
+export function day1ActivationEmail(keyPrefix: string, firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: 'Have you made your first API call yet?',
+    html: layout('First API call', `
+      ${greeting(firstName)}
+      ${h1('Just one call away.')}
+      ${p('I noticed you haven\'t made your first API call yet. That\'s fine — took me a minute to remember where I put mine too.')}
+      ${p('Here\'s the quickest path to a result. Copy this, replace the email, hit send:')}
+      <pre style="background:#F9FAFB;border:1px solid #E5E7EB;border-radius:6px;padding:14px;font-family:monospace;font-size:12px;color:#374151;margin:0 0 20px;overflow-x:auto">curl -X POST https://api.continuumapi.com/v1/verify \\
+  -H "X-API-Key: ${keyPrefix}..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"email":"test@example.com"}'</pre>
+      ${p('Takes about 300ms. Returns whether the address is real, the MX records, and whether it\'s a disposable or role account.')}
+      ${BTN('https://app.continuumapi.com/dashboard', 'Open Dashboard →')}
+      ${DIVIDER}
+      ${p('<span style="color:#9CA3AF;font-size:12px">Hit reply if anything\'s confusing — I read these.</span>')}
+    `),
+  };
+}
+
+export function day3DiscoveryEmail(firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: 'Three things most people miss in week one',
+    html: layout('Week one tips', `
+      ${greeting(firstName)}
+      ${h1('Three things worth knowing.')}
+      ${p('Most developers start with verification (makes sense — it\'s what the name says). But there are three other things that are worth five minutes now:')}
+      <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 20px">
+        <tr>
+          <td style="padding:14px 0;border-bottom:1px solid #F3F4F6;vertical-align:top;width:28px">
+            <span style="font-family:monospace;font-size:11px;color:#9CA3AF;font-weight:600">01</span>
+          </td>
+          <td style="padding:14px 0 14px 14px;border-bottom:1px solid #F3F4F6">
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 4px">Bulk verification via CSV</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Upload a list, we process it asynchronously, you download the results. Works up to 10 million rows.</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:14px 0;border-bottom:1px solid #F3F4F6;vertical-align:top;width:28px">
+            <span style="font-family:monospace;font-size:11px;color:#9CA3AF;font-weight:600">02</span>
+          </td>
+          <td style="padding:14px 0 14px 14px;border-bottom:1px solid #F3F4F6">
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 4px">Transactional email sending</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Same API key, same endpoint pattern. POST to /v1/send — no separate tool, no second bill.</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:14px 0;vertical-align:top;width:28px">
+            <span style="font-family:monospace;font-size:11px;color:#9CA3AF;font-weight:600">03</span>
+          </td>
+          <td style="padding:14px 0 14px 14px">
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 4px">Email monitors</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Track any address over time. We alert you when status changes — useful for key accounts or customer emails where deliverability matters.</p>
+          </td>
+        </tr>
+      </table>
+      ${BTN('https://app.continuumapi.com/dashboard', 'Explore the Dashboard →')}
+      ${DIVIDER}
+      ${p('<span style="color:#9CA3AF;font-size:12px">Questions? Reply here — I check these daily.</span>')}
+    `),
+  };
+}
+
+export function day7CheckInEmail(firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: 'Quick check-in — how\'s Continuum working for you?',
+    html: layout('Week one check-in', `
+      ${greeting(firstName)}
+      ${h1('How\'s it going?')}
+      ${p('You\'ve been with us for a week and I wanted to reach out personally.')}
+      ${p('Most teams use Continuum to solve one of three things:')}
+      <ul style="padding-left:18px;margin:0 0 20px">
+        <li style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#374151;padding:5px 0"><strong>List hygiene</strong> — cleaning a database before a big send</li>
+        <li style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#374151;padding:5px 0"><strong>Signup validation</strong> — blocking invalid emails at the form level</li>
+        <li style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#374151;padding:5px 0"><strong>Full email stack</strong> — replacing Sendgrid + Mailchimp + Smartlead in one go</li>
+      </ul>
+      ${p('Which one are you trying to solve? Or is it something else entirely?')}
+      ${p('Hit reply and tell me — I\'ll point you to the fastest path, and if something isn\'t working the way you expected, I\'d rather know now than later.')}
+      ${DIVIDER}
+      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet, founder @ Continuum API<br>You can reply directly to this email.</span>')}
+    `),
+  };
+}
+
+export function day14ValueEmail(firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: 'Two weeks in — what teams are actually building',
+    html: layout('Two weeks in', `
+      ${greeting(firstName)}
+      ${h1('What people are building with Continuum.')}
+      ${p('You\'re two weeks in. Here\'s what other teams have shipped in their first month:')}
+      <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 24px;border:1px solid #E5E7EB;border-radius:6px;overflow:hidden">
+        <tr style="background:#F9FAFB">
+          <td style="padding:14px 16px;border-bottom:1px solid #E5E7EB">
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 3px">SaaS startup — signup validation</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Added real-time verification to their signup form. Invalid email rate dropped from 12% to 0.4% in 48 hours.</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:14px 16px;border-bottom:1px solid #E5E7EB">
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 3px">Agency — cold outreach</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Replaced Instantly + MillionVerifier with one API key. Saved $380/month and simplified their stack to a single dashboard.</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:14px 16px">
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 3px">Developer tools company — transactional email</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Migrated from Sendgrid. Kept the same API pattern, got verification + sending + analytics in one place.</p>
+          </td>
+        </tr>
+      </table>
+      ${p('If any of these look like where you\'re headed, or if you\'re still figuring out the right fit — reply and I\'ll help you map it out.')}
+      ${BTN('https://app.continuumapi.com/dashboard', 'Check Your Dashboard →')}
+      ${DIVIDER}
+      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet @ Continuum API<br>Reply directly to this email — I\'m reachable.</span>')}
     `),
   };
 }
