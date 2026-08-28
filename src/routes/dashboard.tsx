@@ -28,6 +28,7 @@ import {
   ShieldOff,
   SlidersHorizontal,
   Layers,
+  Zap,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Logo } from "@/components/Logo";
@@ -69,6 +70,7 @@ const NAV: NavItem[] = [
     icon: Megaphone,
     children: [
       { to: "/dashboard/campaigns", label: "All Campaigns", icon: Megaphone, exact: true },
+      { to: "/dashboard/automations", label: "Autoresponders", icon: Zap },
       { to: "/dashboard/lists", label: "Mailing Lists", icon: Users },
       { to: "/dashboard/contacts", label: "Contacts", icon: UserRound },
       { to: "/dashboard/segments", label: "Segments", icon: SlidersHorizontal },
