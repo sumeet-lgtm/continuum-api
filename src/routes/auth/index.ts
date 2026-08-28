@@ -24,31 +24,41 @@ function apiBase(): string {
 }
 
 export async function authRoutes(fastify: FastifyInstance): Promise<void> {
-  // ─── GET /auth/sso/login ────────────────────────────────────────────────────
-  // Initiates the WorkOS AuthKit flow. Accepts optional redirect_uri query param
-  // so the dashboard can control where the callback lands after login.
-  fastify.get('/auth/sso/login', async (request: FastifyRequest, reply: FastifyReply) => {
+  // ─── Generic social/SSO initiator ──────────────────────────────────────────
+  // GET /auth/login/:provider  — provider: google | microsoft | github | sso
+  // Also keeps the legacy /auth/sso/login alias for backwards compat.
+  async function initiateLogin(
+    provider: 'GoogleOAuth' | 'MicrosoftOAuth' | 'GitHubOAuth' | 'authkit',
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) {
     if (!config.WORKOS_API_KEY || !config.WORKOS_CLIENT_ID) {
       return reply.status(501).send({
-        error: 'SSO is not configured on this server.',
+        error: 'Auth is not configured on this server.',
         docs: 'Set WORKOS_API_KEY and WORKOS_CLIENT_ID environment variables.',
       });
     }
-
     const { redirect_uri } = request.query as Record<string, string>;
     const state = Buffer.from(
       JSON.stringify({ redirect_uri: redirect_uri ?? config.DASHBOARD_URL }),
     ).toString('base64url');
 
     const authorizationURL = getWorkOS().userManagement.getAuthorizationUrl({
-      provider: 'authkit',
+      provider,
       clientId: config.WORKOS_CLIENT_ID,
       redirectUri: `${apiBase()}/auth/sso/callback`,
       state,
     });
-
     return reply.redirect(302, authorizationURL);
-  });
+  }
+
+  fastify.get('/auth/login/google', (req, rep) => initiateLogin('GoogleOAuth', req, rep));
+  fastify.get('/auth/login/microsoft', (req, rep) => initiateLogin('MicrosoftOAuth', req, rep));
+  fastify.get('/auth/login/github', (req, rep) => initiateLogin('GitHubOAuth', req, rep));
+  fastify.get('/auth/login/sso', (req, rep) => initiateLogin('authkit', req, rep));
+
+  // Legacy alias kept so existing bookmarks / older clients still work
+  fastify.get('/auth/sso/login', (req, rep) => initiateLogin('authkit', req, rep));
 
   // ─── GET /auth/sso/callback ─────────────────────────────────────────────────
   // WorkOS redirects here after authentication. Exchanges code for a user
