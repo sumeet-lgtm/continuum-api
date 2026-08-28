@@ -290,6 +290,63 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  // PATCH /v1/messages/:id — update subject, body, or reschedule a scheduled send
+  fastify.patch(
+    '/messages/:id',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+      const body = request.body as {
+        subject?: string;
+        html_body?: string;
+        text_body?: string;
+        scheduled_at?: string;
+      };
+
+      const msg = await prisma.sendMessage.findFirst({
+        where: { id, apiKeyId, status: 'scheduled' },
+      });
+      if (!msg) throw Errors.notFound('Scheduled message not found or not in scheduled state.');
+
+      if (body.scheduled_at !== undefined) {
+        const scheduledDate = new Date(body.scheduled_at);
+        if (isNaN(scheduledDate.getTime()) || scheduledDate.getTime() - Date.now() < 0) {
+          throw Errors.validationFailed([{ field: 'scheduled_at', message: 'scheduled_at must be a valid future datetime.' }]);
+        }
+      }
+
+      const existingJob = await sendQueue.getJob(id);
+      const existingData = (existingJob?.data ?? {}) as Record<string, unknown>;
+
+      if (existingJob) await existingJob.remove();
+
+      const newScheduledAt = body.scheduled_at ? new Date(body.scheduled_at) : msg.scheduledAt!;
+      const newDelay = Math.max(0, newScheduledAt.getTime() - Date.now());
+
+      const updatedJobData = {
+        ...existingData,
+        ...(body.subject !== undefined ? { subject: body.subject } : {}),
+        ...(body.html_body !== undefined ? { htmlBody: body.html_body } : {}),
+        ...(body.text_body !== undefined ? { textBody: body.text_body } : {}),
+      };
+
+      await sendQueue.add('send', updatedJobData, { delay: newDelay, jobId: id });
+
+      const dbUpdates: Record<string, unknown> = {};
+      if (body.subject !== undefined) dbUpdates['subject'] = body.subject;
+      if (body.scheduled_at !== undefined) dbUpdates['scheduledAt'] = newScheduledAt;
+
+      const updated = await prisma.sendMessage.update({
+        where: { id },
+        data: dbUpdates as never,
+        select: { id: true, subject: true, scheduledAt: true, status: true },
+      });
+
+      return reply.status(200).send({ ...updated, scheduled_at: updated.scheduledAt });
+    },
+  );
+
   // DELETE /v1/messages/:id/cancel — cancel scheduled send
   fastify.delete(
     '/messages/:id/cancel',
