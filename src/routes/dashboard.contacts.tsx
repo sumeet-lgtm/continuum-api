@@ -1,5 +1,5 @@
 import { createFileRoute, useSearch } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Users, Trash2, Search } from "lucide-react";
+import { Plus, Users, Trash2, Search, Upload, FileText, Loader2, X } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/contacts")({
   head: () => ({ meta: [{ title: "Contacts — Continuum API" }] }),
@@ -29,6 +29,18 @@ interface Contact {
 
 interface MailingList { id: string; name: string; }
 
+function parseCSV(text: string): Record<string, string>[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, "").toLowerCase());
+  return lines.slice(1).map((line) => {
+    const values = line.split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
+    const row: Record<string, string> = {};
+    headers.forEach((h, i) => { row[h] = values[i] ?? ""; });
+    return row;
+  }).filter((r) => r.email);
+}
+
 function ContactsPage() {
   const { primaryKey } = useAuth();
   const { list: listId } = useSearch({ from: "/dashboard/contacts" });
@@ -41,6 +53,10 @@ function ContactsPage() {
   const [search, setSearch] = useState("");
   const [form, setForm] = useState({ email: "", firstName: "", lastName: "" });
   const [saving, setSaving] = useState(false);
+  const [importPreview, setImportPreview] = useState<Record<string, string>[] | null>(null);
+  const [importFile, setImportFile] = useState("");
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!primaryKey?.keyRaw) return;
@@ -54,15 +70,17 @@ function ContactsPage() {
       .catch(() => {});
   }, [primaryKey]);
 
-  useEffect(() => {
+  const loadContacts = () => {
     if (!primaryKey?.keyRaw || !selectedList) return;
     setLoading(true);
     api.withKey
-      .get<{ data: Contact[]; total: number }>(`/v1/lists/${selectedList}/contacts?page=1&limit=100${search ? `&search=${encodeURIComponent(search)}` : ""}`, primaryKey.keyRaw)
+      .get<{ data: Contact[] }>(`/v1/lists/${selectedList}/contacts?page=1&limit=100${search ? `&search=${encodeURIComponent(search)}` : ""}`, primaryKey.keyRaw)
       .then((r) => setContacts(r.data ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [primaryKey, selectedList, search]);
+  };
+
+  useEffect(() => { loadContacts(); }, [primaryKey, selectedList, search]);
 
   const subscribe = async () => {
     if (!primaryKey?.keyRaw || !selectedList) return;
@@ -78,9 +96,7 @@ function ContactsPage() {
       toast.success("Contact subscribed");
       setAdding(false);
       setForm({ email: "", firstName: "", lastName: "" });
-      // Re-fetch
-      const r = await api.withKey.get<{ data: Contact[] }>(`/v1/lists/${selectedList}/contacts?page=1&limit=100`, primaryKey.keyRaw);
-      setContacts(r.data ?? []);
+      loadContacts();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }
   };
@@ -97,6 +113,56 @@ function ContactsPage() {
     } catch (e: unknown) { toast.error((e as Error).message); }
   };
 
+  const onFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportFile(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const rows = parseCSV(ev.target?.result as string);
+      setImportPreview(rows);
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  const runImport = async () => {
+    if (!primaryKey?.keyRaw || !selectedList || !importPreview?.length) return;
+    setImporting(true);
+    let ok = 0;
+    let failed = 0;
+    // POST one at a time in batches of 50 (no bulk endpoint for contacts yet)
+    const BATCH = 50;
+    try {
+      for (let i = 0; i < importPreview.length; i += BATCH) {
+        const chunk = importPreview.slice(i, i + BATCH);
+        await Promise.all(chunk.map(async (row) => {
+          try {
+            await fetch(`https://api.continuumapi.com/v1/lists/${selectedList}/contacts`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
+              body: JSON.stringify({
+                email: row.email,
+                first_name: row.first_name || row.firstname || row["first name"] || undefined,
+                last_name: row.last_name || row.lastname || row["last name"] || undefined,
+                silent: true,
+              }),
+            });
+            ok++;
+          } catch { failed++; }
+        }));
+      }
+      toast.success(`${ok} contacts imported${failed > 0 ? `, ${failed} skipped` : ""}`);
+      setImportPreview(null);
+      setImportFile("");
+      loadContacts();
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const currentList = lists.find((l) => l.id === selectedList);
 
   return (
@@ -107,9 +173,15 @@ function ContactsPage() {
           <p className="text-sm text-muted-foreground">Manage subscribers across your mailing lists.</p>
         </header>
         {selectedList && (
-          <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}>
-            <Plus className="h-4 w-4" /> Add Contact
-          </Button>
+          <div className="flex gap-2">
+            <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFileSelect} />
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => fileRef.current?.click()}>
+              <Upload className="h-4 w-4" /> Import CSV
+            </Button>
+            <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}>
+              <Plus className="h-4 w-4" /> Add Contact
+            </Button>
+          </div>
         )}
       </div>
 
@@ -138,7 +210,7 @@ function ContactsPage() {
           <h2 className="text-sm font-semibold">Add Contact to {currentList?.name}</h2>
           <div className="space-y-1.5">
             <Label>Email *</Label>
-            <Input placeholder="subscriber@example.com" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
+            <Input placeholder="subscriber@example.com" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} autoFocus />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -153,6 +225,62 @@ function ContactsPage() {
           <div className="flex gap-2">
             <Button onClick={subscribe} disabled={saving}>{saving ? "Adding…" : "Subscribe"}</Button>
             <Button variant="outline" onClick={() => setAdding(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+
+      {/* CSV import preview */}
+      {importPreview && selectedList && (
+        <div className="rounded-lg border border-border bg-card p-5 space-y-4 max-w-3xl">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <FileText className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <p className="text-sm font-medium">{importFile}</p>
+                <p className="text-xs text-muted-foreground">
+                  {importPreview.length.toLocaleString()} contacts → {currentList?.name}
+                </p>
+              </div>
+            </div>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setImportPreview(null); setImportFile(""); }}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="rounded-md border border-border overflow-hidden">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-muted/40 text-muted-foreground border-b border-border">
+                  <th className="px-3 py-2 text-left font-medium">Email</th>
+                  <th className="px-3 py-2 text-left font-medium">First name</th>
+                  <th className="px-3 py-2 text-left font-medium">Last name</th>
+                </tr>
+              </thead>
+              <tbody>
+                {importPreview.slice(0, 5).map((row, i) => (
+                  <tr key={i} className="border-b border-border last:border-0">
+                    <td className="px-3 py-1.5 font-mono">{row.email}</td>
+                    <td className="px-3 py-1.5">{row.first_name || row.firstname || row["first name"] || "—"}</td>
+                    <td className="px-3 py-1.5">{row.last_name || row.lastname || row["last name"] || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {importPreview.length > 5 && (
+              <p className="px-3 py-2 text-xs text-muted-foreground border-t border-border">
+                + {(importPreview.length - 5).toLocaleString()} more rows
+              </p>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Expected columns: <code className="bg-muted rounded px-1">email</code>, <code className="bg-muted rounded px-1">first_name</code>, <code className="bg-muted rounded px-1">last_name</code>
+          </p>
+          <div className="flex gap-2">
+            <Button onClick={runImport} disabled={importing} className="gap-1.5">
+              {importing
+                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Importing…</>
+                : <><Upload className="h-3.5 w-3.5" /> Import {importPreview.length.toLocaleString()} Contacts</>}
+            </Button>
+            <Button variant="outline" onClick={() => { setImportPreview(null); setImportFile(""); }}>Cancel</Button>
           </div>
         </div>
       )}
@@ -181,7 +309,12 @@ function ContactsPage() {
         <div className="rounded-lg border border-border bg-card p-10 text-center">
           <Users className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
           <p className="text-sm text-muted-foreground mb-4">No contacts in {currentList?.name} yet.</p>
-          <Button size="sm" onClick={() => setAdding(true)}><Plus className="h-4 w-4 mr-1" /> Add First Contact</Button>
+          <div className="flex gap-2 justify-center">
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => fileRef.current?.click()}>
+              <Upload className="h-4 w-4" /> Import CSV
+            </Button>
+            <Button size="sm" onClick={() => setAdding(true)}><Plus className="h-4 w-4 mr-1" /> Add First Contact</Button>
+          </div>
         </div>
       ) : (
         <div className="rounded-lg border border-border bg-card overflow-hidden">
@@ -208,12 +341,7 @@ function ContactsPage() {
                     {c.subscribedAt ? new Date(c.subscribedAt).toLocaleDateString() : c.createdAt ? new Date(c.createdAt).toLocaleDateString() : "—"}
                   </td>
                   <td className="px-5 py-3">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-destructive"
-                      onClick={() => unsubscribe(c.email)}
-                    >
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => unsubscribe(c.email)}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </td>
