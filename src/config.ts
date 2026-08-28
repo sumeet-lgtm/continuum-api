@@ -89,6 +89,9 @@ const envSchema = z.object({
   // WorkOS (SSO / AuthKit)
   WORKOS_API_KEY: z.string().optional(),
   WORKOS_CLIENT_ID: z.string().optional(),
+
+  // Cal.com webhook secret (paste here after setting it in Cal.com → Webhooks → Secret)
+  CALCOM_WEBHOOK_SECRET: z.string().optional(),
   SESSION_SECRET: z
     .string()
     .min(32)

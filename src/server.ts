@@ -45,6 +45,7 @@ import { connectorRoutes } from './routes/connectors/index.js';
 import { automationRoutes } from './routes/automations/index.js';
 import { toolRoutes } from './routes/tools/index.js';
 import { authRoutes } from './routes/auth/index.js';
+import { calcomWebhookRoutes } from './routes/webhooks/calcom.js';
 import { loadDisposableList } from './engine/disposable.js';
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -162,6 +163,8 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(mcpRoutes);
   // Auth at /auth (no /v1 prefix — SSO redirects can't be versioned)
   await app.register(authRoutes);
+  // Cal.com booking webhook at root (no /v1 — Cal.com hits this directly)
+  await app.register(calcomWebhookRoutes);
   // Tracking + unsubscribe at root (no /v1 — links in emails go here)
   await app.register(trackRoutes);
   await app.register(unsubscribeRoutes, { prefix: '/v1' });
