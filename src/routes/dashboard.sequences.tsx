@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2 } from "lucide-react";
+import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/sequences")({
   head: () => ({ meta: [{ title: "Sequences — Continuum API" }] }),
@@ -182,6 +182,18 @@ function SequencesPage() {
     }
   };
 
+  const duplicate = async (id: string) => {
+    if (!primaryKey?.keyRaw) return;
+    try {
+      await fetch(`https://api.continuumapi.com/v1/sequences/${id}/duplicate`, {
+        method: "POST",
+        headers: { "X-API-Key": primaryKey.keyRaw! },
+      });
+      toast.success("Sequence duplicated");
+      load();
+    } catch (e: unknown) { toast.error((e as Error).message); }
+  };
+
   const deleteStep = async (seqId: string, stepId: string) => {
     if (!primaryKey?.keyRaw) return;
     try {
@@ -306,6 +318,9 @@ function SequencesPage() {
                   </Button>
                   <Button variant="outline" size="sm" className="gap-1" onClick={() => { setEnrollTarget(seq); setEnrollEmails(""); }}>
                     <Users className="h-3 w-3" /> Enroll
+                  </Button>
+                  <Button variant="ghost" size="sm" className="gap-1" onClick={() => duplicate(seq.id)}>
+                    <Copy className="h-3 w-3" /> Dupe
                   </Button>
                 </div>
               </div>

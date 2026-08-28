@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, RefreshCw, ServerCog, CheckCircle2, XCircle, Clock } from "lucide-react";
+import { Plus, RefreshCw, ServerCog, CheckCircle2, XCircle, Clock, ShieldCheck, X } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/domains")({
   head: () => ({ meta: [{ title: "Sending Domains — Continuum API" }] }),
@@ -24,6 +24,15 @@ interface Domain {
   verifiedAt: string | null;
 }
 
+interface HealthData {
+  spf: { valid: boolean; record: string | null };
+  dkim: { valid: boolean };
+  dmarc: { valid: boolean; record: string | null };
+  blacklisted: boolean;
+  blacklistHits: string[];
+  score: number;
+}
+
 function StatusIcon({ status }: { status: string }) {
   if (status === "verified") return <CheckCircle2 className="h-4 w-4 text-green-500" />;
   if (status === "failed") return <XCircle className="h-4 w-4 text-red-500" />;
@@ -37,6 +46,9 @@ function DomainsPage() {
   const [adding, setAdding] = useState(false);
   const [domainName, setDomainName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [healthDomain, setHealthDomain] = useState<Domain | null>(null);
+  const [healthData, setHealthData] = useState<HealthData | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -80,6 +92,26 @@ function DomainsPage() {
     }
   };
 
+  const checkHealth = async (domain: Domain) => {
+    if (!primaryKey?.keyRaw) return;
+    setHealthDomain(domain);
+    setHealthData(null);
+    setHealthLoading(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/domains/${domain.id}/health`, {
+        headers: { "X-API-Key": primaryKey.keyRaw! },
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((data as { error?: string })?.error ?? `Failed (${res.status})`);
+      setHealthData(data as HealthData);
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+      setHealthDomain(null);
+    } finally {
+      setHealthLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -91,6 +123,68 @@ function DomainsPage() {
           <Plus className="h-4 w-4" /> Add Domain
         </Button>
       </div>
+
+      {/* Health modal */}
+      {healthDomain && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="rounded-lg border border-border bg-card p-6 w-full max-w-md space-y-5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-semibold">Domain Health</h2>
+                <p className="text-xs text-muted-foreground font-mono mt-0.5">{healthDomain.name}</p>
+              </div>
+              <button onClick={() => { setHealthDomain(null); setHealthData(null); }} className="text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {healthLoading ? (
+              <p className="text-sm text-muted-foreground">Checking DNS and blacklists…</p>
+            ) : healthData ? (
+              <>
+                {/* Score */}
+                <div className="flex items-center gap-4">
+                  <div className={`h-16 w-16 rounded-full flex items-center justify-center text-xl font-bold border-4 ${
+                    healthData.score >= 80 ? "border-green-500 text-green-600" :
+                    healthData.score >= 50 ? "border-yellow-500 text-yellow-600" :
+                    "border-red-500 text-red-600"
+                  }`}>
+                    {healthData.score}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">
+                      {healthData.score >= 80 ? "Excellent" : healthData.score >= 50 ? "Needs Work" : "Poor"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Deliverability score out of 100</p>
+                  </div>
+                </div>
+
+                {/* Checks */}
+                <div className="space-y-2">
+                  {[
+                    { label: "SPF", valid: healthData.spf.valid, detail: healthData.spf.record ?? "No record found" },
+                    { label: "DKIM", valid: healthData.dkim.valid, detail: healthData.dkim.valid ? "Signature verified" : "Not configured" },
+                    { label: "DMARC", valid: healthData.dmarc.valid, detail: healthData.dmarc.record ?? "No _dmarc TXT record" },
+                    { label: "Blacklists", valid: !healthData.blacklisted, detail: healthData.blacklisted ? `Listed on: ${healthData.blacklistHits.join(", ")}` : "Clean on all checked lists" },
+                  ].map(({ label, valid, detail }) => (
+                    <div key={label} className="flex items-start gap-3">
+                      {valid
+                        ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0 mt-0.5" />
+                        : <XCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />}
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">{label}</p>
+                        <p className="text-xs text-muted-foreground truncate">{detail}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            <Button variant="outline" size="sm" className="w-full" onClick={() => { setHealthDomain(null); setHealthData(null); }}>Close</Button>
+          </div>
+        </div>
+      )}
 
       {adding && (
         <div className="rounded-lg border border-border bg-card p-6 space-y-4 max-w-md">
@@ -124,7 +218,7 @@ function DomainsPage() {
                 <th className="px-5 py-3 font-medium">DKIM</th>
                 <th className="px-5 py-3 font-medium">Return Path</th>
                 <th className="px-5 py-3 font-medium">Added</th>
-                <th className="px-5 py-3 font-medium w-24"></th>
+                <th className="px-5 py-3 font-medium w-32"></th>
               </tr>
             </thead>
             <tbody>
@@ -136,9 +230,14 @@ function DomainsPage() {
                   <td className="px-5 py-3"><StatusIcon status={d.returnPathStatus} /></td>
                   <td className="px-5 py-3 text-muted-foreground">{new Date(d.createdAt).toLocaleDateString()}</td>
                   <td className="px-5 py-3">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => recheck(d.id)}>
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1" onClick={() => checkHealth(d)}>
+                        <ShieldCheck className="h-3 w-3" /> Health
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => recheck(d.id)}>
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}

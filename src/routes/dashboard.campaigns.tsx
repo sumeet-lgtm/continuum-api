@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Megaphone, Send, FlaskConical, X } from "lucide-react";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
@@ -93,6 +93,18 @@ function CampaignsPage() {
     } catch (e: unknown) {
       toast.error((e as Error).message);
     }
+  };
+
+  const duplicate = async (id: string) => {
+    if (!primaryKey?.keyRaw) return;
+    try {
+      await fetch(`https://api.continuumapi.com/v1/campaigns/${id}/duplicate`, {
+        method: "POST",
+        headers: { "X-API-Key": primaryKey.keyRaw! },
+      });
+      toast.success("Campaign duplicated as draft");
+      load();
+    } catch (e: unknown) { toast.error((e as Error).message); }
   };
 
   const sendTest = async () => {
@@ -242,6 +254,9 @@ function CampaignsPage() {
                       <div className="flex gap-1">
                         <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => { setTestTarget(c.id); setTestEmail(""); }}>
                           <FlaskConical className="h-3 w-3" /> Test
+                        </Button>
+                        <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => duplicate(c.id)}>
+                          <Copy className="h-3 w-3" /> Dupe
                         </Button>
                         {c.status === "draft" && (
                           <Button size="sm" variant="outline" className="gap-1 h-7 px-2 text-xs" onClick={() => sendCampaign(c.id)}>
