@@ -216,9 +216,91 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   // ─── POST /auth/logout ──────────────────────────────────────────────────────
-  // Stateless — JWTs expire automatically. This endpoint exists for clients
-  // to call on logout; they should discard the token on their side.
   fastify.post('/auth/logout', async (_request, reply) => {
     return reply.status(200).send({ ok: true });
+  });
+
+  // ─── Shared session resolver for enterprise endpoints ───────────────────────
+  async function resolveSessionUser(request: FastifyRequest): Promise<{ id: string; email: string; orgId: string | null }> {
+    const authHeader = request.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) throw Errors.unauthorized('Missing session token');
+    let payload: { userId: string };
+    try {
+      payload = await verifySession(authHeader.slice(7));
+    } catch {
+      throw Errors.unauthorized('Session expired — please sign in again');
+    }
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId },
+      select: { id: true, email: true, orgId: true },
+    });
+    if (!user) throw Errors.unauthorized('User not found');
+    return user;
+  }
+
+  // Personal email domains that shouldn't get enterprise SSO
+  const PERSONAL_DOMAINS = new Set([
+    'gmail.com','googlemail.com','yahoo.com','yahoo.co.in','outlook.com',
+    'hotmail.com','live.com','icloud.com','me.com','protonmail.com',
+    'proton.me','aol.com','yandex.com','mail.com',
+  ]);
+
+  // ─── GET /auth/enterprise/status ────────────────────────────────────────────
+  fastify.get('/auth/enterprise/status', async (request, reply) => {
+    const user = await resolveSessionUser(request);
+    const domain = user.email.split('@')[1] ?? '';
+
+    if (PERSONAL_DOMAINS.has(domain)) {
+      return reply.send({ configured: false, eligible: false, domain, reason: 'personal_domain' });
+    }
+
+    if (!user.orgId) {
+      return reply.send({ configured: false, eligible: true, domain, organizationId: null });
+    }
+
+    try {
+      const connections = await getWorkOS().sso.listConnections({ organizationId: user.orgId });
+      const active = connections.data.filter((c) => c.state === 'active');
+      return reply.send({
+        configured: active.length > 0,
+        eligible: true,
+        domain,
+        organizationId: user.orgId,
+        connectionCount: active.length,
+        connectionType: active[0]?.connectionType ?? null,
+      });
+    } catch {
+      return reply.send({ configured: false, eligible: true, domain, organizationId: user.orgId });
+    }
+  });
+
+  // ─── POST /auth/enterprise/portal ───────────────────────────────────────────
+  // Creates a WorkOS Organization for the user's domain (once) then returns a
+  // short-lived Admin Portal link where the org admin configures their IdP.
+  fastify.post('/auth/enterprise/portal', async (request, reply) => {
+    const user = await resolveSessionUser(request);
+    const domain = user.email.split('@')[1] ?? '';
+
+    if (PERSONAL_DOMAINS.has(domain)) {
+      throw Errors.validationFailed([{ field: 'domain', message: 'Enterprise SSO is not available for personal email domains.' }]);
+    }
+
+    let orgId = user.orgId;
+
+    if (!orgId) {
+      const org = await getWorkOS().organizations.createOrganization({
+        name: domain,
+        domainData: [{ domain, state: 'verified' }],
+      });
+      orgId = org.id;
+      await prisma.user.update({ where: { id: user.id }, data: { orgId } });
+    }
+
+    const { link } = await getWorkOS().portal.generateLink({
+      organization: orgId,
+      intent: 'sso',
+    });
+
+    return reply.status(200).send({ link, organizationId: orgId, domain });
   });
 }
