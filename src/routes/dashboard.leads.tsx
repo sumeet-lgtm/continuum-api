@@ -25,13 +25,33 @@ interface Lead {
   createdAt: string;
 }
 
-// Parse a CSV string → array of row objects using first row as headers
+// Parse a CSV string → array of row objects using first row as headers.
+// Handles RFC-4180 quoted fields (commas + newlines inside quotes).
 function parseCSV(text: string): Record<string, string>[] {
+  function splitLine(line: string): string[] {
+    const fields: string[] = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+        else { inQuotes = !inQuotes; }
+      } else if (ch === "," && !inQuotes) {
+        fields.push(cur.trim());
+        cur = "";
+      } else {
+        cur += ch;
+      }
+    }
+    fields.push(cur.trim());
+    return fields;
+  }
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
   if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, "").toLowerCase());
+  const headers = splitLine(lines[0]).map((h) => h.toLowerCase());
   return lines.slice(1).map((line) => {
-    const values = line.split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
+    const values = splitLine(line);
     const row: Record<string, string> = {};
     headers.forEach((h, i) => { row[h] = values[i] ?? ""; });
     return row;
@@ -121,8 +141,12 @@ function LeadsPage() {
           headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
           body: JSON.stringify({ leads: chunk }),
         });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error((err as { error?: string }).error ?? `Failed (${res.status})`);
+        }
         const json = await res.json().catch(() => ({ imported: 0 }));
-        imported += (json as { imported?: number }).imported ?? chunk.length;
+        imported += (json as { imported?: number }).imported ?? 0;
       }
       toast.success(`${imported.toLocaleString()} leads imported`);
       setImportPreview(null);
@@ -279,15 +303,23 @@ function LeadsPage() {
                     value={l.status}
                     onChange={async (e) => {
                       const newStatus = e.target.value;
+                      const prevStatus = l.status;
                       if (!primaryKey?.keyRaw) return;
+                      setLeads((prev) => prev.map((x) => x.id === l.id ? { ...x, status: newStatus } : x));
                       try {
-                        await fetch(`https://api.continuumapi.com/v1/leads/${l.id}/status`, {
+                        const res = await fetch(`https://api.continuumapi.com/v1/leads/${l.id}/status`, {
                           method: "PATCH",
                           headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
                           body: JSON.stringify({ status: newStatus }),
                         });
-                        setLeads((prev) => prev.map((x) => x.id === l.id ? { ...x, status: newStatus } : x));
-                      } catch { /* ignore */ }
+                        if (!res.ok) {
+                          const err = await res.json().catch(() => ({}));
+                          throw new Error((err as { error?: string }).error ?? `Failed (${res.status})`);
+                        }
+                      } catch (e: unknown) {
+                        setLeads((prev) => prev.map((x) => x.id === l.id ? { ...x, status: prevStatus } : x));
+                        toast.error((e as Error).message);
+                      }
                     }}
                   >
                     {["active","interested","not_interested","replied","unsubscribed","bounced","do_not_contact"].map((s) => (

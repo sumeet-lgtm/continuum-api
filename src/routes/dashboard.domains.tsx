@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, RefreshCw, ServerCog, CheckCircle2, XCircle, Clock, ShieldCheck, X } from "lucide-react";
+import { Plus, RefreshCw, ServerCog, CheckCircle2, XCircle, Clock, ShieldCheck, X, Copy, Check } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/domains")({
   head: () => ({ meta: [{ title: "Sending Domains — Continuum API" }] }),
@@ -22,6 +22,14 @@ interface Domain {
   returnPathStatus: string;
   createdAt: string;
   verifiedAt: string | null;
+}
+
+interface DnsRecord { name: string; type: string; value: string; priority?: number; }
+interface DnsRecords {
+  dkim: DnsRecord;
+  spf: DnsRecord;
+  return_path: DnsRecord;
+  dmarc: DnsRecord;
 }
 
 interface HealthData {
@@ -49,6 +57,8 @@ function DomainsPage() {
   const [healthDomain, setHealthDomain] = useState<Domain | null>(null);
   const [healthData, setHealthData] = useState<HealthData | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
+  const [newDnsRecords, setNewDnsRecords] = useState<DnsRecords | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -61,16 +71,23 @@ function DomainsPage() {
 
   useEffect(() => { load(); }, [primaryKey]);
 
+  const copyDns = async (key: string, value: string) => {
+    await navigator.clipboard.writeText(value).catch(() => {});
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 1500);
+  };
+
   const add = async () => {
     if (!primaryKey?.keyRaw || !domainName.trim()) return;
     setSaving(true);
     try {
-      const res = await api.withKey.post<{ domain: Domain; dnsRecords: unknown[] }>(
+      const res = await api.withKey.post<Domain & { dns_records: DnsRecords }>(
         "/v1/domains",
         { name: domainName.trim() },
         primaryKey.keyRaw,
       );
-      toast.success(`Domain ${res.domain.name} added — add the DNS records to verify.`);
+      toast.success(`Domain ${res.name} added — add the DNS records below to your registrar.`);
+      setNewDnsRecords(res.dns_records);
       setAdding(false);
       setDomainName("");
       load();
@@ -106,7 +123,6 @@ function DomainsPage() {
       setHealthData(data as HealthData);
     } catch (e: unknown) {
       toast.error((e as Error).message);
-      setHealthDomain(null);
     } finally {
       setHealthLoading(false);
     }
@@ -183,6 +199,46 @@ function DomainsPage() {
 
             <Button variant="outline" size="sm" className="w-full" onClick={() => { setHealthDomain(null); setHealthData(null); }}>Close</Button>
           </div>
+        </div>
+      )}
+
+      {/* DNS records panel shown after successful domain add */}
+      {newDnsRecords && (
+        <div className="rounded-lg border border-green-200 dark:border-green-900 bg-green-50 dark:bg-green-950/30 p-6 space-y-4 max-w-3xl">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+              <p className="text-sm font-medium">Domain added — add these DNS records to your registrar to verify</p>
+            </div>
+            <button onClick={() => setNewDnsRecords(null)} className="text-muted-foreground hover:text-foreground shrink-0">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="space-y-3">
+            {(Object.entries(newDnsRecords) as [keyof DnsRecords, DnsRecord][]).map(([key, rec]) => (
+              <div key={key} className="rounded-md border border-border bg-card p-3 space-y-1">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{key.replace("_", " ")}</span>
+                  <span className="text-xs bg-muted rounded px-1.5 py-0.5 font-mono">{rec.type}</span>
+                </div>
+                <div className="grid grid-cols-[auto,1fr,auto] gap-2 items-center">
+                  <span className="text-xs text-muted-foreground">Name</span>
+                  <code className="text-xs font-mono truncate">{rec.name}</code>
+                  <button onClick={() => copyDns(`${key}-name`, rec.name)} className="text-muted-foreground hover:text-foreground shrink-0">
+                    {copiedKey === `${key}-name` ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+                <div className="grid grid-cols-[auto,1fr,auto] gap-2 items-start">
+                  <span className="text-xs text-muted-foreground mt-0.5">Value</span>
+                  <code className="text-xs font-mono break-all leading-relaxed">{rec.value}</code>
+                  <button onClick={() => copyDns(`${key}-value`, rec.value)} className="text-muted-foreground hover:text-foreground shrink-0 mt-0.5">
+                    {copiedKey === `${key}-value` ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">DNS changes can take up to 48 hours to propagate. Click Re-check on the domain row once records are added.</p>
         </div>
       )}
 

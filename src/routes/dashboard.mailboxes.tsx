@@ -38,8 +38,8 @@ function MailboxesPage() {
   const load = () => {
     if (!primaryKey?.keyRaw) return;
     api.withKey
-      .get<{ mailboxes: Mailbox[] }>("/v1/mailboxes", primaryKey.keyRaw)
-      .then((r) => setMailboxes(r.data ?? r.mailboxes ?? []))
+      .get<{ data: Mailbox[] }>("/v1/mailboxes", primaryKey.keyRaw)
+      .then((r) => setMailboxes(r.data ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };
@@ -78,10 +78,14 @@ function MailboxesPage() {
     setWarmupBusy(m.id);
     try {
       if (m.warmupConfig?.enabled) {
-        await fetch(`https://api.continuumapi.com/v1/mailboxes/${m.id}/warmup`, {
+        const res = await fetch(`https://api.continuumapi.com/v1/mailboxes/${m.id}/warmup`, {
           method: "DELETE",
           headers: { "X-API-Key": primaryKey.keyRaw! },
         });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error((err as { error?: string }).error ?? `Failed (${res.status})`);
+        }
         toast.success("Warmup disabled");
         setMailboxes((prev) => prev.map((x) => x.id === m.id ? { ...x, warmupConfig: x.warmupConfig ? { ...x.warmupConfig, enabled: false } : null } : x));
       } else {

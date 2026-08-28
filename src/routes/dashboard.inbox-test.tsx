@@ -136,6 +136,7 @@ function InboxTestPage() {
                   <th className="px-5 py-3 font-medium">Status</th>
                   <th className="px-5 py-3 font-medium">Gmail</th>
                   <th className="px-5 py-3 font-medium">Outlook</th>
+                  <th className="px-5 py-3 font-medium">Yahoo</th>
                   <th className="px-5 py-3 font-medium">Score</th>
                   <th className="px-5 py-3 font-medium">Run at</th>
                 </tr>
@@ -153,7 +154,7 @@ function InboxTestPage() {
                         : <span className="text-xs text-green-600 capitalize">{t.status}</span>
                       }
                     </td>
-                    {(["gmail", "outlook"] as const).map((provider) => {
+                    {(["gmail", "outlook", "yahoo"] as const).map((provider) => {
                       const placement = t.results?.[provider] ?? (t.status === "complete" ? "unknown" : null);
                       if (!placement) return <td key={provider} className="px-5 py-3 text-xs text-muted-foreground">—</td>;
                       const info = PLACEMENT_LABEL[placement] ?? PLACEMENT_LABEL["unknown"]!;

@@ -66,8 +66,8 @@ function SequencesPage() {
   const load = () => {
     if (!primaryKey?.keyRaw) return;
     api.withKey
-      .get<{ sequences: Sequence[] }>("/v1/sequences", primaryKey.keyRaw)
-      .then((r) => setSequences(r.data ?? r.sequences ?? []))
+      .get<{ data: Sequence[] }>("/v1/sequences", primaryKey.keyRaw)
+      .then((r) => setSequences(r.data ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };
@@ -121,14 +121,21 @@ function SequencesPage() {
   const toggleStatus = async (seq: Sequence) => {
     if (!primaryKey?.keyRaw) return;
     const newStatus = seq.status === "active" ? "paused" : "active";
+    setSequences((s) => s.map((x) => x.id === seq.id ? { ...x, status: newStatus } : x));
     try {
-      await fetch(`https://api.continuumapi.com/v1/sequences/${seq.id}`, {
+      const res = await fetch(`https://api.continuumapi.com/v1/sequences/${seq.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
         body: JSON.stringify({ status: newStatus }),
       });
-      setSequences((s) => s.map((x) => x.id === seq.id ? { ...x, status: newStatus } : x));
-    } catch (e: unknown) { toast.error((e as Error).message); }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? `Failed (${res.status})`);
+      }
+    } catch (e: unknown) {
+      setSequences((s) => s.map((x) => x.id === seq.id ? { ...x, status: seq.status } : x));
+      toast.error((e as Error).message);
+    }
   };
 
   const enroll = async () => {
@@ -185,10 +192,14 @@ function SequencesPage() {
   const duplicate = async (id: string) => {
     if (!primaryKey?.keyRaw) return;
     try {
-      await fetch(`https://api.continuumapi.com/v1/sequences/${id}/duplicate`, {
+      const res = await fetch(`https://api.continuumapi.com/v1/sequences/${id}/duplicate`, {
         method: "POST",
-        headers: { "X-API-Key": primaryKey.keyRaw! },
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? `Failed (${res.status})`);
+      }
       toast.success("Sequence duplicated");
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
@@ -197,10 +208,14 @@ function SequencesPage() {
   const deleteStep = async (seqId: string, stepId: string) => {
     if (!primaryKey?.keyRaw) return;
     try {
-      await fetch(`https://api.continuumapi.com/v1/sequences/${seqId}/steps/${stepId}`, {
+      const res = await fetch(`https://api.continuumapi.com/v1/sequences/${seqId}/steps/${stepId}`, {
         method: "DELETE",
         headers: { "X-API-Key": primaryKey.keyRaw! },
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? `Failed (${res.status})`);
+      }
       setSteps((prev) => ({ ...prev, [seqId]: (prev[seqId] ?? []).filter((s) => s.id !== stepId) }));
       setSequences((s) => s.map((x) => x.id === seqId ? { ...x, _count: { ...x._count, steps: Math.max(0, (x._count?.steps ?? 1) - 1), enrollments: x._count?.enrollments ?? 0 } } : x));
       toast.success("Step removed");
