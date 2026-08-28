@@ -92,6 +92,8 @@ const envSchema = z.object({
 
   // Cal.com webhook secret (paste here after setting it in Cal.com → Webhooks → Secret)
   CALCOM_WEBHOOK_SECRET: z.string().optional(),
+  // WorkOS webhook secret (from WorkOS Dashboard → Webhooks → Endpoint → Secret)
+  WORKOS_WEBHOOK_SECRET: z.string().optional(),
   SESSION_SECRET: z
     .string()
     .min(32)

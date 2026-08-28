@@ -5,6 +5,8 @@ export interface SessionPayload extends JWTPayload {
   userId: string;
   email: string;
   primaryKeyId?: string;
+  orgId?: string;
+  orgRole?: string;
 }
 
 function secret(): Uint8Array {

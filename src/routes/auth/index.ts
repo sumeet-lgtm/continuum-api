@@ -84,10 +84,12 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     try {
-      const { user: workosUser } = await getWorkOS().userManagement.authenticateWithCode({
+      const authResult = await getWorkOS().userManagement.authenticateWithCode({
         clientId: config.WORKOS_CLIENT_ID!,
         code,
       });
+      const workosUser = authResult.user;
+      const workosOrgId = (authResult as unknown as Record<string, unknown>).organizationId as string | undefined;
 
       // Upsert user by WorkOS ID
       const user = await prisma.user.upsert({
@@ -97,13 +99,46 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
           workosId: workosUser.id,
           firstName: workosUser.firstName ?? null,
           lastName: workosUser.lastName ?? null,
+          orgId: workosOrgId ?? null,
         },
         update: {
           email: workosUser.email,
           firstName: workosUser.firstName ?? null,
           lastName: workosUser.lastName ?? null,
+          ...(workosOrgId ? { orgId: workosOrgId } : {}),
         },
       });
+
+      // Capture org membership if user authenticated via an org SSO
+      let orgRole: string | undefined;
+      if (workosOrgId) {
+        try {
+          const memberships = await getWorkOS().userManagement.listOrganizationMemberships({
+            userId: workosUser.id,
+            organizationId: workosOrgId,
+          });
+          const activeMembership = memberships.data.find((m) => m.status === 'active');
+          if (activeMembership) {
+            const anyMembership = activeMembership as unknown as Record<string, unknown> & { role?: { slug?: string } };
+            const roleSlug = anyMembership.role?.slug ?? 'member';
+            orgRole = roleSlug;
+            await prisma.orgMember.upsert({
+              where: { membershipId: activeMembership.id },
+              create: {
+                userId: user.id,
+                orgId: workosOrgId,
+                membershipId: activeMembership.id,
+                role: roleSlug,
+                email: workosUser.email,
+                status: 'active',
+              },
+              update: { role: roleSlug, status: 'active', email: workosUser.email },
+            });
+          }
+        } catch {
+          // Non-fatal — proceed without org role in JWT
+        }
+      }
 
       // Find or create a primary API key scoped to this user
       let apiKey = await prisma.apiKey.findFirst({
@@ -148,6 +183,8 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         userId: user.id,
         email: user.email,
         primaryKeyId: apiKey.id,
+        orgId: workosOrgId,
+        orgRole,
       });
 
       const separator = redirectTarget.includes('?') ? '&' : '?';
@@ -261,13 +298,14 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     try {
       const connections = await getWorkOS().sso.listConnections({ organizationId: user.orgId });
       const active = connections.data.filter((c) => c.state === 'active');
+      const firstConn = active[0] as (typeof active[number] & { connectionType?: string }) | undefined;
       return reply.send({
         configured: active.length > 0,
         eligible: true,
         domain,
         organizationId: user.orgId,
         connectionCount: active.length,
-        connectionType: active[0]?.connectionType ?? null,
+        connectionType: firstConn?.connectionType ?? null,
       });
     } catch {
       return reply.send({ configured: false, eligible: true, domain, organizationId: user.orgId });
@@ -290,13 +328,13 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     if (!orgId) {
       const org = await getWorkOS().organizations.createOrganization({
         name: domain,
-        domainData: [{ domain, state: 'verified' }],
+        domainData: [{ domain, state: 'verified' as unknown as never }],
       });
       orgId = org.id;
       await prisma.user.update({ where: { id: user.id }, data: { orgId } });
     }
 
-    const { link } = await getWorkOS().portal.generateLink({
+    const { link } = await getWorkOS().adminPortal.generateLink({
       organization: orgId,
       intent: 'sso',
     });

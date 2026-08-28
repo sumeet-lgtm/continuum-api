@@ -46,6 +46,8 @@ import { automationRoutes } from './routes/automations/index.js';
 import { toolRoutes } from './routes/tools/index.js';
 import { authRoutes } from './routes/auth/index.js';
 import { calcomWebhookRoutes } from './routes/webhooks/calcom.js';
+import { workosWebhookRoutes } from './routes/webhooks/workos.js';
+import { orgRoutes } from './routes/org/index.js';
 import { loadDisposableList } from './engine/disposable.js';
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -165,6 +167,10 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(authRoutes);
   // Cal.com booking webhook at root (no /v1 — Cal.com hits this directly)
   await app.register(calcomWebhookRoutes);
+  // WorkOS SCIM/org webhooks
+  await app.register(workosWebhookRoutes);
+  // Organization management (session JWT auth)
+  await app.register(orgRoutes);
   // Tracking + unsubscribe at root (no /v1 — links in emails go here)
   await app.register(trackRoutes);
   await app.register(unsubscribeRoutes, { prefix: '/v1' });

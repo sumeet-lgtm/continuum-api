@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { hashApiKey } from '../lib/crypto.js';
 import { Errors } from './errorHandler.js';
 import { logger } from '../lib/logger.js';
+import { verifySession } from '../lib/session.js';
 
 // Minimal local type matching the Prisma ApiKey model shape.
 // Replace with `import type { ApiKey } from '@prisma/client'` after `prisma generate`.
@@ -32,9 +33,17 @@ interface ApiKeyRecord {
   lastUsedAt: Date | null;
 }
 
+export interface OrgSessionUser {
+  userId: string;
+  email: string;
+  orgId: string | null;
+  orgRole: string | null;
+}
+
 declare module 'fastify' {
   interface FastifyRequest {
     apiKey: ApiKeyRecord;
+    sessionUser?: OrgSessionUser;
   }
 }
 
@@ -158,3 +167,48 @@ export async function requireFullAccess(
 export const authPlugin = fp(authPluginFn, {
   name: 'auth',
 });
+
+/**
+ * Prehandler — verifies session JWT and populates request.sessionUser.
+ * Use on org routes that need session context (not API key auth).
+ */
+export async function requireOrgSession(
+  request: FastifyRequest,
+  _reply: FastifyReply,
+): Promise<void> {
+  const authHeader = request.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    throw Errors.unauthorized('Missing session token');
+  }
+  let payload: { userId: string; email: string; orgId?: string; orgRole?: string };
+  try {
+    payload = await verifySession(authHeader.slice(7));
+  } catch {
+    throw Errors.unauthorized('Session expired — please sign in again');
+  }
+  const user = await prisma.user.findUnique({
+    where: { id: payload.userId },
+    select: { id: true, email: true, orgId: true },
+  });
+  if (!user) throw Errors.unauthorized('User not found');
+  request.sessionUser = {
+    userId: user.id,
+    email: user.email,
+    orgId: payload.orgId ?? user.orgId ?? null,
+    orgRole: payload.orgRole ?? null,
+  };
+}
+
+/**
+ * Prehandler — requires session JWT AND admin role in the org.
+ * Chain after requireOrgSession or use standalone (it calls requireOrgSession internally).
+ */
+export async function requireOrgAdmin(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  await requireOrgSession(request, reply);
+  if (request.sessionUser?.orgRole !== 'admin') {
+    throw Errors.forbidden('Admin role required for this action');
+  }
+}

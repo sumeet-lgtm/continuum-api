@@ -19,7 +19,43 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  orgMemberships OrgMember[]
+
   @@map("users")
+}
+
+// ─── Org Members (WorkOS org memberships) ────────────────────────────────────
+
+model OrgMember {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  orgId        String   @map("org_id")
+  membershipId String   @unique @map("membership_id")
+  role         String   @default("member")
+  email        String
+  status       String   @default("active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, orgId])
+  @@index([orgId])
+  @@map("org_members")
+}
+
+// ─── Org Settings ─────────────────────────────────────────────────────────────
+
+model OrgSettings {
+  id          String   @id @default(cuid())
+  orgId       String   @unique @map("org_id")
+  name        String?
+  domain      String?
+  mfaRequired Boolean  @default(false) @map("mfa_required")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("org_settings")
 }
 
 // ─── API Keys ────────────────────────────────────────────────────────────────
