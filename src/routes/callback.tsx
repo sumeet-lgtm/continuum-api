@@ -1,27 +1,29 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { getToken } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 
 export const Route = createFileRoute("/callback")({
   component: CallbackPage,
 });
 
 function CallbackPage() {
+  const { loading, user } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Token was already stored by AuthProvider on mount.
-    // If we have a token, go to dashboard; otherwise login.
-    if (getToken()) {
-      navigate({ to: "/dashboard" });
+    // Wait for AuthProvider to finish loadMe() — it extracts the ?token= from
+    // the URL, stores it, and calls /auth/me. Only navigate once that resolves.
+    if (loading) return;
+    if (user) {
+      void navigate({ to: "/dashboard" });
     } else {
-      navigate({ to: "/login" });
+      void navigate({ to: "/login" });
     }
-  }, [navigate]);
+  }, [loading, user, navigate]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-foreground" />
+    <div className="min-h-screen flex items-center justify-center bg-black">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/10 border-t-white" />
     </div>
   );
 }
