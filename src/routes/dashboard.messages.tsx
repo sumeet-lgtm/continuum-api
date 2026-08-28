@@ -52,13 +52,13 @@ const STATUS_OPTIONS = ["", "sent", "delivered", "bounced", "complained", "sched
 
 function eventIcon(type: string) {
   switch (type) {
-    case "sent": return <Mail className="h-3.5 w-3.5 text-blue-500" />;
-    case "delivered": return <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />;
-    case "bounced": return <XCircle className="h-3.5 w-3.5 text-red-500" />;
-    case "complained": return <AlertTriangle className="h-3.5 w-3.5 text-orange-500" />;
-    case "failed": return <XCircle className="h-3.5 w-3.5 text-red-500" />;
-    case "open": return <Eye className="h-3.5 w-3.5 text-purple-500" />;
-    case "click": return <MousePointerClick className="h-3.5 w-3.5 text-indigo-500" />;
+    case "sent": return <Mail className="h-3.5 w-3.5 text-foreground" />;
+    case "delivered": return <CheckCircle2 className="h-3.5 w-3.5 text-foreground" />;
+    case "bounced": return <XCircle className="h-3.5 w-3.5 text-destructive" />;
+    case "complained": return <AlertTriangle className="h-3.5 w-3.5 text-destructive" />;
+    case "failed": return <XCircle className="h-3.5 w-3.5 text-destructive" />;
+    case "open": return <Eye className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "click": return <MousePointerClick className="h-3.5 w-3.5 text-muted-foreground" />;
     default: return <Clock className="h-3.5 w-3.5 text-muted-foreground" />;
   }
 }

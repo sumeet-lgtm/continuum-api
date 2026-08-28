@@ -158,7 +158,7 @@ function SuppressionsPage() {
                   <td className="px-5 py-3">
                     <span className={`text-xs rounded-full px-2 py-0.5 font-medium ${
                       s.reason === "bounce" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
-                      s.reason === "complaint" ? "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" :
+                      s.reason === "complaint" ? "bg-muted text-muted-foreground" :
                       "bg-muted text-muted-foreground"
                     }`}>
                       {REASON_LABELS[s.reason] ?? s.reason}

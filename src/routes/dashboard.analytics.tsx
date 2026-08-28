@@ -266,7 +266,7 @@ function AnalyticsPage() {
                         <span className="text-xs text-muted-foreground uppercase">{m.type}</span>
                         <StatusBadge status={m.status} />
                         {m.warmupConfig?.enabled && (
-                          <span className="text-xs rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 font-medium">
+                          <span className="text-xs rounded-full bg-muted text-muted-foreground px-2 py-0.5 font-medium">
                             Warmup {m.warmupConfig.currentPerDay}/{m.warmupConfig.targetPerDay}/day
                           </span>
                         )}
@@ -274,7 +274,7 @@ function AnalyticsPage() {
                       <div className="flex items-center gap-3">
                         <div className="flex-1 bg-muted rounded-full h-1.5 max-w-[200px]">
                           <div
-                            className={`h-1.5 rounded-full transition-all ${usePct >= 90 ? "bg-red-500" : usePct >= 70 ? "bg-amber-500" : "bg-green-500"}`}
+                            className={`h-1.5 rounded-full transition-all ${usePct >= 90 ? "bg-destructive" : usePct >= 70 ? "bg-foreground/60" : "bg-foreground"}`}
                             style={{ width: `${usePct}%` }}
                           />
                         </div>

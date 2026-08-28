@@ -170,7 +170,7 @@ function MailboxesPage() {
                   <StatusBadge status={m.status} />
                   {m.warmupConfig?.enabled && (
                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <Zap className="h-3 w-3 text-amber-500" /> {m.warmupConfig.currentPerDay}/{m.warmupConfig.targetPerDay}/day
+                      <Zap className="h-3 w-3 text-muted-foreground" /> {m.warmupConfig.currentPerDay}/{m.warmupConfig.targetPerDay}/day
                     </span>
                   )}
                   <Button

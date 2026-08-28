@@ -33,7 +33,7 @@ interface InboxTest {
 const PROVIDER_LABELS: Record<string, string> = { gmail: "Gmail", outlook: "Outlook", yahoo: "Yahoo" };
 const PLACEMENT_LABEL: Record<string, { label: string; color: string; icon: typeof CheckCircle2 }> = {
   inbox: { label: "Inbox", color: "text-green-600", icon: CheckCircle2 },
-  promotions: { label: "Promotions", color: "text-amber-600", icon: HelpCircle },
+  promotions: { label: "Promotions", color: "text-muted-foreground", icon: HelpCircle },
   spam: { label: "Spam", color: "text-red-600", icon: XCircle },
   unknown: { label: "Unknown", color: "text-muted-foreground", icon: HelpCircle },
 };
@@ -150,7 +150,7 @@ function InboxTestPage() {
                     </td>
                     <td className="px-5 py-3">
                       {t.status === "pending" || t.status === "checking"
-                        ? <span className="flex items-center gap-1 text-xs text-amber-600"><Loader2 className="h-3 w-3 animate-spin" /> Checking…</span>
+                        ? <span className="flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Checking…</span>
                         : <span className="text-xs text-green-600 capitalize">{t.status}</span>
                       }
                     </td>
@@ -169,7 +169,7 @@ function InboxTestPage() {
                     })}
                     <td className="px-5 py-3">
                       {t.score != null
-                        ? <span className={`text-sm font-semibold tabular-nums ${t.score >= 80 ? "text-green-600" : t.score >= 50 ? "text-amber-600" : "text-red-600"}`}>{t.score}/100</span>
+                        ? <span className={`text-sm font-semibold tabular-nums ${t.score >= 80 ? "text-foreground" : t.score >= 50 ? "text-muted-foreground" : "text-destructive"}`}>{t.score}/100</span>
                         : <span className="text-muted-foreground text-xs">—</span>
                       }
                     </td>
