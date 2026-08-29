@@ -16,6 +16,12 @@ interface SendStats {
   opens: number; clicks: number; delivery_rate: number; open_rate: number;
   click_rate: number; bounce_rate: number; complaint_rate: number;
 }
+interface AccuracyBucket {
+  verified_status: "valid" | "risky" | "unknown";
+  total_sent: number; bounced: number; complained: number;
+  bounce_rate: number | null; complaint_rate: number | null; sample_size_ok: boolean;
+}
+interface AccuracyStats { buckets: AccuracyBucket[]; measured_accuracy_pct: number | null; min_sample_size: number; }
 interface TimelinePoint { date: string; sent: number; delivered: number; bounced: number; }
 interface CampaignStat { id: string; subject: string; status: string; sentAt: string | null; totalRecipients: number; sentCount: number; deliveredCount: number; openCount: number; clickCount: number; delivery_rate: number; open_rate: number; click_rate: number; bounce_rate: number; }
 interface SequenceStat { id: string; name: string; status: string; total_enrolled: number; active: number; completed: number; replied: number; bounced: number; reply_rate: number; completion_rate: number; }
@@ -30,6 +36,7 @@ function AnalyticsPage() {
   const { primaryKey } = useAuth();
   const [tab, setTab] = useState<Tab>("overview");
   const [stats, setStats] = useState<SendStats | null>(null);
+  const [accuracy, setAccuracy] = useState<AccuracyStats | null>(null);
   const [timeline, setTimeline] = useState<TimelinePoint[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignStat[]>([]);
   const [sequences, setSequences] = useState<SequenceStat[]>([]);
@@ -51,9 +58,15 @@ function AnalyticsPage() {
       api.withKey.get<{ data: TimelinePoint[] }>(`/v1/analytics/sends/timeline?date_from=${dateFrom}`, primaryKey.keyRaw),
       api.withKey.get<{ data: CampaignStat[] }>("/v1/analytics/campaigns?limit=20", primaryKey.keyRaw),
       api.withKey.get<{ data: SequenceStat[] }>("/v1/analytics/sequences?limit=20", primaryKey.keyRaw),
+      // All-time, not the 30-day window the rest of the page uses — this
+      // stat is more meaningful with the largest sample it can get, and a
+      // low-volume account needs every real send it can get toward the
+      // minimum sample size before this shows a number at all.
+      api.withKey.get<AccuracyStats>("/v1/analytics/verification-accuracy", primaryKey.keyRaw),
     ])
-      .then(([s, t, c, sq]) => {
+      .then(([s, t, c, sq, acc]) => {
         setStats(s);
+        setAccuracy(acc);
         setTimeline(t.data ?? []);
         setCampaigns(c.data ?? []);
         setSequences(sq.data ?? []);
@@ -122,6 +135,7 @@ function AnalyticsPage() {
           </div>
         ) : (
           <>
+            {accuracy && <AccuracyCard accuracy={accuracy} />}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <StatCard label="Sent" value={stats.sent.toLocaleString()} icon={BarChart3} />
               <StatCard label="Delivery rate" value={pct(stats.delivery_rate)} icon={TrendingUp} color="text-green-600" />
@@ -328,6 +342,56 @@ function StatCard({ label, value, icon: Icon, color }: { label: string; value: s
         {Icon && <Icon className={`h-4 w-4 ${color ?? "text-muted-foreground"}`} />}
       </div>
       <div className={`mt-1.5 text-2xl font-semibold tabular-nums tracking-tight ${color ?? ""}`}>{value}</div>
+    </div>
+  );
+}
+
+// Measured from this account's own real sends — a standalone verifier
+// (ZeroBounce, NeverBounce, MillionVerifier) can't produce this number at
+// all, since it never sees whether the "valid" it sold you actually
+// delivered. Framed accordingly: this isn't another rate, it's proof.
+function AccuracyCard({ accuracy }: { accuracy: AccuracyStats }) {
+  const validBucket = accuracy.buckets.find((b) => b.verified_status === "valid");
+  const hasScore = accuracy.measured_accuracy_pct !== null && validBucket;
+
+  if (!hasScore) {
+    const sent = validBucket?.total_sent ?? 0;
+    const remaining = Math.max(0, accuracy.min_sample_size - sent);
+    return (
+      <div className="rounded-lg border border-border bg-card p-5">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium">Verification accuracy</span>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Measured from your own real sends — not a marketing number. Send to {remaining} more
+          verified-valid address{remaining === 1 ? "" : "es"} to unlock it ({sent}/{accuracy.min_sample_size}).
+        </p>
+      </div>
+    );
+  }
+
+  const pctVal = accuracy.measured_accuracy_pct!;
+  const color = pctVal >= 97 ? "text-green-600" : pctVal >= 90 ? "text-amber-600" : "text-red-600";
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <TrendingUp className={`h-4 w-4 ${color}`} />
+            <span className="text-sm font-medium">Verification accuracy</span>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground max-w-md">
+            Of addresses you verified as valid, this % actually delivered — measured from{" "}
+            {validBucket.total_sent.toLocaleString()} real sends through your own API key. No
+            standalone verifier can show you this; they never see what happens after their check.
+          </p>
+        </div>
+        <div className={`text-3xl font-semibold tabular-nums tracking-tight shrink-0 ${color}`}>
+          {pctVal}%
+        </div>
+      </div>
     </div>
   );
 }
