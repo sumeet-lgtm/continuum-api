@@ -8,6 +8,7 @@ import { smtpProbe } from './smtp.js';
 import { smtpVerifyWithCache } from './smtpCache.js';
 import { checkDeliverability } from './deliverability.js';
 import { checkToxic } from './toxic.js';
+import { checkLookalike } from './lookalike.js';
 import { score } from './scorer.js';
 import { logger } from '../lib/logger.js';
 import type {
@@ -115,28 +116,36 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   };
 
   const t3 = Date.now();
-  // Try MillionVerifier via Cloudflare Worker first (with shared cache)
-  const mvResult = await smtpVerifyWithCache(email);
-  if (mvResult.checked) {
-    smtpResult = mvResult;
-    logger.info({ email, fromCache: mvResult.fromCache }, 'SMTP via MillionVerifier');
-  } else if (primaryMx) {
-    // Fallback to local SMTP probe
+  // Own SMTP probe first — direct socket probe, or the SMTP_PROBE_URL relay
+  // when set (works around cloud providers blocking outbound port 25).
+  // MillionVerifier is a fallback for when our own probe can't reach a
+  // verdict at all (blocked, timed out, no relay configured) rather than
+  // the primary source of truth — verification quality shouldn't be capped
+  // by a reseller's coverage.
+  if (primaryMx) {
     try {
       smtpResult = await smtpProbe(email, primaryMx);
     } catch (err) {
       logger.error({ err, email, mxHost: primaryMx }, 'SMTP probe threw unexpectedly');
     }
   }
+  if (!smtpResult.checked) {
+    const mvResult = await smtpVerifyWithCache(email);
+    if (mvResult.checked) {
+      smtpResult = mvResult;
+      logger.info({ email, fromCache: mvResult.fromCache }, 'SMTP via MillionVerifier fallback (own probe inconclusive)');
+    }
+  }
   const smtpMs = Date.now() - t3;
 
-  // ── 6b. Deliverability checks (SPF/DKIM/DMARC/Blacklist) + toxic ──────────
-  const [deliverability, toxicResult] = await Promise.all([
+  // ── 6b. Deliverability checks (SPF/DKIM/DMARC/Blacklist) + toxic + lookalike
+  const [deliverability, toxicResult, lookalikeResult] = await Promise.all([
     checkDeliverability(domain).catch(() => ({
       spfValid: false, spfRecord: null, dmarcValid: false, dmarcRecord: null,
       dkimFound: false, dkimSelectors: [], blacklisted: false, blacklists: [],
     })),
     Promise.resolve(checkToxic(domain)),
+    Promise.resolve(checkLookalike(domain)),
   ]);
 
   // ── 7. Score ───────────────────────────────────────────────────────────────
@@ -154,6 +163,7 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
     blacklisted:   deliverability.blacklisted,
     isToxic:       toxicResult.isToxic,
     isAbuse:       toxicResult.isAbuse,
+    isLookalike:   lookalikeResult.isLookalike,
   });
 
   // ── 8. Persist + return ────────────────────────────────────────────────────
@@ -178,6 +188,8 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
     isToxic:         toxicResult.isToxic,
     isAbuse:         toxicResult.isAbuse,
     toxicReason:     toxicResult.reason,
+    isLookalike:     lookalikeResult.isLookalike,
+    impersonates:    lookalikeResult.impersonates,
     subStatus:       scored.subStatus,
     wallStart,
     timings: { syntaxMs, mxMs, disposableMs, roleMs, smtpMs, totalMs: 0 },
@@ -208,6 +220,8 @@ interface PersistInput {
   isToxic?:        boolean;
   isAbuse?:        boolean;
   toxicReason?:    string | null;
+  isLookalike?:    boolean;
+  impersonates?:   string | null;
   subStatus:       string  | null;
   wallStart:       number;
   timings:         Omit<EngineTimings, 'totalMs'> & { totalMs: number };
@@ -304,6 +318,8 @@ async function persistAndReturn(raw: PersistInput): Promise<VerificationResult> 
       ...(raw.blacklisted !== undefined ? { blacklisted: raw.blacklisted } : {}),
       ...(raw.blacklists !== undefined ? { blacklists: raw.blacklists } : {}),
       ...(raw.isToxic !== undefined ? { isToxic: raw.isToxic } : {}),
+      ...(raw.isLookalike !== undefined ? { isLookalike: raw.isLookalike } : {}),
+      ...(raw.impersonates !== undefined ? { impersonates: raw.impersonates } : {}),
       ...(raw.isAbuse !== undefined ? { isAbuse: raw.isAbuse } : {}),
       ...(raw.toxicReason !== undefined ? { toxicReason: raw.toxicReason } : {}),
     } as never,

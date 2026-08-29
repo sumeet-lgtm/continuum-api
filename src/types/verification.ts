@@ -20,6 +20,8 @@ export interface VerificationChecks {
   isToxic?:      boolean;
   isAbuse?:      boolean;
   toxicReason?:  string | null;
+  isLookalike?:  boolean;
+  impersonates?: string | null;
 }
 
 export interface VerificationResult {
@@ -78,6 +80,7 @@ export interface ScorerInput {
   blacklisted?:  boolean;
   isToxic?:      boolean;
   isAbuse?:      boolean;
+  isLookalike?:  boolean;
 }
 
 export interface ScorerOutput {
