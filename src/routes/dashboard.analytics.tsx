@@ -155,15 +155,15 @@ function AnalyticsPage() {
                   <AreaChart data={timeline} margin={{ top: 5, right: 8, left: -20, bottom: 0 }}>
                     <defs>
                       <linearGradient id="sent" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="oklch(0.145 0 0)" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="oklch(0.145 0 0)" stopOpacity={0} />
+                        <stop offset="5%" stopColor="var(--foreground)" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="var(--foreground)" stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0 0)" vertical={false} />
-                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "oklch(0.45 0 0)" }} tickFormatter={(d: string) => d.slice(5)} />
-                    <YAxis tick={{ fontSize: 10, fill: "oklch(0.45 0 0)" }} allowDecimals={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} tickFormatter={(d: string) => d.slice(5)} />
+                    <YAxis tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} allowDecimals={false} />
                     <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }} />
-                    <Area type="monotone" dataKey="sent" stroke="oklch(0.145 0 0)" strokeWidth={2} fill="url(#sent)" dot={false} name="Sent" />
+                    <Area type="monotone" dataKey="sent" stroke="var(--foreground)" strokeWidth={2} fill="url(#sent)" dot={false} name="Sent" />
                     <Area type="monotone" dataKey="delivered" stroke="oklch(0.55 0.15 250)" strokeWidth={1.5} fill="none" dot={false} name="Delivered" />
                     <Area type="monotone" dataKey="bounced" stroke="oklch(0.55 0.15 300)" strokeWidth={1.5} fill="none" dot={false} name="Bounced" />
                   </AreaChart>
@@ -308,9 +308,9 @@ function AnalyticsPage() {
                           <div className="h-40">
                             <ResponsiveContainer width="100%" height="100%">
                               <BarChart data={mailboxDetail.daily_breakdown} margin={{ top: 2, right: 4, left: -24, bottom: 0 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0 0)" vertical={false} />
-                                <XAxis dataKey="date" tick={{ fontSize: 9, fill: "oklch(0.45 0 0)" }} tickFormatter={(d: string) => d.slice(5)} />
-                                <YAxis tick={{ fontSize: 9, fill: "oklch(0.45 0 0)" }} allowDecimals={false} />
+                                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                                <XAxis dataKey="date" tick={{ fontSize: 9, fill: "var(--muted-foreground)" }} tickFormatter={(d: string) => d.slice(5)} />
+                                <YAxis tick={{ fontSize: 9, fill: "var(--muted-foreground)" }} allowDecimals={false} />
                                 <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 11 }} />
                                 <Bar dataKey="sent" fill="oklch(0.55 0.15 250)" name="Sent" radius={[2, 2, 0, 0]} />
                                 <Bar dataKey="replied" fill="oklch(0.55 0.15 150)" name="Replied" radius={[2, 2, 0, 0]} />

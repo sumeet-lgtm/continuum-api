@@ -154,11 +154,11 @@ function Overview() {
           ) : (
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 5, right: 8, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0 0)" vertical={false} />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "oklch(0.45 0 0)" }} tickFormatter={(d) => d.slice(5)} />
-                <YAxis tick={{ fontSize: 10, fill: "oklch(0.45 0 0)" }} allowDecimals={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} tickFormatter={(d) => d.slice(5)} />
+                <YAxis tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} allowDecimals={false} />
                 <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }} />
-                <Line type="monotone" dataKey="count" stroke="oklch(0.145 0 0)" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="count" stroke="var(--foreground)" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           )}
@@ -202,7 +202,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{value}</div>
+      <div className="mt-1 text-3xl font-display font-medium tabular-nums tracking-tight">{value}</div>
     </div>
   );
 }
