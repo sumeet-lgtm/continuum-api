@@ -20,11 +20,17 @@ interface Suppression {
   createdAt: string;
 }
 
+// Keys must match the reason strings the backend actually writes
+// (suppress() in routes/send/events.ts, imapWorker.ts's unsubscribe path) —
+// these previously didn't ("bounce"/"unsubscribe" vs the real "hard_bounce"/
+// "soft_bounce"/"unsubscribed"), so every bounce or unsubscribe suppression
+// showed as a raw unstyled reason string instead of a real label.
 const REASON_LABELS: Record<string, string> = {
-  bounce: "Hard bounce",
+  hard_bounce: "Hard bounce",
+  soft_bounce: "Soft bounce (3+)",
   complaint: "Spam complaint",
   manual: "Manually added",
-  unsubscribe: "Unsubscribed",
+  unsubscribed: "Unsubscribed",
 };
 
 function SuppressionsPage() {
@@ -157,7 +163,7 @@ function SuppressionsPage() {
                   <td className="px-5 py-3 font-mono text-xs">{s.email}</td>
                   <td className="px-5 py-3">
                     <span className={`text-xs rounded-full px-2 py-0.5 font-medium ${
-                      s.reason === "bounce" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
+                      s.reason === "hard_bounce" || s.reason === "soft_bounce" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
                       s.reason === "complaint" ? "bg-muted text-muted-foreground" :
                       "bg-muted text-muted-foreground"
                     }`}>
