@@ -1,4 +1,4 @@
-import { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
+import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyContextConfig } from 'fastify';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { config } from '../../config.js';
 import { sendEmail } from '../../lib/email.js';
@@ -29,10 +29,12 @@ function fmt(dt: string | undefined): string {
   }
 }
 
+const routeConfig: { config: FastifyContextConfig } = { config: { rawBody: true } };
+
 export async function calcomWebhookRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post(
     '/webhooks/calcom',
-    { config: { rawBody: true } },
+    routeConfig,
     async (request: FastifyRequest, reply: FastifyReply) => {
       const rawBody = (request as FastifyRequest & { rawBody?: string }).rawBody ?? JSON.stringify(request.body);
       const sig = request.headers['x-cal-signature-256'] as string | undefined;

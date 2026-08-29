@@ -45,6 +45,11 @@ declare module 'fastify' {
     apiKey: ApiKeyRecord;
     sessionUser?: OrgSessionUser;
   }
+  interface FastifyContextConfig {
+    // Declared on the WorkOS/Cal.com webhook routes, but nothing currently
+    // populates request.rawBody from it — see routes/webhooks/{workos,calcom}.ts.
+    rawBody?: boolean;
+  }
 }
 
 function extractRawKey(request: FastifyRequest): string | null {
@@ -123,7 +128,11 @@ async function resolveApiKey(request: FastifyRequest): Promise<void> {
 }
 
 async function authPluginFn(fastify: FastifyInstance): Promise<void> {
-  fastify.decorateRequest('apiKey', null);
+  // Placeholder until requireAuth's preHandler sets the real value — every
+  // actual read happens after that, so request.apiKey's declared type stays
+  // non-null everywhere it's used. Fastify v5 requires the decorator default
+  // to match that type, hence the cast.
+  fastify.decorateRequest('apiKey', null as unknown as ApiKeyRecord);
   fastify.decorateRequest('authenticate', async function (this: FastifyRequest) {
     await resolveApiKey(this);
   });

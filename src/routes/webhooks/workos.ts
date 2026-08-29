@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply, FastifyContextConfig } from 'fastify';
 import { WorkOS } from '@workos-inc/node';
 import { config } from '../../config.js';
 import { prisma } from '../../lib/prisma.js';
@@ -17,10 +17,12 @@ function getWorkOS(): WorkOS {
   return _workos;
 }
 
+const routeConfig: { config: FastifyContextConfig } = { config: { rawBody: true } };
+
 export async function workosWebhookRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post(
     '/webhooks/workos',
-    { config: { rawBody: true } },
+    routeConfig,
     async (request: FastifyRequest, reply: FastifyReply) => {
       const rawBody = (request as FastifyRequest & { rawBody?: string }).rawBody ?? JSON.stringify(request.body);
       const sigHeader = request.headers['workos-signature'] as string | undefined;

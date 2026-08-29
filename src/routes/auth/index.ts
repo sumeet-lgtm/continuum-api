@@ -49,7 +49,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       redirectUri: `${apiBase()}/auth/sso/callback`,
       state,
     });
-    return reply.redirect(302, authorizationURL);
+    return reply.redirect(authorizationURL, 302);
   }
 
   fastify.get('/auth/login/google', (req, rep) => initiateLogin('GoogleOAuth', req, rep));
@@ -80,7 +80,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     if (!code) {
-      return reply.redirect(302, `${redirectTarget}?error=missing_code`);
+      return reply.redirect(`${redirectTarget}?error=missing_code`, 302);
     }
 
     try {
@@ -188,12 +188,12 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       });
 
       const separator = redirectTarget.includes('?') ? '&' : '?';
-      return reply.redirect(302, `${redirectTarget}${separator}token=${encodeURIComponent(token)}`);
+      return reply.redirect(`${redirectTarget}${separator}token=${encodeURIComponent(token)}`, 302);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       fastify.log.error({ err, msg }, 'SSO callback failed');
       const errParam = encodeURIComponent(msg.slice(0, 120));
-      return reply.redirect(302, `${config.DASHBOARD_URL}/login?error=sso_failed&detail=${errParam}`);
+      return reply.redirect(`${config.DASHBOARD_URL}/login?error=sso_failed&detail=${errParam}`, 302);
     }
   });
 

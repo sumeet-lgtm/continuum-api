@@ -32,6 +32,37 @@ async function checkDatabase(): Promise<CheckResult> {
   }
 }
 
+const healthBodySchema = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['ok', 'degraded', 'error'] },
+    version: { type: 'string' },
+    uptime: { type: 'number' },
+    timestamp: { type: 'string' },
+    checks: {
+      type: 'object',
+      properties: {
+        database: {
+          type: 'object',
+          properties: {
+            status: { type: 'string' },
+            latencyMs: { type: 'number' },
+            error: { type: 'string' },
+          },
+        },
+        redis: {
+          type: 'object',
+          properties: {
+            status: { type: 'string' },
+            latencyMs: { type: 'number' },
+            error: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
 async function checkRedis(): Promise<CheckResult> {
   const start = Date.now();
   try {
@@ -54,38 +85,8 @@ export async function healthRoutes(fastify: FastifyInstance): Promise<void> {
     {
       schema: {
         tags: ['System'],
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              status: { type: 'string', enum: ['ok', 'degraded', 'error'] },
-              version: { type: 'string' },
-              uptime: { type: 'number' },
-              timestamp: { type: 'string' },
-              checks: {
-                type: 'object',
-                properties: {
-                  database: {
-                    type: 'object',
-                    properties: {
-                      status: { type: 'string' },
-                      latencyMs: { type: 'number' },
-                      error: { type: 'string' },
-                    },
-                  },
-                  redis: {
-                    type: 'object',
-                    properties: {
-                      status: { type: 'string' },
-                      latencyMs: { type: 'number' },
-                      error: { type: 'string' },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
+        // Same body shape on both — 503 fires when fully down (see handler).
+        response: { 200: healthBodySchema, 503: healthBodySchema },
       },
     },
     async (_request, reply) => {
