@@ -65,7 +65,7 @@ function isWithinSendWindow(sequence: { sendDays: string[]; sendStartHour: numbe
   }
 }
 
-async function processSequenceTick(): Promise<void> {
+export async function processSequenceTick(): Promise<void> {
   const now = new Date();
 
   // Find all enrollments due for their next send
@@ -84,9 +84,30 @@ async function processSequenceTick(): Promise<void> {
     take: 100, // Process 100 per tick
   });
 
+  // Suppression is shared across every send surface (transactional, campaigns,
+  // sequences) precisely so an unsubscribe or bounce on ONE channel protects
+  // the recipient everywhere — a lead who complains about a campaign or
+  // replies "unsubscribe" to a transactional email must not keep getting
+  // cold-outreach steps just because this worker never checked. Batched once
+  // per tick rather than per-enrollment, same pattern as the campaign worker.
+  const dueEmails = [...new Set(dueEnrollments.map(e => e.email))];
+  const suppressions = dueEmails.length > 0
+    ? await prisma.suppression.findMany({ where: { email: { in: dueEmails } }, select: { email: true, reason: true } })
+    : [];
+  const suppressedMap = new Map(suppressions.map(s => [s.email, s.reason]));
+
   for (const enrollment of dueEnrollments) {
     const { sequence } = enrollment;
     if (!sequence || sequence.status !== 'active') continue;
+
+    const suppressionReason = suppressedMap.get(enrollment.email);
+    if (suppressionReason) {
+      await prisma.sequenceEnrollment.update({
+        where: { id: enrollment.id },
+        data: { status: suppressionReason === 'unsubscribed' ? 'unsubscribed' : 'bounced', completedAt: now },
+      });
+      continue;
+    }
 
     // Check send window
     if (!isWithinSendWindow(sequence)) continue;
