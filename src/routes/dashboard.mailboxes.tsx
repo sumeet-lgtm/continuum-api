@@ -22,6 +22,7 @@ interface Mailbox {
   dailyLimit: number;
   sentToday: number;
   status: string;
+  lastErrorMsg?: string | null;
   lastCheckedAt: string | null;
   warmupConfig?: WarmupConfig | null;
 }
@@ -177,6 +178,9 @@ function MailboxesPage() {
                   <div className="min-w-0">
                     <div className="font-medium truncate">{m.username}</div>
                     <div className="text-xs text-muted-foreground capitalize">{m.type} · {m.sentToday}/{m.dailyLimit} today</div>
+                    {m.status === "error" && m.lastErrorMsg && (
+                      <div className="text-xs text-destructive mt-0.5">{m.lastErrorMsg}</div>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">

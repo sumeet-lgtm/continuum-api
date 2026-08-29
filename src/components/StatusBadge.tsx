@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-export type StatusKind = "valid" | "invalid" | "risky" | "unknown" | "active" | "revoked" | "pending" | "completed" | "failed" | "running";
+export type StatusKind = "valid" | "invalid" | "risky" | "unknown" | "active" | "revoked" | "pending" | "completed" | "failed" | "running" | "error";
 
 const STYLES: Record<string, string> = {
   valid: "bg-[oklch(0.95_0.05_145)] text-[oklch(0.35_0.12_145)] border-[oklch(0.85_0.08_145)]",
@@ -9,6 +9,7 @@ const STYLES: Record<string, string> = {
   invalid: "bg-[oklch(0.96_0.04_27)] text-[oklch(0.42_0.18_27)] border-[oklch(0.88_0.08_27)]",
   revoked: "bg-[oklch(0.96_0.04_27)] text-[oklch(0.42_0.18_27)] border-[oklch(0.88_0.08_27)]",
   failed: "bg-[oklch(0.96_0.04_27)] text-[oklch(0.42_0.18_27)] border-[oklch(0.88_0.08_27)]",
+  error: "bg-[oklch(0.96_0.04_27)] text-[oklch(0.42_0.18_27)] border-[oklch(0.88_0.08_27)]",
   risky: "bg-[oklch(0.97_0.06_75)] text-[oklch(0.42_0.13_60)] border-[oklch(0.88_0.1_75)]",
   pending: "bg-[oklch(0.97_0.06_75)] text-[oklch(0.42_0.13_60)] border-[oklch(0.88_0.1_75)]",
   running: "bg-[oklch(0.97_0.06_75)] text-[oklch(0.42_0.13_60)] border-[oklch(0.88_0.1_75)]",
