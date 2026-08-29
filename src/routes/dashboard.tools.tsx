@@ -144,7 +144,7 @@ function DomainHealthTab() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="rounded-lg border border-border bg-card p-5 flex flex-col items-center justify-center text-center">
             <p className="text-xs text-muted-foreground mb-1">Deliverability grade</p>
-            <p className={`text-5xl font-bold tabular-nums ${GRADE_COLOR[result.grade]}`}>{result.grade}</p>
+            <p className={`text-6xl font-display font-medium ${GRADE_COLOR[result.grade]}`}>{result.grade}</p>
             <p className="mt-2 text-sm text-muted-foreground">{result.score} / 100</p>
           </div>
 

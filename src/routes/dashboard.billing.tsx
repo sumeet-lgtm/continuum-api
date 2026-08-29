@@ -199,7 +199,7 @@ function BillingPage() {
                 )}
               </div>
               <div className="mt-2 flex items-baseline gap-1">
-                <span className="text-3xl font-semibold tracking-tight">{p.price}</span>
+                <span className="text-3xl font-display font-medium tracking-tight">{p.price}</span>
                 <span className="text-sm text-muted-foreground">/mo</span>
               </div>
               <p className="mt-1 text-sm text-muted-foreground">{p.quota}</p>
@@ -231,7 +231,7 @@ function BillingPage() {
             <h3 className="text-base font-semibold">Enterprise</h3>
           </div>
           <div className="mt-2 flex items-baseline gap-1">
-            <span className="text-3xl font-semibold tracking-tight">Custom</span>
+            <span className="text-3xl font-display font-medium tracking-tight">Custom</span>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">Unlimited volume · custom SLA</p>
           <ul className="mt-4 space-y-1.5 text-sm flex-1">

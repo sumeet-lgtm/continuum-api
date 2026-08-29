@@ -388,7 +388,7 @@ function AccuracyCard({ accuracy }: { accuracy: AccuracyStats }) {
             standalone verifier can show you this; they never see what happens after their check.
           </p>
         </div>
-        <div className={`text-3xl font-semibold tabular-nums tracking-tight shrink-0 ${color}`}>
+        <div className={`text-4xl font-display font-medium tabular-nums tracking-tight shrink-0 ${color}`}>
           {pctVal}%
         </div>
       </div>

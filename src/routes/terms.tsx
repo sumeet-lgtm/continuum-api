@@ -9,7 +9,7 @@ function TermsPage() {
     <div className="min-h-screen bg-background text-foreground">
       <div className="max-w-3xl mx-auto px-6 py-16">
         <a href="https://continuumapi.com" className="text-sm text-muted-foreground hover:text-foreground">← continuumapi.com</a>
-        <h1 className="text-3xl font-semibold mt-8 mb-2">Terms of Service</h1>
+        <h1 className="text-3xl font-display font-medium mt-8 mb-2">Terms of Service</h1>
         <p className="text-sm text-muted-foreground mb-10">Last updated: August 27, 2026</p>
 
         <section className="space-y-8 text-sm leading-relaxed">
