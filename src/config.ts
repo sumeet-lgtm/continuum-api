@@ -101,6 +101,15 @@ const envSchema = z.object({
     .default('dev-session-secret-at-least-32-chars-long'),
   API_BASE_URL: z.string().url().optional(),
 
+  // SMTP relay (port 587) — PEM text with literal \n for newlines, the
+  // standard way to fit a multi-line cert into a single-line env var.
+  // Required for STARTTLS to actually work; the relay refuses to accept
+  // AUTH without it (allowInsecureAuth is off), so an unset cert here
+  // means the relay is running but nobody can ever authenticate.
+  SMTP_RELAY_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  SMTP_RELAY_TLS_CERT: z.string().optional(),
+  SMTP_RELAY_TLS_KEY: z.string().optional(),
+
   // Internal
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   API_KEY_SALT: z
