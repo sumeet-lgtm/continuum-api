@@ -264,10 +264,24 @@ export async function processSequenceTick(): Promise<void> {
         }).catch(() => {});
       } else {
         // Fallback: send via shared SES
-        await sendViaSes({
+        const { sesMessageId } = await sendViaSes({
           to: enrollment.email, from: fromAddress, subject, htmlBody,
           ...(textBody ? { textBody } : {}),
           listUnsubscribeHeader: `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`,
+        });
+
+        // Register the send so the SES bounce/complaint webhook can find it —
+        // same gap as campaigns had: without a SendMessage row keyed by
+        // sesMessageId, a hard bounce on a sequence step (the SES-fallback
+        // path specifically — mailbox-based sends get their bounce signal
+        // from IMAP instead) never reached the shared suppression list.
+        await prisma.sendMessage.create({
+          data: {
+            apiKeyId: sequence.apiKeyId, to: enrollment.email, from: fromAddress, subject,
+            sesMessageId, status: 'sent', sentAt: new Date(),
+          },
+        }).catch((err) => {
+          logger.warn({ err, email: enrollment.email, sequenceId: sequence.id }, 'Failed to register sequence send for bounce tracking (non-fatal)');
         });
       }
 

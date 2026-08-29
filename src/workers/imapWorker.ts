@@ -188,13 +188,22 @@ async function pollMailboxes(): Promise<void> {
               await triggerSubsequences(enrollment.sequenceId, fromEmail.toLowerCase(), 'REPLIED', vars);
             }
 
-            // Unsubscribe intent also goes on the suppression list so no other
-            // sequence or campaign can reach this address either.
-            if (classification.category === 'unsubscribe') {
+            // Unsubscribe or bounce (an NDR landing in the inbox — the only
+            // bounce signal a mailbox-based SMTP send ever produces, since it
+            // never goes through SES/SNS) both go on the shared suppression
+            // list so no other sequence or campaign can reach this address
+            // either. Missing the bounce case here meant an address that
+            // hard-bounced through a connected mailbox stayed fully sendable
+            // everywhere else — the exact gap this list exists to close.
+            if (classification.category === 'unsubscribe' || classification.category === 'bounced') {
               await prisma.suppression.upsert({
                 where: { email: fromEmail.toLowerCase() },
                 update: {},
-                create: { email: fromEmail.toLowerCase(), reason: 'unsubscribed', apiKeyId: seq?.apiKeyId ?? '' },
+                create: {
+                  email: fromEmail.toLowerCase(),
+                  reason: classification.category === 'unsubscribe' ? 'unsubscribed' : 'hard_bounce',
+                  apiKeyId: seq?.apiKeyId ?? '',
+                },
               }).catch(() => {});
             }
           }

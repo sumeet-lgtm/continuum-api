@@ -9,6 +9,7 @@ vi.mock('../../lib/prisma.js', () => ({
     sequence:           { findMany: vi.fn().mockResolvedValue([]) },
     trackingEvent:      { findFirst: vi.fn().mockResolvedValue(null) },
     mailbox:            { findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
+    sendMessage:        { create: vi.fn().mockResolvedValue({}) },
     $disconnect:        vi.fn(),
   },
 }));
@@ -50,6 +51,7 @@ const mockDue        = vi.mocked(prisma.sequenceEnrollment.findMany);
 const mockUpdate      = vi.mocked(prisma.sequenceEnrollment.update);
 const mockSuppression = vi.mocked(prisma.suppression.findMany);
 const mockSendSes     = vi.mocked(sendViaSes);
+const mockSendMessageCreate = vi.mocked(prisma.sendMessage.create);
 
 function makeEnrollment(overrides: Record<string, unknown> = {}) {
   return {
@@ -119,6 +121,28 @@ describe('processSequenceTick — suppression enforcement', () => {
     await processSequenceTick();
 
     expect(mockSendSes).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers an SES-fallback send as a SendMessage row so the bounce webhook can find it', async () => {
+    // Without this, campaign and sequence bounces had nowhere to land — no
+    // sesMessageId meant POST /v1/send/events could never match the SNS
+    // notification back to anything, so no suppression and no closed-loop
+    // verification correction ever fired for sequence-driven sends.
+    mockDue.mockResolvedValue([makeEnrollment({ email: 'lead@example.com' })] as never);
+    mockSendSes.mockResolvedValue({ sesMessageId: 'ses-abc-123' } as never);
+
+    await processSequenceTick();
+
+    expect(mockSendMessageCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          apiKeyId: 'key-001',
+          to: 'lead@example.com',
+          sesMessageId: 'ses-abc-123',
+          status: 'sent',
+        }),
+      }),
+    );
   });
 
   it('checks suppression for all due emails in a single batched query, not one per enrollment', async () => {

@@ -12,7 +12,7 @@ interface CampaignJobData {
   apiKeyId: string;
 }
 
-async function processCampaign(job: Job<CampaignJobData>): Promise<void> {
+export async function processCampaign(job: Job<CampaignJobData>): Promise<void> {
   const { campaignId, apiKeyId } = job.data;
 
   const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
@@ -131,6 +131,22 @@ async function processCampaign(job: Job<CampaignJobData>): Promise<void> {
         await prisma.campaignRecipient.updateMany({
           where: { campaignId, email: recipient.email },
           data: { status: 'sent', sesMessageId, sentAt: new Date() },
+        });
+
+        // Also register this send as a SendMessage row — the SES bounce/
+        // complaint webhook (POST /v1/send/events) only knows how to match
+        // an incoming SNS notification back to a SendMessage.sesMessageId.
+        // Without this, campaign bounces had nowhere to land: no automatic
+        // suppression, no closed-loop verification correction, nothing —
+        // the recipient stayed fully sendable in every future campaign and
+        // sequence despite having just hard-bounced.
+        await prisma.sendMessage.create({
+          data: {
+            apiKeyId, to: recipient.email, from: fromAddress, subject,
+            sesMessageId, status: 'sent', sentAt: new Date(),
+          },
+        }).catch((err) => {
+          logger.warn({ err, email: recipient.email, campaignId }, 'Failed to register campaign send for bounce tracking (non-fatal)');
         });
 
         sentCount++;
