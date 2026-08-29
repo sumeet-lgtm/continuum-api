@@ -131,7 +131,15 @@ export async function billingRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.serviceUnavailable(`Billing for the ${plan} plan`);
       }
 
-      const customerEmail = request.apiKey.ownerId ?? undefined;
+      // apiKey.ownerId is the internal User.id (a cuid), not an email — it
+      // never contained '@', so the customerEmail?.includes('@') check below
+      // was always false and every Dodo checkout has shipped with no
+      // customer identity attached at all. Look the email up from the user
+      // record the key actually belongs to.
+      const owner = request.apiKey.ownerId
+        ? await prisma.user.findUnique({ where: { id: request.apiKey.ownerId }, select: { email: true } })
+        : null;
+      const customerEmail = owner?.email ?? undefined;
       const res = await fetch('https://live.dodopayments.com/checkouts', {
         method: 'POST',
         headers: {
