@@ -14,13 +14,14 @@ import { Route as CallbackRouteImport } from './routes/callback'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as LoginRouteImport } from './routes/login'
-import { Route as SignupRouteImport } from './routes/signup'
 import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as SignupRouteImport } from './routes/signup'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as DashboardAiRouteImport } from './routes/dashboard.ai'
 import { Route as DashboardAnalyticsRouteImport } from './routes/dashboard.analytics'
 import { Route as DashboardApiKeysRouteImport } from './routes/dashboard.api-keys'
+import { Route as DashboardAuditLogsRouteImport } from './routes/dashboard.audit-logs'
 import { Route as DashboardAutomationsRouteImport } from './routes/dashboard.automations'
 import { Route as DashboardBatchSendRouteImport } from './routes/dashboard.batch-send'
 import { Route as DashboardBillingRouteImport } from './routes/dashboard.billing'
@@ -36,17 +37,17 @@ import { Route as DashboardListsRouteImport } from './routes/dashboard.lists'
 import { Route as DashboardMailboxesRouteImport } from './routes/dashboard.mailboxes'
 import { Route as DashboardMessagesRouteImport } from './routes/dashboard.messages'
 import { Route as DashboardMonitoringRouteImport } from './routes/dashboard.monitoring'
+import { Route as DashboardOrganizationRouteImport } from './routes/dashboard.organization'
 import { Route as DashboardPhoneRouteImport } from './routes/dashboard.phone'
 import { Route as DashboardSegmentsRouteImport } from './routes/dashboard.segments'
 import { Route as DashboardSequencesRouteImport } from './routes/dashboard.sequences'
 import { Route as DashboardSettingsRouteImport } from './routes/dashboard.settings'
 import { Route as DashboardSuppressionsRouteImport } from './routes/dashboard.suppressions'
 import { Route as DashboardTemplatesRouteImport } from './routes/dashboard.templates'
+import { Route as DashboardToolsRouteImport } from './routes/dashboard.tools'
 import { Route as DashboardTransactionalRouteImport } from './routes/dashboard.transactional'
 import { Route as DashboardVerifyRouteImport } from './routes/dashboard.verify'
 import { Route as DashboardWebhooksRouteImport } from './routes/dashboard.webhooks'
-import { Route as DashboardOrganizationRouteImport } from './routes/dashboard.organization'
-import { Route as DashboardAuditLogsRouteImport } from './routes/dashboard.audit-logs'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -73,14 +74,14 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SignupRoute = SignupRouteImport.update({
-  id: '/signup',
-  path: '/signup',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const PrivacyRoute = PrivacyRouteImport.update({
   id: '/privacy',
   path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TermsRoute = TermsRouteImport.update({
@@ -106,6 +107,11 @@ const DashboardAnalyticsRoute = DashboardAnalyticsRouteImport.update({
 const DashboardApiKeysRoute = DashboardApiKeysRouteImport.update({
   id: '/api-keys',
   path: '/api-keys',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardAuditLogsRoute = DashboardAuditLogsRouteImport.update({
+  id: '/audit-logs',
+  path: '/audit-logs',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardAutomationsRoute = DashboardAutomationsRouteImport.update({
@@ -183,6 +189,11 @@ const DashboardMonitoringRoute = DashboardMonitoringRouteImport.update({
   path: '/monitoring',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardOrganizationRoute = DashboardOrganizationRouteImport.update({
+  id: '/organization',
+  path: '/organization',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardPhoneRoute = DashboardPhoneRouteImport.update({
   id: '/phone',
   path: '/phone',
@@ -213,6 +224,11 @@ const DashboardTemplatesRoute = DashboardTemplatesRouteImport.update({
   path: '/templates',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardToolsRoute = DashboardToolsRouteImport.update({
+  id: '/tools',
+  path: '/tools',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardTransactionalRoute = DashboardTransactionalRouteImport.update({
   id: '/transactional',
   path: '/transactional',
@@ -228,16 +244,6 @@ const DashboardWebhooksRoute = DashboardWebhooksRouteImport.update({
   path: '/webhooks',
   getParentRoute: () => DashboardRoute,
 } as any)
-const DashboardOrganizationRoute = DashboardOrganizationRouteImport.update({
-  id: '/organization',
-  path: '/organization',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardAuditLogsRoute = DashboardAuditLogsRouteImport.update({
-  id: '/audit-logs',
-  path: '/audit-logs',
-  getParentRoute: () => DashboardRoute,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -245,12 +251,13 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof DashboardRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
-  '/signup': typeof SignupRoute
   '/privacy': typeof PrivacyRoute
+  '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
   '/dashboard/ai': typeof DashboardAiRoute
   '/dashboard/analytics': typeof DashboardAnalyticsRoute
   '/dashboard/api-keys': typeof DashboardApiKeysRoute
+  '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
@@ -266,17 +273,17 @@ export interface FileRoutesByFullPath {
   '/dashboard/mailboxes': typeof DashboardMailboxesRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
   '/dashboard/monitoring': typeof DashboardMonitoringRoute
+  '/dashboard/organization': typeof DashboardOrganizationRoute
   '/dashboard/phone': typeof DashboardPhoneRoute
   '/dashboard/segments': typeof DashboardSegmentsRoute
   '/dashboard/sequences': typeof DashboardSequencesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/suppressions': typeof DashboardSuppressionsRoute
   '/dashboard/templates': typeof DashboardTemplatesRoute
+  '/dashboard/tools': typeof DashboardToolsRoute
   '/dashboard/transactional': typeof DashboardTransactionalRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
-  '/dashboard/organization': typeof DashboardOrganizationRoute
-  '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/': typeof DashboardIndexRoute
 }
 export interface FileRoutesByTo {
@@ -284,12 +291,13 @@ export interface FileRoutesByTo {
   '/callback': typeof CallbackRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
-  '/signup': typeof SignupRoute
   '/privacy': typeof PrivacyRoute
+  '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
   '/dashboard/ai': typeof DashboardAiRoute
   '/dashboard/analytics': typeof DashboardAnalyticsRoute
   '/dashboard/api-keys': typeof DashboardApiKeysRoute
+  '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
@@ -305,17 +313,17 @@ export interface FileRoutesByTo {
   '/dashboard/mailboxes': typeof DashboardMailboxesRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
   '/dashboard/monitoring': typeof DashboardMonitoringRoute
+  '/dashboard/organization': typeof DashboardOrganizationRoute
   '/dashboard/phone': typeof DashboardPhoneRoute
   '/dashboard/segments': typeof DashboardSegmentsRoute
   '/dashboard/sequences': typeof DashboardSequencesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/suppressions': typeof DashboardSuppressionsRoute
   '/dashboard/templates': typeof DashboardTemplatesRoute
+  '/dashboard/tools': typeof DashboardToolsRoute
   '/dashboard/transactional': typeof DashboardTransactionalRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
-  '/dashboard/organization': typeof DashboardOrganizationRoute
-  '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard': typeof DashboardIndexRoute
 }
 export interface FileRoutesById {
@@ -325,12 +333,13 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
-  '/signup': typeof SignupRoute
   '/privacy': typeof PrivacyRoute
+  '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
   '/dashboard/ai': typeof DashboardAiRoute
   '/dashboard/analytics': typeof DashboardAnalyticsRoute
   '/dashboard/api-keys': typeof DashboardApiKeysRoute
+  '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
@@ -346,17 +355,17 @@ export interface FileRoutesById {
   '/dashboard/mailboxes': typeof DashboardMailboxesRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
   '/dashboard/monitoring': typeof DashboardMonitoringRoute
+  '/dashboard/organization': typeof DashboardOrganizationRoute
   '/dashboard/phone': typeof DashboardPhoneRoute
   '/dashboard/segments': typeof DashboardSegmentsRoute
   '/dashboard/sequences': typeof DashboardSequencesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/suppressions': typeof DashboardSuppressionsRoute
   '/dashboard/templates': typeof DashboardTemplatesRoute
+  '/dashboard/tools': typeof DashboardToolsRoute
   '/dashboard/transactional': typeof DashboardTransactionalRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
-  '/dashboard/organization': typeof DashboardOrganizationRoute
-  '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/': typeof DashboardIndexRoute
 }
 export interface FileRouteTypes {
@@ -367,12 +376,13 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/forgot-password'
     | '/login'
-    | '/signup'
     | '/privacy'
+    | '/signup'
     | '/terms'
     | '/dashboard/ai'
     | '/dashboard/analytics'
     | '/dashboard/api-keys'
+    | '/dashboard/audit-logs'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
     | '/dashboard/billing'
@@ -388,17 +398,17 @@ export interface FileRouteTypes {
     | '/dashboard/mailboxes'
     | '/dashboard/messages'
     | '/dashboard/monitoring'
+    | '/dashboard/organization'
     | '/dashboard/phone'
     | '/dashboard/segments'
     | '/dashboard/sequences'
     | '/dashboard/settings'
     | '/dashboard/suppressions'
     | '/dashboard/templates'
+    | '/dashboard/tools'
     | '/dashboard/transactional'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
-    | '/dashboard/organization'
-    | '/dashboard/audit-logs'
     | '/dashboard/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -406,12 +416,13 @@ export interface FileRouteTypes {
     | '/callback'
     | '/forgot-password'
     | '/login'
-    | '/signup'
     | '/privacy'
+    | '/signup'
     | '/terms'
     | '/dashboard/ai'
     | '/dashboard/analytics'
     | '/dashboard/api-keys'
+    | '/dashboard/audit-logs'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
     | '/dashboard/billing'
@@ -427,17 +438,17 @@ export interface FileRouteTypes {
     | '/dashboard/mailboxes'
     | '/dashboard/messages'
     | '/dashboard/monitoring'
+    | '/dashboard/organization'
     | '/dashboard/phone'
     | '/dashboard/segments'
     | '/dashboard/sequences'
     | '/dashboard/settings'
     | '/dashboard/suppressions'
     | '/dashboard/templates'
+    | '/dashboard/tools'
     | '/dashboard/transactional'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
-    | '/dashboard/organization'
-    | '/dashboard/audit-logs'
     | '/dashboard'
   id:
     | '__root__'
@@ -446,12 +457,13 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/forgot-password'
     | '/login'
-    | '/signup'
     | '/privacy'
+    | '/signup'
     | '/terms'
     | '/dashboard/ai'
     | '/dashboard/analytics'
     | '/dashboard/api-keys'
+    | '/dashboard/audit-logs'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
     | '/dashboard/billing'
@@ -467,17 +479,17 @@ export interface FileRouteTypes {
     | '/dashboard/mailboxes'
     | '/dashboard/messages'
     | '/dashboard/monitoring'
+    | '/dashboard/organization'
     | '/dashboard/phone'
     | '/dashboard/segments'
     | '/dashboard/sequences'
     | '/dashboard/settings'
     | '/dashboard/suppressions'
     | '/dashboard/templates'
+    | '/dashboard/tools'
     | '/dashboard/transactional'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
-    | '/dashboard/organization'
-    | '/dashboard/audit-logs'
     | '/dashboard/'
   fileRoutesById: FileRoutesById
 }
@@ -487,8 +499,8 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRouteWithChildren
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
-  SignupRoute: typeof SignupRoute
   PrivacyRoute: typeof PrivacyRoute
+  SignupRoute: typeof SignupRoute
   TermsRoute: typeof TermsRoute
 }
 
@@ -529,18 +541,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/signup': {
-      id: '/signup'
-      path: '/signup'
-      fullPath: '/signup'
-      preLoaderRoute: typeof SignupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/privacy': {
       id: '/privacy'
       path: '/privacy'
       fullPath: '/privacy'
       preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/terms': {
@@ -576,6 +588,13 @@ declare module '@tanstack/react-router' {
       path: '/api-keys'
       fullPath: '/dashboard/api-keys'
       preLoaderRoute: typeof DashboardApiKeysRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/audit-logs': {
+      id: '/dashboard/audit-logs'
+      path: '/audit-logs'
+      fullPath: '/dashboard/audit-logs'
+      preLoaderRoute: typeof DashboardAuditLogsRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/automations': {
@@ -683,6 +702,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardMonitoringRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/organization': {
+      id: '/dashboard/organization'
+      path: '/organization'
+      fullPath: '/dashboard/organization'
+      preLoaderRoute: typeof DashboardOrganizationRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/phone': {
       id: '/dashboard/phone'
       path: '/phone'
@@ -725,6 +751,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardTemplatesRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/tools': {
+      id: '/dashboard/tools'
+      path: '/tools'
+      fullPath: '/dashboard/tools'
+      preLoaderRoute: typeof DashboardToolsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/transactional': {
       id: '/dashboard/transactional'
       path: '/transactional'
@@ -746,20 +779,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardWebhooksRouteImport
       parentRoute: typeof DashboardRoute
     }
-    '/dashboard/organization': {
-      id: '/dashboard/organization'
-      path: '/organization'
-      fullPath: '/dashboard/organization'
-      preLoaderRoute: typeof DashboardOrganizationRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/audit-logs': {
-      id: '/dashboard/audit-logs'
-      path: '/audit-logs'
-      fullPath: '/dashboard/audit-logs'
-      preLoaderRoute: typeof DashboardAuditLogsRouteImport
-      parentRoute: typeof DashboardRoute
-    }
   }
 }
 
@@ -767,6 +786,7 @@ interface DashboardRouteChildren {
   DashboardAiRoute: typeof DashboardAiRoute
   DashboardAnalyticsRoute: typeof DashboardAnalyticsRoute
   DashboardApiKeysRoute: typeof DashboardApiKeysRoute
+  DashboardAuditLogsRoute: typeof DashboardAuditLogsRoute
   DashboardAutomationsRoute: typeof DashboardAutomationsRoute
   DashboardBatchSendRoute: typeof DashboardBatchSendRoute
   DashboardBillingRoute: typeof DashboardBillingRoute
@@ -782,17 +802,17 @@ interface DashboardRouteChildren {
   DashboardMailboxesRoute: typeof DashboardMailboxesRoute
   DashboardMessagesRoute: typeof DashboardMessagesRoute
   DashboardMonitoringRoute: typeof DashboardMonitoringRoute
+  DashboardOrganizationRoute: typeof DashboardOrganizationRoute
   DashboardPhoneRoute: typeof DashboardPhoneRoute
   DashboardSegmentsRoute: typeof DashboardSegmentsRoute
   DashboardSequencesRoute: typeof DashboardSequencesRoute
   DashboardSettingsRoute: typeof DashboardSettingsRoute
   DashboardSuppressionsRoute: typeof DashboardSuppressionsRoute
   DashboardTemplatesRoute: typeof DashboardTemplatesRoute
+  DashboardToolsRoute: typeof DashboardToolsRoute
   DashboardTransactionalRoute: typeof DashboardTransactionalRoute
   DashboardVerifyRoute: typeof DashboardVerifyRoute
   DashboardWebhooksRoute: typeof DashboardWebhooksRoute
-  DashboardOrganizationRoute: typeof DashboardOrganizationRoute
-  DashboardAuditLogsRoute: typeof DashboardAuditLogsRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
 }
 
@@ -800,6 +820,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardAiRoute: DashboardAiRoute,
   DashboardAnalyticsRoute: DashboardAnalyticsRoute,
   DashboardApiKeysRoute: DashboardApiKeysRoute,
+  DashboardAuditLogsRoute: DashboardAuditLogsRoute,
   DashboardAutomationsRoute: DashboardAutomationsRoute,
   DashboardBatchSendRoute: DashboardBatchSendRoute,
   DashboardBillingRoute: DashboardBillingRoute,
@@ -815,17 +836,17 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardMailboxesRoute: DashboardMailboxesRoute,
   DashboardMessagesRoute: DashboardMessagesRoute,
   DashboardMonitoringRoute: DashboardMonitoringRoute,
+  DashboardOrganizationRoute: DashboardOrganizationRoute,
   DashboardPhoneRoute: DashboardPhoneRoute,
   DashboardSegmentsRoute: DashboardSegmentsRoute,
   DashboardSequencesRoute: DashboardSequencesRoute,
   DashboardSettingsRoute: DashboardSettingsRoute,
   DashboardSuppressionsRoute: DashboardSuppressionsRoute,
   DashboardTemplatesRoute: DashboardTemplatesRoute,
+  DashboardToolsRoute: DashboardToolsRoute,
   DashboardTransactionalRoute: DashboardTransactionalRoute,
   DashboardVerifyRoute: DashboardVerifyRoute,
   DashboardWebhooksRoute: DashboardWebhooksRoute,
-  DashboardOrganizationRoute: DashboardOrganizationRoute,
-  DashboardAuditLogsRoute: DashboardAuditLogsRoute,
   DashboardIndexRoute: DashboardIndexRoute,
 }
 
@@ -839,8 +860,8 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRouteWithChildren,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
-  SignupRoute: SignupRoute,
   PrivacyRoute: PrivacyRoute,
+  SignupRoute: SignupRoute,
   TermsRoute: TermsRoute,
 }
 export const routeTree = rootRouteImport
