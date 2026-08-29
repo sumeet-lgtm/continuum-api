@@ -68,8 +68,21 @@ function MailboxesPage() {
   const test = async (id: string) => {
     if (!primaryKey?.keyRaw) return;
     try {
-      await api.withKey.post(`/v1/mailboxes/${id}/test`, {}, primaryKey.keyRaw);
-      toast.success("Test email sent successfully");
+      // This endpoint always returns HTTP 200 — pass/fail lives in the body,
+      // not the status code, so it has to be read explicitly. It was being
+      // ignored entirely before, which meant a failed SMTP test still showed
+      // a success toast.
+      const result = await api.withKey.post<{ ok: boolean; error?: string; imap?: { ok: boolean; error?: string } }>(
+        `/v1/mailboxes/${id}/test`, {}, primaryKey.keyRaw,
+      );
+      if (!result.ok) {
+        toast.error(result.error ?? "SMTP connection failed");
+      } else if (result.imap && !result.imap.ok) {
+        toast.warning("SMTP connected, but IMAP failed — reply detection and warmup auto-reply won't work for this mailbox until that's fixed.");
+      } else {
+        toast.success("Mailbox connected — SMTP and IMAP both working");
+      }
+      load();
     } catch (e: unknown) { toast.error((e as Error).message); }
   };
 
