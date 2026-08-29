@@ -370,7 +370,7 @@ export async function connectorRoutes(fastify: FastifyInstance): Promise<void> {
               enrichment:  'GET /v1/connectors/clay/enrich?email={{email}}',
               webhook:     'POST /v1/connectors/clay/webhook?sequence_id=SEQ_ID&verify=true',
             },
-            docs: 'https://docs.continuumapi.com/connectors/clay',
+            docs: 'https://continuumapi.com/docs',
           },
           {
             id: 'apollo',
@@ -379,7 +379,7 @@ export async function connectorRoutes(fastify: FastifyInstance): Promise<void> {
             endpoints: {
               webhook: 'POST /v1/connectors/apollo/webhook?sequence_id=SEQ_ID',
             },
-            docs: 'https://docs.continuumapi.com/connectors/apollo',
+            docs: 'https://continuumapi.com/docs',
           },
           {
             id: 'generic',
@@ -388,7 +388,7 @@ export async function connectorRoutes(fastify: FastifyInstance): Promise<void> {
             endpoints: {
               webhook: 'POST /v1/connectors/webhook',
             },
-            docs: 'https://docs.continuumapi.com/connectors/webhook',
+            docs: 'https://continuumapi.com/docs',
           },
           {
             id: 'mcp',
@@ -397,7 +397,7 @@ export async function connectorRoutes(fastify: FastifyInstance): Promise<void> {
             endpoints: {
               mcp: 'POST /mcp',
             },
-            docs: 'https://docs.continuumapi.com/mcp',
+            docs: 'https://continuumapi.com/docs',
           },
         ],
       });
