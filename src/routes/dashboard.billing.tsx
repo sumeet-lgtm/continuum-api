@@ -62,7 +62,7 @@ const PLANS: PlanDef[] = [
     quota: "200,000 verifications · 200,000 sends · 100 mailboxes",
     features: [
       "Everything in Growth",
-      "99.9% uptime SLA",
+      "99.9% uptime target",
       "Dedicated Slack support",
       "Dedicated IP on request",
       "Highest monitor caps",
