@@ -137,10 +137,35 @@ async function pollMailboxes(): Promise<void> {
 
             logger.info({ fromEmail, category: classification.category, confidence: classification.confidence }, 'Reply classified');
 
-            // Always mark the enrollment as replied and update lead
+            // Auto-replies (out-of-office) aren't a real reply — treating one as
+            // one was stopping sequences on the first vacation responder a lead
+            // hit, which silently killed response rates. Let the sequence run
+            // as normal: no status change, no REPLIED subsequence trigger.
+            if (classification.category === 'out_of_office') {
+              await prisma.replyEvent.create({
+                data: {
+                  mailboxId: mailbox.id, fromEmail: fromEmail.toLowerCase(),
+                  inReplyToMessageId: inReplyTo || null, enrollmentId: enrollment.id,
+                  subject: subject || null, bodySnippet: bodySnippet || null,
+                },
+              }).catch(() => {});
+              continue;
+            }
+
+            // Bounce and unsubscribe both mean "stop sending" regardless of the
+            // sequence's stopOnReply setting — that flag is about whether a
+            // genuine human reply pauses the sequence, not a compliance gate.
+            // Suppressing on unsubscribe intent but still leaving the
+            // enrollment 'active' (as this did before) would keep sending
+            // after an explicit opt-out whenever stopOnReply was off.
+            const isHardStop = classification.category === 'unsubscribe' || classification.category === 'bounced';
+            const enrollmentStatus = classification.category === 'bounced' ? 'bounced'
+              : classification.category === 'unsubscribe' ? 'unsubscribed'
+              : (isHardStop || seq?.stopOnReply) ? 'replied' : 'active';
+
             await prisma.sequenceEnrollment.update({
               where: { id: enrollment.id },
-              data: { status: seq?.stopOnReply ? 'replied' : 'active', repliedAt: new Date() },
+              data: { status: enrollmentStatus, repliedAt: new Date() },
             });
 
             await prisma.lead.updateMany({
@@ -149,16 +174,21 @@ async function pollMailboxes(): Promise<void> {
                 status: classification.category === 'interested' ? 'interested'
                   : classification.category === 'not_interested' ? 'not_interested'
                   : classification.category === 'unsubscribe' ? 'unsubscribed'
+                  : classification.category === 'bounced' ? 'bounced'
                   : 'replied',
                 repliedAt: new Date(),
               },
             }).catch(() => {});
 
-            // Auto-trigger subsequences based on reply category and classification
-            const vars = (enrollment.variables as Record<string, unknown>) ?? {};
-            await triggerSubsequences(enrollment.sequenceId, fromEmail.toLowerCase(), 'REPLIED', vars);
+            // Only a genuine reply should re-enroll the lead in REPLIED-triggered
+            // subsequences — a bounce or unsubscribe isn't a signal to follow up.
+            if (!isHardStop) {
+              const vars = (enrollment.variables as Record<string, unknown>) ?? {};
+              await triggerSubsequences(enrollment.sequenceId, fromEmail.toLowerCase(), 'REPLIED', vars);
+            }
 
-            // If unsubscribe intent, also add to suppression
+            // Unsubscribe intent also goes on the suppression list so no other
+            // sequence or campaign can reach this address either.
             if (classification.category === 'unsubscribe') {
               await prisma.suppression.upsert({
                 where: { email: fromEmail.toLowerCase() },
