@@ -66,13 +66,31 @@ export function getRedis(): typeof redis {
 
 /**
  * Ping Redis to verify connectivity. Returns true if reachable.
+ *
+ * ioredis is configured with enableOfflineQueue: false so rate-limit/lock
+ * commands fail fast during a real outage instead of hanging. The tradeoff:
+ * a command issued during the brief window while the client is reconnecting
+ * (a dropped idle connection on Railway's proxy, not an actual outage) throws
+ * "Stream isn't writeable" even though Redis itself is fine seconds later.
+ * One short retry absorbs that window without weakening the fail-fast
+ * behavior for a genuine outage.
  */
 export async function pingRedis(): Promise<boolean> {
   try {
     await redis.ping();
-    // Any response without throwing = Redis is reachable
     return true;
   } catch (err) {
+    const status = getClient().status;
+    if (status === 'connecting' || status === 'reconnecting') {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      try {
+        await redis.ping();
+        return true;
+      } catch (retryErr) {
+        logger.warn({ err: retryErr }, 'Redis ping failed after reconnect retry');
+        return false;
+      }
+    }
     logger.warn({ err }, 'Redis ping failed');
     return false;
   }
