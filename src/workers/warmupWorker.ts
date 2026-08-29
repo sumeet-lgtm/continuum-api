@@ -5,6 +5,7 @@ import { sendViaSmtp } from '../lib/smtp.js';
 import { decryptValue } from '../lib/crypto.js';
 import { logger } from '../lib/logger.js';
 import { config } from '../config.js';
+import { deriveImapHost, IMAP_PORT } from '../lib/imapHost.js';
 
 interface WarmupTickPayload {
   tick: true;
@@ -69,8 +70,8 @@ async function autoOpenAndReply(
       imap: {
         user: targetMailbox.username,
         password,
-        host: targetMailbox.host,
-        port: targetMailbox.port ?? 993,
+        host: deriveImapHost(targetMailbox.host),
+        port: IMAP_PORT,
         tls: true,
         tlsOptions: { rejectUnauthorized: false },
         authTimeout: 10000,

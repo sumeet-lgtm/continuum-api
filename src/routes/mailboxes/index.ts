@@ -6,6 +6,7 @@ import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { encryptValue } from '../../lib/crypto.js';
 import { testSmtpConnection } from '../../lib/smtp.js';
+import { testImapConnection } from '../../lib/imapHost.js';
 import { config } from '../../config.js';
 
 const createSchema = z.object({
@@ -97,10 +98,21 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(200).send({ ok: false, error: 'Missing SMTP host or credentials' });
     }
 
-    // Real SMTP connectivity test
-    const result = await testSmtpConnection({
+    // Real SMTP connectivity test — required, this is what actually sends.
+    const smtpResult = await testSmtpConnection({
       host: mailbox.host,
       port: mailbox.port ?? 587,
+      username: mailbox.username,
+      passwordEnc: mailbox.passwordEnc,
+    });
+
+    // IMAP is only needed for reply detection and warmup auto-open/reply —
+    // check it too, but don't let a bad IMAP config mark an otherwise-working
+    // sending mailbox as fully 'error'. Report both halves separately so the
+    // dashboard can say exactly what won't work, instead of a mailbox looking
+    // "active" while reply detection silently never fires.
+    const imapResult = await testImapConnection({
+      host: mailbox.host,
       username: mailbox.username,
       passwordEnc: mailbox.passwordEnc,
     });
@@ -108,12 +120,19 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
     await prisma.mailbox.update({
       where: { id },
       data: {
-        status: result.ok ? 'active' : 'error',
-        lastErrorMsg: result.ok ? null : (result.error ?? 'SMTP test failed'),
+        status: smtpResult.ok ? 'active' : 'error',
+        lastErrorMsg: smtpResult.ok
+          ? (imapResult.ok ? null : `SMTP ok, but IMAP failed (reply detection/warmup won't work): ${imapResult.error ?? 'unknown error'}`)
+          : (smtpResult.error ?? 'SMTP test failed'),
         lastCheckedAt: new Date(),
       },
     });
-    return reply.status(200).send(result);
+    return reply.status(200).send({
+      ok: smtpResult.ok,
+      error: smtpResult.error,
+      smtp: smtpResult,
+      imap: imapResult,
+    });
   });
 
   // POST /v1/mailboxes/:id/warmup — enable warmup

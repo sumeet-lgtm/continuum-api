@@ -3,6 +3,7 @@ import { QUEUE_IMAP, redisConnection } from '../lib/queue.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { config } from '../config.js';
+import { deriveImapHost, IMAP_PORT } from '../lib/imapHost.js';
 
 interface ImapTickPayload {
   tick: true;
@@ -84,8 +85,8 @@ async function pollMailboxes(): Promise<void> {
         imap: {
           user: mailbox.username,
           password,
-          host: mailbox.host ?? 'imap.gmail.com',
-          port: mailbox.port ?? 993,
+          host: deriveImapHost(mailbox.host ?? 'imap.gmail.com'),
+          port: IMAP_PORT,
           tls: true,
           tlsOptions: { rejectUnauthorized: false },
           authTimeout: 10000,
