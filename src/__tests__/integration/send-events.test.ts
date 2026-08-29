@@ -16,6 +16,13 @@ vi.mock('../../lib/prisma.js', () => ({
     suppression: {
       upsert: vi.fn().mockResolvedValue({}),
     },
+    smtpCache: {
+      delete: vi.fn().mockResolvedValue({}),
+    },
+    monitor: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      update:    vi.fn().mockResolvedValue({}),
+    },
     webhook: { findMany: vi.fn().mockResolvedValue([]) },
     $disconnect: vi.fn(),
   },
@@ -63,12 +70,22 @@ vi.mock('../../lib/snsVerify.js', () => ({
 import { buildApp } from '../../server.js';
 import { prisma } from '../../lib/prisma.js';
 import { verifySnsMessage } from '../../lib/snsVerify.js';
+import { monitorQueue } from '../../lib/queue.js';
 
 const mockFindSend    = vi.mocked(prisma.sendMessage.findUnique);
 const mockUpdateSend  = vi.mocked(prisma.sendMessage.update);
 const mockEventCreate = vi.mocked(prisma.sendEvent.create);
 const mockSuppressUpsert = vi.mocked(prisma.suppression.upsert);
 const mockVerifySns   = vi.mocked(verifySnsMessage);
+const mockCacheDelete = vi.mocked(prisma.smtpCache.delete);
+const mockMonitorFind = vi.mocked(prisma.monitor.findFirst);
+const mockMonitorUpdate = vi.mocked(prisma.monitor.update);
+const mockMonitorRecheck = vi.mocked(monitorQueue.add);
+
+// correctOnGroundTruth runs fire-and-forget (`void`) after the route already
+// responded — flush the microtask queue so its effects have landed before
+// asserting on them.
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 let app: FastifyInstance;
 let fetchSpy: ReturnType<typeof vi.fn>;
@@ -174,6 +191,59 @@ describe('POST /v1/send/events (SNS)', () => {
     expect(mockSuppressUpsert).toHaveBeenCalledWith(
       expect.objectContaining({ where: { email: 'dead@example.com' } }),
     );
+
+    await flush();
+    expect(mockCacheDelete).toHaveBeenCalledWith({ where: { email: 'dead@example.com' } });
+  });
+
+  it('a permanent Bounce force-rechecks an active Monitor watching that address', async () => {
+    mockFindSend.mockResolvedValue({ id: 'send-003', apiKeyId: 'key-001', sesMessageId: 'ses-3' } as never);
+    mockMonitorFind.mockResolvedValue({ id: 'mon-001' } as never);
+
+    const res = await postSns({
+      ...baseSns,
+      Type: 'Notification',
+      Message: JSON.stringify({
+        eventType: 'Bounce',
+        mail: { messageId: 'ses-3' },
+        bounce: { bounceType: 'Permanent', bouncedRecipients: [{ emailAddress: 'watched@example.com' }] },
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    await flush();
+
+    expect(mockMonitorFind).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ email: 'watched@example.com', apiKeyId: 'key-001', isActive: true }) }),
+    );
+    expect(mockMonitorUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'mon-001' } }),
+    );
+    expect(mockMonitorRecheck).toHaveBeenCalledWith(
+      'recheck-single',
+      expect.objectContaining({ monitorId: 'mon-001', source: 'bounce_ground_truth' }),
+      expect.objectContaining({ priority: 1 }),
+    );
+  });
+
+  it('a permanent Bounce with no matching Monitor does not enqueue a recheck', async () => {
+    mockFindSend.mockResolvedValue({ id: 'send-004', apiKeyId: 'key-001', sesMessageId: 'ses-4' } as never);
+    mockMonitorFind.mockResolvedValue(null);
+    mockMonitorRecheck.mockClear();
+
+    const res = await postSns({
+      ...baseSns,
+      Type: 'Notification',
+      Message: JSON.stringify({
+        eventType: 'Bounce',
+        mail: { messageId: 'ses-4' },
+        bounce: { bounceType: 'Permanent', bouncedRecipients: [{ emailAddress: 'unwatched@example.com' }] },
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    await flush();
+    expect(mockMonitorRecheck).not.toHaveBeenCalled();
   });
 
   it('a Complaint suppresses the complaining address', async () => {

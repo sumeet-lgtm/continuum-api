@@ -2,10 +2,13 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../../lib/prisma.js';
 import { dispatchWebhook, buildEventId } from '../../lib/webhooks.js';
 import { verifySnsMessage, type SnsMessage } from '../../lib/snsVerify.js';
+import { invalidateSmtpCache } from '../../engine/smtpCache.js';
+import { monitorQueue } from '../../lib/queue.js';
 import { logger } from '../../lib/logger.js';
 import type {
   EmailDeliveredPayload, EmailBouncedPayload, EmailComplainedPayload,
 } from '../../types/webhook.js';
+import type { MonitorRecheckPayload } from '../../types/job.js';
 
 // ─── SES event shapes (only the fields read) ─────────────────────────────────
 
@@ -122,6 +125,7 @@ async function handleSesEvent(
     for (const email of recipients) {
       if (bounceType === 'Permanent') {
         await suppress(email, 'hard_bounce', apiKeyId);
+        void correctOnGroundTruth(email, apiKeyId);
       } else if (bounceType === 'Transient') {
         await trackSoftBounce(email, apiKeyId);
       }
@@ -176,6 +180,42 @@ async function handleSesEvent(
   }
 
   logger.info({ eventType, sendMessageId }, 'Unhandled SES event type — recorded nowhere, no webhook');
+}
+
+/**
+ * Closed-loop verification correction: a real SES hard bounce is stronger
+ * ground truth than any point-in-time SMTP probe (ours or a provider's) —
+ * the message was actually attempted and actually rejected. No standalone
+ * verifier (ZeroBounce, NeverBounce, MillionVerifier) ever sees this signal,
+ * because they don't also send; a "valid" verdict from them just goes stale
+ * silently. Here, a hard bounce immediately:
+ *   1. drops the cached SMTP verdict for this address so the next check
+ *      re-probes instead of trusting a now-contradicted cache entry, and
+ *   2. force-rechecks any active Monitor watching this address right now,
+ *      instead of waiting for its next scheduled interval — the fastest
+ *      possible drift alert is "we just watched it bounce for real."
+ */
+async function correctOnGroundTruth(email: string, apiKeyId: string): Promise<void> {
+  const lower = email.toLowerCase();
+  await invalidateSmtpCache(lower);
+
+  try {
+    const monitor = await prisma.monitor.findFirst({
+      where: { email: lower, apiKeyId, isActive: true, pausedAt: null },
+      select: { id: true },
+    });
+    if (!monitor) return;
+
+    await prisma.monitor.update({ where: { id: monitor.id }, data: { nextCheckAt: new Date() } });
+    await monitorQueue.add(
+      'recheck-single',
+      { monitorId: monitor.id, source: 'bounce_ground_truth' } satisfies MonitorRecheckPayload,
+      { jobId: `recheck-${monitor.id}-${Date.now()}`, priority: 1 },
+    );
+    logger.info({ email: lower, monitorId: monitor.id }, 'Hard bounce triggered immediate monitor recheck');
+  } catch (err) {
+    logger.warn({ err, email: lower }, 'Ground-truth monitor recheck failed — non-fatal');
+  }
 }
 
 /** Upsert-by-email: the unique constraint on Suppression.email makes a repeat bounce a no-op. */

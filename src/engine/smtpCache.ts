@@ -50,6 +50,15 @@ const TTL = {
 export const getSmtpCache = getCached;
 export const setSmtpCache = storeCache;
 
+/**
+ * Drop a cached SMTP verdict outright. Used when a real send outcome
+ * (an actual SES bounce) contradicts what the cache says — ground truth
+ * from a real delivery attempt beats a point-in-time probe, cached or not.
+ */
+export async function invalidateSmtpCache(email: string): Promise<void> {
+  await prisma.smtpCache.delete({ where: { email: email.toLowerCase() } }).catch(() => {});
+}
+
 export async function smtpVerifyWithCache(email: string): Promise<SmtpCacheResult> {
   // 1. Check cache first
   const cached = await getCached(email);
