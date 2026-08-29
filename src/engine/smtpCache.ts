@@ -42,6 +42,14 @@ const TTL = {
   UNKNOWN:  1 * 24 * 60 * 60 * 1000, // 1 day
 };
 
+// Exported so the engine can check/populate the same cache around its own
+// SMTP probe too — a hit here means neither a real socket probe nor a
+// provider call is needed at all, which is the actual "less third-party
+// dependency" win: not just preferring our own probe when we do check, but
+// checking less often in the first place as the cache warms up.
+export const getSmtpCache = getCached;
+export const setSmtpCache = storeCache;
+
 export async function smtpVerifyWithCache(email: string): Promise<SmtpCacheResult> {
   // 1. Check cache first
   const cached = await getCached(email);

@@ -5,7 +5,7 @@ import { lookupMx } from './mx.js';
 import { isDisposableDomain } from './disposable.js';
 import { isRoleAccount } from './roleAccount.js';
 import { smtpProbeWithFallback } from './smtp.js';
-import { smtpVerifyWithCache } from './smtpCache.js';
+import { smtpVerifyWithCache, getSmtpCache, setSmtpCache } from './smtpCache.js';
 import { checkDeliverability } from './deliverability.js';
 import { checkToxic } from './toxic.js';
 import { checkLookalike } from './lookalike.js';
@@ -115,15 +115,21 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   };
 
   const t3 = Date.now();
-  // Own SMTP probe first — direct socket probe, or the SMTP_PROBE_URL relay
-  // when set (works around cloud providers blocking outbound port 25).
-  // MillionVerifier is a fallback for when our own probe can't reach a
-  // verdict at all (blocked, timed out, no relay configured) rather than
-  // the primary source of truth — verification quality shouldn't be capped
-  // by a reseller's coverage.
-  if (mxResult.records.length > 0) {
+  // Cache first — a hit here means we skip both the socket probe and any
+  // provider call entirely. Own SMTP probe is next: direct socket probe, or
+  // the SMTP_PROBE_URL relay when set (works around cloud providers
+  // blocking outbound port 25). MillionVerifier is a last-resort fallback
+  // for when our own probe can't reach a verdict at all (blocked, timed
+  // out, no relay configured) rather than the primary source of truth —
+  // verification quality shouldn't be capped by a reseller's coverage.
+  const cached = await getSmtpCache(email);
+  if (cached) {
+    smtpResult = { ...cached, rawResponse: null };
+    logger.debug({ email }, 'SMTP cache hit — skipped probe and provider entirely');
+  } else if (mxResult.records.length > 0) {
     try {
       smtpResult = await smtpProbeWithFallback(email, mxResult.records);
+      if (smtpResult.checked) await setSmtpCache(email, { ...smtpResult, fromCache: false });
     } catch (err) {
       logger.error({ err, email, mxHosts: mxResult.records }, 'SMTP probe threw unexpectedly');
     }
