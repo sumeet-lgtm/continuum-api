@@ -195,7 +195,7 @@ function WebhooksPage() {
     <div className="space-y-6">
       <header className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Webhooks</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Webhooks</h1>
           <p className="text-sm text-muted-foreground">Receive events as they happen.</p>
         </div>
         <Button onClick={() => setOpen(true)} disabled={!apiKey}>

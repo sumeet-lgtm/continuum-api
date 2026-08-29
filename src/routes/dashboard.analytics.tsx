@@ -106,7 +106,7 @@ function AnalyticsPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Analytics</h1>
         <p className="text-sm text-muted-foreground">Performance across all sends — transactional, campaigns, and sequences.</p>
       </header>
 

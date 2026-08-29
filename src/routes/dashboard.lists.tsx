@@ -51,7 +51,7 @@ function ListsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Mailing Lists</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Mailing Lists</h1>
           <p className="text-sm text-muted-foreground">Manage opt-in subscriber lists for campaigns.</p>
         </header>
         <Button size="sm" className="gap-1.5" onClick={() => setCreating(true)}>

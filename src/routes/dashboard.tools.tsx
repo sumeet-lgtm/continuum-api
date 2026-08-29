@@ -572,7 +572,7 @@ function ToolsPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Deliverability Tools</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Deliverability Tools</h1>
         <p className="text-sm text-muted-foreground">
           The free deliverability toolkit no standalone verifier bundles in — domain health, DNS record generators, spam scoring, and campaign math, all against your own API key.
         </p>

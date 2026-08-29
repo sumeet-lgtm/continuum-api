@@ -322,7 +322,7 @@ function BulkPage() {
     <div className="space-y-6">
       <header className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Bulk Jobs</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Bulk Jobs</h1>
           <p className="text-sm text-muted-foreground">Upload a CSV with any columns. We automatically detect the email column by header name. Supported column names: email, email_address, e-mail. Maximum file size: 50MB.</p>
         </div>
         <div className="flex flex-col items-end gap-2">

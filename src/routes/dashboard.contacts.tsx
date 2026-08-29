@@ -176,7 +176,7 @@ function ContactsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Contacts</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Contacts</h1>
           <p className="text-sm text-muted-foreground">Manage subscribers across your mailing lists.</p>
         </header>
         {selectedList && (

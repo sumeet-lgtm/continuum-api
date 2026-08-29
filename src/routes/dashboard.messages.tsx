@@ -218,7 +218,7 @@ function MessagesPage() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Message History</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Message History</h1>
           <p className="text-sm text-muted-foreground">All transactional emails sent through your API key.</p>
         </header>
         <div className="flex items-center gap-3">

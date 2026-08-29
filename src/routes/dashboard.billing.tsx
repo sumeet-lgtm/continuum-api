@@ -153,7 +153,7 @@ function BillingPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Billing</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Billing</h1>
         <p className="text-sm text-muted-foreground">Manage your plan — email verification, transactional sending, newsletter campaigns, and cold outreach sequences.</p>
       </header>
 

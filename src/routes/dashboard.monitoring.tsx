@@ -141,7 +141,7 @@ function MonitoringPage() {
     <div className="space-y-6">
       <header className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Monitoring</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Monitoring</h1>
           <p className="text-sm text-muted-foreground">Continuously watch important addresses.</p>
         </div>
         <Button onClick={() => setOpen(true)} disabled={!apiKey}>

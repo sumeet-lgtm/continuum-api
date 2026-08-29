@@ -91,7 +91,7 @@ function Overview() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Overview</h1>
         <p className="text-sm text-muted-foreground">Your activity this month across all products.</p>
       </header>
 

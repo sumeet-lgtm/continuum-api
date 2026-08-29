@@ -51,7 +51,7 @@ function SettingsPage() {
   return (
     <div className="space-y-6 max-w-2xl">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Settings</h1>
         <p className="text-sm text-muted-foreground">Manage your account and plan.</p>
       </header>
 

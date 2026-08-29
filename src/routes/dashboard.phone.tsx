@@ -76,7 +76,7 @@ function PhonePage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Phone</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Phone</h1>
         <p className="text-sm text-muted-foreground">Validate a phone number and detect line type.</p>
       </header>
 

@@ -124,7 +124,7 @@ function VerifyPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Verify</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Verify</h1>
         <p className="text-sm text-muted-foreground">Run a single email through the API.</p>
       </header>
 

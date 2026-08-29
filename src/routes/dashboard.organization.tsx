@@ -129,7 +129,7 @@ function OrganizationPage() {
     return (
       <div className="space-y-6 max-w-2xl">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Organization</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Organization</h1>
           <p className="text-sm text-muted-foreground">Manage your team and enterprise SSO.</p>
         </header>
         <Section title="Enterprise SSO">
@@ -149,7 +149,7 @@ function OrganizationPage() {
   return (
     <div className="space-y-6 max-w-2xl">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Organization</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Organization</h1>
         <p className="text-sm text-muted-foreground">Manage your team, SSO, and directory sync.</p>
       </header>
 

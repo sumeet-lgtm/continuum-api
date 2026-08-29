@@ -362,7 +362,7 @@ function SequencesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Sequences</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Sequences</h1>
           <p className="text-sm text-muted-foreground">Multi-step cold outreach with conditions, delays, reply detection, and A/B testing.</p>
         </header>
         <Button size="sm" className="gap-1.5" onClick={() => setCreating(true)}>

@@ -78,7 +78,7 @@ function IpPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">IP Intelligence</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">IP Intelligence</h1>
         <p className="text-sm text-muted-foreground">Geolocate an IP and detect proxy, VPN, or hosting providers.</p>
       </header>
 

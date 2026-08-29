@@ -81,7 +81,7 @@ function TransactionalPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Send Transactional Email</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Send Transactional Email</h1>
         <p className="text-sm text-muted-foreground">
           Send a single email via the API. Supports templates, CC/BCC, reply-to, and scheduled delivery.
         </p>

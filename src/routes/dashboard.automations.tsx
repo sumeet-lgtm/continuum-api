@@ -247,7 +247,7 @@ function AutomationsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Autoresponders</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Autoresponders</h1>
           <p className="text-sm text-muted-foreground">
             Trigger-based email sequences — send a welcome series, onboarding drip, or any workflow when an event fires.
           </p>

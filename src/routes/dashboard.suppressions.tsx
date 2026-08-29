@@ -87,7 +87,7 @@ function SuppressionsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Suppressions</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Suppressions</h1>
           <p className="text-sm text-muted-foreground">Emails blocked from receiving any messages — bounces, complaints, and manual blocks.</p>
         </header>
         <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}>

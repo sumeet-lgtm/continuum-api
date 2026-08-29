@@ -86,7 +86,7 @@ function BatchSendPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Batch Send</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Batch Send</h1>
         <p className="text-sm text-muted-foreground">Send the same email to up to 100 recipients in one API call.</p>
       </header>
 

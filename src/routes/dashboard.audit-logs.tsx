@@ -43,7 +43,7 @@ function AuditLogsPage() {
   return (
     <div className="space-y-6 max-w-4xl">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Audit Logs</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Audit Logs</h1>
         <p className="text-sm text-muted-foreground">
           Security-relevant events for your organization — sign-ins, key changes, member updates, and SSO events.
         </p>

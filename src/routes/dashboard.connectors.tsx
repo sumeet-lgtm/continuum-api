@@ -68,7 +68,7 @@ function ConnectorsPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Connectors</h1>
+        <h1 className="text-2xl font-display font-medium tracking-tight">Connectors</h1>
         <p className="text-sm text-muted-foreground">
           Ready-to-paste webhook URLs for Clay, Apollo, Zapier/Make/n8n, and MCP clients — no code required to wire them up.
         </p>

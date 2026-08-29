@@ -117,7 +117,7 @@ function ApiKeysPage() {
     <div className="space-y-6">
       <header className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">API Keys</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">API Keys</h1>
           <p className="text-sm text-muted-foreground">
             Authenticate requests to the Continuum API. Create scoped keys for different services.
           </p>

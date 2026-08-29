@@ -132,7 +132,7 @@ function DomainsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Sending Domains</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Sending Domains</h1>
           <p className="text-sm text-muted-foreground">Add custom domains with DKIM/SPF authentication.</p>
         </header>
         <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}>

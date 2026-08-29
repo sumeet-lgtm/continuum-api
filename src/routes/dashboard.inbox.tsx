@@ -74,7 +74,7 @@ function InboxPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Unified Inbox</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Unified Inbox</h1>
           <p className="text-sm text-muted-foreground">All replies across every mailbox and sequence in one place.</p>
         </header>
         <Button variant="outline" size="sm" className="gap-1.5" onClick={load}>

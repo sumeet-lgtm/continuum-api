@@ -163,7 +163,7 @@ function LeadsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Leads</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Leads</h1>
           <p className="text-sm text-muted-foreground">Cold outreach contacts — separate from newsletter subscribers.</p>
         </header>
         <div className="flex gap-2">

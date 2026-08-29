@@ -127,7 +127,7 @@ function CampaignsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Campaigns</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Campaigns</h1>
           <p className="text-sm text-muted-foreground">Newsletter and broadcast emails to your mailing lists.</p>
         </header>
         <Button size="sm" className="gap-1.5" onClick={() => setCreating(true)}>

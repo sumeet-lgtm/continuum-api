@@ -177,7 +177,7 @@ function AiPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+        <h1 className="text-2xl font-display font-medium tracking-tight flex items-center gap-2">
           <Sparkles className="h-5 w-5" /> AI Tools
         </h1>
         <p className="text-sm text-muted-foreground">AI-powered personalization and email generation. Requires Growth plan or higher.</p>
