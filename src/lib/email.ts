@@ -388,6 +388,21 @@ export function domainFailedEmail(domain: string, reason: string, firstName?: st
   };
 }
 
+export function mailboxReconnectEmail(username: string, reason: string, firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: `Action required: reconnect ${username}`,
+    html: layout('Mailbox needs reconnecting', `
+      ${greeting(firstName)}
+      ${h1(`${username} needs to be reconnected.`)}
+      ${ALERT('red', `${reason} Sequences and warmup using this mailbox are paused until it's reconnected.`)}
+      ${ROW('Mailbox', username)}
+      ${DIVIDER}
+      ${BTN('https://app.continuumapi.com/dashboard/mailboxes', 'Reconnect Mailbox →')}
+      ${p('<span style="color:#9CA3AF;font-size:12px">Re-enter your credentials on the Mailboxes page — no other settings are affected.</span>')}
+    `),
+  };
+}
+
 // ─── Deliverability alerts ────────────────────────────────────────────────────────
 
 export function highBounceRateEmail(bounceRate: number, domain: string, firstName?: string | null): { subject: string; html: string } {
