@@ -27,6 +27,7 @@ import { Route as DashboardBatchSendRouteImport } from './routes/dashboard.batch
 import { Route as DashboardBillingRouteImport } from './routes/dashboard.billing'
 import { Route as DashboardBulkRouteImport } from './routes/dashboard.bulk'
 import { Route as DashboardCampaignsRouteImport } from './routes/dashboard.campaigns'
+import { Route as DashboardConnectorsRouteImport } from './routes/dashboard.connectors'
 import { Route as DashboardContactsRouteImport } from './routes/dashboard.contacts'
 import { Route as DashboardDomainsRouteImport } from './routes/dashboard.domains'
 import { Route as DashboardInboxRouteImport } from './routes/dashboard.inbox'
@@ -137,6 +138,11 @@ const DashboardBulkRoute = DashboardBulkRouteImport.update({
 const DashboardCampaignsRoute = DashboardCampaignsRouteImport.update({
   id: '/campaigns',
   path: '/campaigns',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardConnectorsRoute = DashboardConnectorsRouteImport.update({
+  id: '/connectors',
+  path: '/connectors',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardContactsRoute = DashboardContactsRouteImport.update({
@@ -263,6 +269,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/billing': typeof DashboardBillingRoute
   '/dashboard/bulk': typeof DashboardBulkRoute
   '/dashboard/campaigns': typeof DashboardCampaignsRoute
+  '/dashboard/connectors': typeof DashboardConnectorsRoute
   '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
@@ -303,6 +310,7 @@ export interface FileRoutesByTo {
   '/dashboard/billing': typeof DashboardBillingRoute
   '/dashboard/bulk': typeof DashboardBulkRoute
   '/dashboard/campaigns': typeof DashboardCampaignsRoute
+  '/dashboard/connectors': typeof DashboardConnectorsRoute
   '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
@@ -345,6 +353,7 @@ export interface FileRoutesById {
   '/dashboard/billing': typeof DashboardBillingRoute
   '/dashboard/bulk': typeof DashboardBulkRoute
   '/dashboard/campaigns': typeof DashboardCampaignsRoute
+  '/dashboard/connectors': typeof DashboardConnectorsRoute
   '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
@@ -388,6 +397,7 @@ export interface FileRouteTypes {
     | '/dashboard/billing'
     | '/dashboard/bulk'
     | '/dashboard/campaigns'
+    | '/dashboard/connectors'
     | '/dashboard/contacts'
     | '/dashboard/domains'
     | '/dashboard/inbox'
@@ -428,6 +438,7 @@ export interface FileRouteTypes {
     | '/dashboard/billing'
     | '/dashboard/bulk'
     | '/dashboard/campaigns'
+    | '/dashboard/connectors'
     | '/dashboard/contacts'
     | '/dashboard/domains'
     | '/dashboard/inbox'
@@ -469,6 +480,7 @@ export interface FileRouteTypes {
     | '/dashboard/billing'
     | '/dashboard/bulk'
     | '/dashboard/campaigns'
+    | '/dashboard/connectors'
     | '/dashboard/contacts'
     | '/dashboard/domains'
     | '/dashboard/inbox'
@@ -632,6 +644,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardCampaignsRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/connectors': {
+      id: '/dashboard/connectors'
+      path: '/connectors'
+      fullPath: '/dashboard/connectors'
+      preLoaderRoute: typeof DashboardConnectorsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/contacts': {
       id: '/dashboard/contacts'
       path: '/contacts'
@@ -792,6 +811,7 @@ interface DashboardRouteChildren {
   DashboardBillingRoute: typeof DashboardBillingRoute
   DashboardBulkRoute: typeof DashboardBulkRoute
   DashboardCampaignsRoute: typeof DashboardCampaignsRoute
+  DashboardConnectorsRoute: typeof DashboardConnectorsRoute
   DashboardContactsRoute: typeof DashboardContactsRoute
   DashboardDomainsRoute: typeof DashboardDomainsRoute
   DashboardInboxRoute: typeof DashboardInboxRoute
@@ -826,6 +846,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardBillingRoute: DashboardBillingRoute,
   DashboardBulkRoute: DashboardBulkRoute,
   DashboardCampaignsRoute: DashboardCampaignsRoute,
+  DashboardConnectorsRoute: DashboardConnectorsRoute,
   DashboardContactsRoute: DashboardContactsRoute,
   DashboardDomainsRoute: DashboardDomainsRoute,
   DashboardInboxRoute: DashboardInboxRoute,

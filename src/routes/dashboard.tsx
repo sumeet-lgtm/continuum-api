@@ -32,6 +32,7 @@ import {
   Building2,
   ShieldCheck,
   Wrench,
+  Plug,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Logo } from "@/components/Logo";
@@ -95,6 +96,7 @@ const NAV: NavItem[] = [
   { to: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/dashboard/verify", label: "Verify", icon: Mail },
   { to: "/dashboard/tools", label: "Deliverability Tools", icon: Wrench },
+  { to: "/dashboard/connectors", label: "Connectors", icon: Plug },
   { to: "/dashboard/phone", label: "Phone", icon: Phone },
   { to: "/dashboard/ip", label: "IP Intelligence", icon: Globe },
   { to: "/dashboard/bulk", label: "Bulk Jobs", icon: ListChecks },
