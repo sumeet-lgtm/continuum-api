@@ -180,6 +180,13 @@ async function buildApp(): Promise<FastifyInstance> {
     return reply.send({
       name: 'Continuum API',
       version: process.env['npm_package_version'] ?? '0.1.0',
+      // Set via `railway variable set COMMIT_SHA=$(git rev-parse --short HEAD)
+      // --skip-deploys` immediately before each `railway up` — deploys go
+      // through the CLI, not a GitHub-connected pipeline, so Railway's
+      // auto-injected RAILWAY_GIT_COMMIT_SHA is never populated here. Exists
+      // so "is my latest deploy actually live" has a real answer instead of
+      // inference from container uptime.
+      commit: process.env['COMMIT_SHA'] ?? 'unknown',
       docs: 'https://github.com/your-org/continuum#readme',
       health: '/health',
     });
