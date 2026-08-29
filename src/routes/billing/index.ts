@@ -88,7 +88,6 @@ const UPGRADE_EVENTS = new Set([
 const DOWNGRADE_EVENTS = new Set([
   'subscription.cancelled',
   'subscription.expired',
-  'subscription.revoked',
 ]);
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
