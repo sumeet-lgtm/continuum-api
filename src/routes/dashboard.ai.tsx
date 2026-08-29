@@ -11,7 +11,7 @@ export const Route = createFileRoute("/dashboard/ai")({
   component: AiPage,
 });
 
-type AiTab = "personalize" | "generate";
+type AiTab = "personalize" | "generate" | "esp";
 
 interface PersonalizeResult {
   email: string;
@@ -35,6 +35,8 @@ interface GenerateResponse {
   model: string;
   usage: { variants_generated: number };
 }
+
+interface EspResult { email: string; esp: string | null; }
 
 function parseLead(line: string) {
   const parts = line.split(",").map((p) => p.trim());
@@ -67,6 +69,11 @@ function AiPage() {
   const [numVariants, setNumVariants] = useState(3);
   const [generating, setGenerating] = useState(false);
   const [variants, setVariants] = useState<EmailVariant[] | null>(null);
+
+  // ESP detector state
+  const [espEmails, setEspEmails] = useState("");
+  const [espLoading, setEspLoading] = useState(false);
+  const [espResults, setEspResults] = useState<EspResult[] | null>(null);
 
   const parsedLeads = leads
     .split("\n")
@@ -138,6 +145,35 @@ function AiPage() {
     finally { setGenerating(false); }
   };
 
+  const parsedEspEmails = espEmails
+    .split(/[\n,]/)
+    .map((l) => l.trim())
+    .filter((l) => l.includes("@") && l.includes("."));
+
+  const detectEsp = async () => {
+    if (!primaryKey?.keyRaw) return;
+    if (parsedEspEmails.length === 0) { toast.error("Add at least one email address"); return; }
+    if (parsedEspEmails.length > 100) { toast.error("Maximum 100 emails per request"); return; }
+    setEspLoading(true);
+    setEspResults(null);
+    try {
+      const res = await fetch("https://api.continuumapi.com/v1/ai/detect-esp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
+        body: JSON.stringify({ emails: parsedEspEmails }),
+      });
+      const data = await res.json().catch(() => null) as { results?: EspResult[] } | { error?: string };
+      if (!res.ok) throw new Error((data as { error?: string })?.error ?? `Failed (${res.status})`);
+      setEspResults((data as { results?: EspResult[] }).results ?? []);
+    } catch (e: unknown) { toast.error((e as Error).message); }
+    finally { setEspLoading(false); }
+  };
+
+  const espLabel = (esp: string | null) => {
+    const map: Record<string, string> = { google: "Google / Gmail", microsoft: "Microsoft / Outlook", yahoo: "Yahoo / AOL", other: "Other / self-hosted" };
+    return esp ? (map[esp] ?? esp) : "Unknown";
+  };
+
   return (
     <div className="space-y-6">
       <header>
@@ -148,7 +184,7 @@ function AiPage() {
       </header>
 
       <div className="flex gap-1 border-b border-border">
-        {([["personalize", "First Line Generator"], ["generate", "Email Generator"]] as const).map(([key, label]) => (
+        {([["personalize", "First Line Generator"], ["generate", "Email Generator"], ["esp", "ESP Detector"]] as const).map(([key, label]) => (
           <button
             key={key}
             onClick={() => setTab(key)}
@@ -273,7 +309,7 @@ function AiPage() {
             )}
           </div>
         </div>
-      ) : (
+      ) : tab === "generate" ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="space-y-5 rounded-lg border border-border bg-card p-6">
             <div className="space-y-1.5">
@@ -373,6 +409,58 @@ function AiPage() {
                 <Sparkles className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
                 <p className="text-sm text-muted-foreground">Email variants appear here.</p>
                 <p className="text-xs text-muted-foreground mt-1">Use as A/B test starting points in your sequences.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="space-y-5 rounded-lg border border-border bg-card p-6">
+            <div className="space-y-1.5">
+              <Label>Email addresses <span className="text-muted-foreground font-normal text-xs">(one per line or comma-separated)</span></Label>
+              <textarea
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[160px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder={"alice@gmail.com\nbob@company-domain.com\ncarla@yahoo.com"}
+                value={espEmails}
+                onChange={(e) => setEspEmails(e.target.value)}
+              />
+              {parsedEspEmails.length > 0 && (
+                <p className="text-xs text-muted-foreground">{parsedEspEmails.length} email{parsedEspEmails.length !== 1 ? "s" : ""} parsed
+                  {parsedEspEmails.length > 100 && <span className="text-destructive font-medium"> — max 100</span>}
+                </p>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Knowing whether a recipient is on Gmail, Outlook, Yahoo, or a self-hosted domain lets you throttle sends and warmup pacing per-ISP instead of treating every inbox the same.
+            </p>
+            <Button onClick={detectEsp} disabled={espLoading || parsedEspEmails.length === 0} className="w-full gap-1.5">
+              <Sparkles className="h-4 w-4" />
+              {espLoading ? "Detecting…" : `Detect ${parsedEspEmails.length || ""} provider${parsedEspEmails.length !== 1 ? "s" : ""}`}
+            </Button>
+          </div>
+
+          <div>
+            {espResults ? (
+              espResults.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No results.</p>
+              ) : (
+                <div className="rounded-lg border border-border bg-card">
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {espResults.map((r, i) => (
+                        <tr key={i} className="border-b border-border last:border-0">
+                          <td className="px-4 py-2.5 font-mono text-xs">{r.email}</td>
+                          <td className="px-4 py-2.5 text-right text-muted-foreground">{espLabel(r.esp)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            ) : (
+              <div className="rounded-lg border border-dashed border-border p-8 text-center">
+                <Sparkles className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
+                <p className="text-sm text-muted-foreground">Provider results appear here.</p>
               </div>
             )}
           </div>
