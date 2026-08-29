@@ -75,15 +75,32 @@ function calculateRiskScore(data: {
   return { score, level };
 }
 
+// ip-api.com's free tier caps at 45 requests/minute PER SOURCE IP — and the
+// source IP on every one of these calls is Continuum's own server, shared
+// across every customer using this endpoint. Without a cache, any real
+// traffic on this feature (e.g. a customer checking IP risk on every
+// signup) can blow through that limit and get IP lookups rate-limited for
+// every customer at once, not just the one driving the volume. A given IP's
+// geolocation/ISP/hosting status doesn't change minute to minute, so a short
+// cache absorbs repeat lookups almost for free. Same pattern already used
+// for domain deliverability checks below.
+const ipCache = new Map<string, IpIntelligenceResult>();
+const IP_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
 export async function checkIpIntelligence(ip: string): Promise<IpIntelligenceResult> {
   const start = Date.now();
 
   // Basic IP validation
   const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
   const ipv6Regex = /^[0-9a-fA-F:]+$/;
-  
+
   if (!ipv4Regex.test(ip) && !ipv6Regex.test(ip)) {
     return invalidResult(ip, 'Invalid IP format', start);
+  }
+
+  const cached = ipCache.get(ip);
+  if (cached) {
+    return { ...cached, durationMs: Date.now() - start };
   }
 
   // Block private IPs
@@ -149,7 +166,7 @@ export async function checkIpIntelligence(ip: string): Promise<IpIntelligenceRes
       countryCode: data.countryCode ?? null,
     });
 
-    return {
+    const result: IpIntelligenceResult = {
       ip: data.query ?? ip,
       valid: true,
       country:     data.country     ?? null,
@@ -170,6 +187,11 @@ export async function checkIpIntelligence(ip: string): Promise<IpIntelligenceRes
       checkedAt:   new Date().toISOString(),
       durationMs:  Date.now() - start,
     };
+
+    ipCache.set(ip, result);
+    setTimeout(() => ipCache.delete(ip), IP_CACHE_TTL_MS);
+
+    return result;
 
   } catch (err) {
     logger.error({ err, ip }, 'IP intelligence check failed');
