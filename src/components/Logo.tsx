@@ -9,9 +9,9 @@ export function Logo({ size = 28, className = "" }: { size?: number; className?:
       aria-hidden="true"
     >
       <style>{`@keyframes cont-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
-      <rect width="32" height="32" rx="8" fill="oklch(0.16 0.01 55)" />
+      <rect width="32" height="32" rx="8" fill="#000" />
       <g style={{ transformOrigin: "16px 16px", animation: "cont-spin 10s linear infinite" }}>
-        <circle cx="16" cy="16" r="9.5" stroke="oklch(0.74 0.15 65)" strokeWidth="2.8" strokeDasharray="9 3" strokeLinecap="round" />
+        <circle cx="16" cy="16" r="9.5" stroke="#fff" strokeWidth="2.8" strokeDasharray="9 3" strokeLinecap="round" />
       </g>
     </svg>
   );

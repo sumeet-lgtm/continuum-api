@@ -71,7 +71,7 @@ export function AuthGate({ mode }: { mode: "signin" | "signup" }) {
         </div>
         <div className="rounded-lg border border-border bg-card p-8 shadow-sm space-y-5">
           <div className="text-center space-y-1">
-            <h1 className="text-xl font-semibold tracking-tight">
+            <h1 className="text-xl font-display font-medium tracking-tight">
               {isSignup ? "Create your free account" : "Sign in to Continuum"}
             </h1>
             <p className="text-sm text-muted-foreground">

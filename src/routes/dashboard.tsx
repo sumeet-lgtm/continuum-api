@@ -35,7 +35,7 @@ import {
   Plug,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { Logo } from "@/components/Logo";
+import { Wordmark } from "@/components/Logo";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -209,8 +209,7 @@ function DashboardLayout() {
       {/* Sidebar */}
       <aside className="hidden md:flex fixed inset-y-0 left-0 w-60 flex-col border-r border-border bg-[var(--sidebar-bg)] overflow-y-auto">
         <div className="px-5 py-5 flex items-center gap-2 shrink-0">
-          <Logo size={24} />
-          <span className="text-[14px] font-semibold tracking-tight">Continuum API</span>
+          <Wordmark size={24} />
         </div>
         <nav className="mt-2 flex-1 px-3 space-y-0.5 pb-4">
           {NAV.map((item) => renderNavItem(item))}
@@ -233,8 +232,7 @@ function DashboardLayout() {
       {/* Mobile top bar */}
       <header className="md:hidden flex items-center justify-between border-b border-border bg-[var(--sidebar-bg)] px-4 py-3 sticky top-0 z-20">
         <div className="flex items-center gap-2">
-          <Logo size={22} />
-          <span className="text-sm font-semibold">Continuum API</span>
+          <Wordmark size={22} />
         </div>
         <button
           onClick={() => setMobileNavOpen(o => !o)}
