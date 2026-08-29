@@ -71,6 +71,7 @@ const envSchema = z.object({
   UNSUBSCRIBE_SECRET: z.string().optional(),
   TRACKING_SECRET: z.string().optional(),
   MAILBOX_CREDS_SECRET: z.string().optional(),
+  OPTIN_SECRET: z.string().optional(),
 
   // Feature gates
   WARMUP_POOL_ENABLED: z.string().transform(v => v?.toLowerCase() === 'true').default('false'),
