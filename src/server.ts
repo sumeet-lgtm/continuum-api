@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
-import { config, isDev } from './config.js';
+import { config, isDev, isTest } from './config.js';
 import { logger } from './lib/logger.js';
 import { disconnectPrisma } from './lib/prisma.js';
 import { closeQueues } from './lib/queue.js';
@@ -255,5 +255,9 @@ async function start(): Promise<void> {
 // Export for testing
 export { buildApp };
 
-// Start when run directly
-void start();
+// Start when run directly — not under test. Integration tests import
+// buildApp() from this module to get a testable Fastify instance, and with
+// isolate:true every test file gets a fresh module registry, so without
+// this guard each of those files would also trigger a real listen() on the
+// same port, colliding across parallel workers and exiting the process.
+if (!isTest) void start();

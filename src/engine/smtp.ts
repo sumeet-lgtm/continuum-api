@@ -6,6 +6,29 @@ import { logger } from '../lib/logger.js';
 const CATCHALL_PROBE_LOCAL = 'cnt-probe-v1-xq7z2k9m';
 const SMTP_PORT = 25;
 const SMTP_PORT_FALLBACK = 587;
+const MAX_MX_ATTEMPTS = 3;
+
+/**
+ * Probe a domain's MX hosts in priority order, stopping at the first one
+ * that yields a definitive result. A single flaky or probe-hostile MX
+ * host (rate-limiting, firewalling the probe IP) shouldn't sink the whole
+ * verification to "unknown" when the domain has working secondaries —
+ * this is what most of the accuracy gap between a single-host probe and a
+ * paid verification API actually comes from.
+ */
+export async function smtpProbeWithFallback(
+  email: string,
+  mxHosts: string[],
+): Promise<SmtpProbeResult> {
+  const hosts = mxHosts.slice(0, MAX_MX_ATTEMPTS);
+  let last: SmtpProbeResult = notChecked('No MX hosts to probe');
+  for (const host of hosts) {
+    const result = await smtpProbe(email, host);
+    if (result.checked) return result;
+    last = result;
+  }
+  return last;
+}
 
 export async function smtpProbe(
   email: string,

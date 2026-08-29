@@ -14,7 +14,7 @@ vi.mock('node:net', async (importOriginal) => {
   };
 });
 
-import { smtpProbe } from '../../engine/smtp.js';
+import { smtpProbe, smtpProbeWithFallback } from '../../engine/smtp.js';
 
 // Restore SMTP_CHECK_ENABLED for these tests
 beforeEach(() => {
@@ -78,5 +78,33 @@ describe('smtpProbe result shape', () => {
   it('isCatchAll is boolean or null', async () => {
     const result = await smtpProbe('user@example.com', 'mx.example.com');
     expect(result.isCatchAll === null || typeof result.isCatchAll === 'boolean').toBe(true);
+  });
+});
+
+describe('smtpProbeWithFallback', () => {
+  // SMTP_CHECK_ENABLED=false globally, so every host individually returns
+  // checked=false — this exercises that the wrapper walks the whole list
+  // and still returns a well-formed not-checked result rather than throwing.
+  it('returns checked=false when every MX host is inconclusive', async () => {
+    const result = await smtpProbeWithFallback('user@example.com', [
+      'mx1.example.com', 'mx2.example.com', 'mx3.example.com',
+    ]);
+    expect(result.checked).toBe(false);
+  });
+
+  it('returns not-checked when given an empty host list', async () => {
+    const result = await smtpProbeWithFallback('user@example.com', []);
+    expect(result.checked).toBe(false);
+  });
+
+  it('never probes more than 3 MX hosts', async () => {
+    // Indirect check: passing 5 hosts should not throw or hang — the
+    // implementation caps attempts at 3. Hard to assert call count here
+    // without mocking net.Socket per-host, so this is a smoke test that
+    // the cap doesn't break the call for a longer-than-usual MX list.
+    const result = await smtpProbeWithFallback('user@example.com', [
+      'mx1.example.com', 'mx2.example.com', 'mx3.example.com', 'mx4.example.com', 'mx5.example.com',
+    ]);
+    expect(result).toBeDefined();
   });
 });

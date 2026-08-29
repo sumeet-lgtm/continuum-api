@@ -20,16 +20,31 @@ vi.mock('../../engine/mx.js', () => ({
   getMxCacheStats: vi.fn().mockReturnValue({ size: 0, maxSize: 10000 }),
 }));
 
-vi.mock('../../engine/smtp.js', () => ({
-  smtpProbe: vi.fn().mockResolvedValue({
+vi.mock('../../engine/smtp.js', () => {
+  const defaultResult = {
     checked:     false,
     reachable:   null,
     isCatchAll:  null,
     greylisted:  false,
     rawResponse: null,
     error:       'SMTP disabled',
-  }),
-}));
+  };
+  const smtpProbe = vi.fn().mockResolvedValue(defaultResult);
+  // Mirrors the real smtpProbeWithFallback: tries each host via the same
+  // (mocked) smtpProbe until one reports checked:true, so existing tests
+  // that set a single mockResolvedValue on smtpProbe keep working, and
+  // tests can still assert on mockSmtpProbe call args/order directly.
+  const smtpProbeWithFallback = vi.fn(async (email: string, hosts: string[]) => {
+    let last = defaultResult;
+    for (const host of hosts.slice(0, 3)) {
+      const result = await smtpProbe(email, host);
+      if (result.checked) return result;
+      last = result;
+    }
+    return last;
+  });
+  return { smtpProbe, smtpProbeWithFallback };
+});
 
 vi.mock('../../engine/disposable.js', () => ({
   isDisposableDomain:  vi.fn().mockReturnValue(false),

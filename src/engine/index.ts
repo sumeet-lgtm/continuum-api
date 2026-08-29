@@ -4,7 +4,7 @@ import { extractDomain, extractLocal } from './domain.js';
 import { lookupMx } from './mx.js';
 import { isDisposableDomain } from './disposable.js';
 import { isRoleAccount } from './roleAccount.js';
-import { smtpProbe } from './smtp.js';
+import { smtpProbeWithFallback } from './smtp.js';
 import { smtpVerifyWithCache } from './smtpCache.js';
 import { checkDeliverability } from './deliverability.js';
 import { checkToxic } from './toxic.js';
@@ -105,7 +105,6 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   const roleMs = 0;
 
   // ── 6. SMTP probe ──────────────────────────────────────────────────────────
-  const primaryMx = mxResult.records[0];
   let smtpResult = {
     checked:     false,
     reachable:   null  as boolean | null,
@@ -122,11 +121,11 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   // verdict at all (blocked, timed out, no relay configured) rather than
   // the primary source of truth — verification quality shouldn't be capped
   // by a reseller's coverage.
-  if (primaryMx) {
+  if (mxResult.records.length > 0) {
     try {
-      smtpResult = await smtpProbe(email, primaryMx);
+      smtpResult = await smtpProbeWithFallback(email, mxResult.records);
     } catch (err) {
-      logger.error({ err, email, mxHost: primaryMx }, 'SMTP probe threw unexpectedly');
+      logger.error({ err, email, mxHosts: mxResult.records }, 'SMTP probe threw unexpectedly');
     }
   }
   if (!smtpResult.checked) {

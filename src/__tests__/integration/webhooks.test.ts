@@ -21,6 +21,7 @@ vi.mock('../../lib/prisma.js', () => ({
       findUnique: vi.fn(),
       count:      vi.fn(),
       update:     vi.fn(),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
     webhookAttempt: { create: vi.fn() },
     $disconnect: vi.fn(),
@@ -142,6 +143,7 @@ function makeDelivery(overrides: Record<string, unknown> = {}) {
     createdAt:         new Date('2026-04-24T10:00:00Z'),
     payload:           { event: 'verification.completed', id: 'ver-001' } as never,
     responseBody:      '{"ok":true}',
+    attempts_:         [] as unknown[],
     ...overrides,
   };
 }

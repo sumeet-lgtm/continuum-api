@@ -87,6 +87,7 @@ const mockKeyUpdate     = vi.mocked(prisma.apiKey.update);
 const mockSuppressFind  = vi.mocked(prisma.suppression.findUnique);
 const mockVerifyFind    = vi.mocked(prisma.verification.findFirst);
 const mockSendCreate    = vi.mocked(prisma.sendMessage.create);
+const mockSendUpdate    = vi.mocked(prisma.sendMessage.update);
 const mockSendViaSes    = vi.mocked(sendViaSes);
 const mockSesConfigured = vi.mocked(isSesConfigured);
 const mockLookupMx      = vi.mocked(lookupMx);
@@ -266,7 +267,9 @@ describe('POST /v1/send', () => {
 
     expect(res.statusCode).toBe(502);
     expect(res.json().status).toBe('failed');
-    expect(mockSendCreate).toHaveBeenCalledWith(
+    // create() always writes status:'queued' up front (before the SES call);
+    // the failure is persisted via the subsequent update() once SES errors.
+    expect(mockSendUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'failed' }) }),
     );
     // A send that never left the building must not cost the customer quota —
