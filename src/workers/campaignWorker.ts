@@ -72,7 +72,28 @@ async function processCampaign(job: Job<CampaignJobData>): Promise<void> {
       break;
     }
 
-    const chunk = validRecipients.slice(i, i + CHUNK_SIZE);
+    let chunk = validRecipients.slice(i, i + CHUNK_SIZE);
+
+    // Re-check suppression per chunk, not just once at campaign start — a
+    // large list can take minutes to send, and someone who unsubscribes or
+    // bounces on a completely different channel (a reply to a transactional
+    // email, a different campaign) partway through must not still get a
+    // later chunk just because they weren't suppressed yet when this
+    // campaign began.
+    if (i > 0) {
+      const freshlySuppressed = await prisma.suppression.findMany({
+        where: { email: { in: chunk.map(r => r.email) } },
+        select: { email: true },
+      });
+      if (freshlySuppressed.length > 0) {
+        const freshSet = new Set(freshlySuppressed.map(s => s.email));
+        await prisma.campaignRecipient.updateMany({
+          where: { campaignId, email: { in: [...freshSet] } },
+          data: { status: 'suppressed' },
+        }).catch(() => {});
+        chunk = chunk.filter(r => !freshSet.has(r.email));
+      }
+    }
 
     await Promise.allSettled(chunk.map(async recipient => {
       try {
