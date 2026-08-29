@@ -271,4 +271,70 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(200).send({ data: result.filter(Boolean) });
     },
   );
+
+  // GET /v1/analytics/verification-accuracy
+  //
+  // No standalone verifier (ZeroBounce, NeverBounce, MillionVerifier) can
+  // produce this number — it requires seeing what actually happened after
+  // the verification, which means also being the thing that sends. Every
+  // /v1/send call that had a verification behind it (either verify_before_send,
+  // or the most recent prior check for that address) links back via
+  // SendMessage.verificationId. Cross-referencing that against the real SES
+  // bounce/complaint outcome turns "98% accuracy" from an asserted marketing
+  // number into a measured one, computed from the customer's own real sends.
+  const MIN_SAMPLE_SIZE = 20;
+  const ACCURACY_STATUSES = ['valid', 'risky', 'unknown'] as const;
+
+  fastify.get(
+    '/analytics/verification-accuracy',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const apiKeyId = request.apiKey.id;
+      const q = request.query as StatsQuery;
+      const since = q.dateFrom ?? q.date_from;
+
+      const attemptedStatuses = ['sent', 'delivered', 'bounced', 'complained'] as const;
+
+      const buckets = await Promise.all(ACCURACY_STATUSES.map(async (verifiedStatus) => {
+        const where = {
+          apiKeyId,
+          status: { in: [...attemptedStatuses] },
+          verification: { status: verifiedStatus },
+          ...(since ? { createdAt: { gte: new Date(since) } } : {}),
+        };
+
+        const [total, bounced, complained] = await Promise.all([
+          prisma.sendMessage.count({ where }),
+          prisma.sendMessage.count({ where: { ...where, status: 'bounced' } }),
+          prisma.sendMessage.count({ where: { ...where, status: 'complained' } }),
+        ]);
+
+        const sampleSizeOk = total >= MIN_SAMPLE_SIZE;
+
+        return {
+          verified_status: verifiedStatus,
+          total_sent: total,
+          bounced,
+          complained,
+          bounce_rate: sampleSizeOk ? +((bounced / total) * 100).toFixed(2) : null,
+          complaint_rate: sampleSizeOk ? +((complained / total) * 100).toFixed(2) : null,
+          sample_size_ok: sampleSizeOk,
+        };
+      }));
+
+      const validBucket = buckets.find((b) => b.verified_status === 'valid')!;
+
+      return reply.status(200).send({
+        buckets,
+        // Headline number: bounce rate for addresses this API key verified as
+        // "valid" before actually sending to them. Null (not 0) until there's
+        // enough real send volume to mean anything — a measured stat with a
+        // sample of 2 is worse than no stat at all.
+        measured_accuracy_pct: validBucket.sample_size_ok
+          ? +(100 - (validBucket.bounce_rate ?? 0)).toFixed(2)
+          : null,
+        min_sample_size: MIN_SAMPLE_SIZE,
+      });
+    },
+  );
 }
