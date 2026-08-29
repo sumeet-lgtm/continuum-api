@@ -1,0 +1,14 @@
+﻿src/routes/dashboard.ai.tsx(9,38): error TS2345: Argument of type '"/dashboard/ai"' is not assignable to parameter of type 'keyof FileRoutesByPath | undefined'.
+src/routes/dashboard.automations.tsx(12,38): error TS2345: Argument of type '"/dashboard/automations"' is not assignable to parameter of type 'keyof FileRoutesByPath | undefined'.
+src/routes/dashboard.batch-send.tsx(11,38): error TS2345: Argument of type '"/dashboard/batch-send"' is not assignable to parameter of type 'keyof FileRoutesByPath | undefined'.
+src/routes/dashboard.contacts.tsx(12,38): error TS2345: Argument of type '"/dashboard/contacts"' is not assignable to parameter of type 'keyof FileRoutesByPath | undefined'.
+src/routes/dashboard.domains.tsx(67,33): error TS2339: Property 'data' does not exist on type '{ domains: Domain[]; }'.
+src/routes/dashboard.inbox-test.tsx(11,38): error TS2345: Argument of type '"/dashboard/inbox-test"' is not assignable to parameter of type 'keyof FileRoutesByPath | undefined'.
+src/routes/dashboard.leads.tsx(89,33): error TS2339: Property 'data' does not exist on type '{ leads: Lead[]; total: number; }'.
+src/routes/dashboard.lists.tsx(30,31): error TS2339: Property 'data' does not exist on type '{ lists: MailingList[]; }'.
+src/routes/dashboard.segments.tsx(10,38): error TS2345: Argument of type '"/dashboard/segments"' is not assignable to parameter of type 'keyof FileRoutesByPath | undefined'.
+src/routes/dashboard.suppressions.tsx(11,38): error TS2345: Argument of type '"/dashboard/suppressions"' is not assignable to parameter of type 'keyof FileRoutesByPath | undefined'.
+src/routes/dashboard.templates.tsx(33,35): error TS2339: Property 'data' does not exist on type '{ templates: Template[]; }'.
+src/routes/dashboard.transactional.tsx(42,35): error TS2339: Property 'data' does not exist on type '{ templates: Template[]; }'.
+src/routes/privacy.tsx(3,38): error TS2345: Argument of type '"/privacy"' is not assignable to parameter of type 'keyof FileRoutesByPath | undefined'.
+src/routes/terms.tsx(3,38): error TS2345: Argument of type '"/terms"' is not assignable to parameter of type 'keyof FileRoutesByPath | undefined'.

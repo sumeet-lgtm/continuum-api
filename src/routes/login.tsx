@@ -1,11 +1,11 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { Wordmark } from "@/components/Logo";
 
 export const Route = createFileRoute("/login")({
   head: () => ({ meta: [{ title: "Sign in — Continuum API" }] }),
-  component: LoginPage,
+  component: () => <AuthGate mode="signin" />,
 });
 
 const API_BASE = "https://api.continuumapi.com";
@@ -48,16 +48,20 @@ function GitHubIcon() {
   );
 }
 
-function LoginPage() {
+export function AuthGate({ mode }: { mode: "signin" | "signup" }) {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
   const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
   const hasError = params?.get("error") === "sso_failed";
   const errorDetail = params?.get("detail") ?? null;
+  const plan = params?.get("plan");
 
   useEffect(() => {
     if (!loading && user) navigate({ to: "/dashboard" });
   }, [loading, user, navigate]);
+
+  const isSignup = mode === "signup";
+  const verb = isSignup ? "Sign up" : "Continue";
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4 bg-background">
@@ -67,9 +71,13 @@ function LoginPage() {
         </div>
         <div className="rounded-lg border border-border bg-card p-8 shadow-sm space-y-5">
           <div className="text-center space-y-1">
-            <h1 className="text-xl font-semibold tracking-tight">Sign in to Continuum</h1>
+            <h1 className="text-xl font-semibold tracking-tight">
+              {isSignup ? "Create your free account" : "Sign in to Continuum"}
+            </h1>
             <p className="text-sm text-muted-foreground">
-              Choose how you'd like to continue.
+              {isSignup
+                ? "API key in 30 seconds · no card required · 1k free sends/mo"
+                : "Choose how you'd like to continue."}
             </p>
           </div>
 
@@ -89,21 +97,21 @@ function LoginPage() {
               className="flex w-full items-center justify-center gap-3 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium hover:bg-muted transition-colors"
             >
               <GoogleIcon />
-              Continue with Google
+              {verb} with Google
             </a>
             <a
               href={providerUrl("microsoft")}
               className="flex w-full items-center justify-center gap-3 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium hover:bg-muted transition-colors"
             >
               <MicrosoftIcon />
-              Continue with Microsoft
+              {verb} with Microsoft
             </a>
             <a
               href={providerUrl("github")}
               className="flex w-full items-center justify-center gap-3 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium hover:bg-muted transition-colors"
             >
               <GitHubIcon />
-              Continue with GitHub
+              {verb} with GitHub
             </a>
           </div>
 
@@ -125,15 +133,20 @@ function LoginPage() {
           </a>
 
           <p className="text-center text-xs text-muted-foreground">
-            No password needed.
+            No password needed{plan ? ` · you'll land on the ${plan} plan` : ""}.
           </p>
         </div>
 
         <p className="mt-6 text-center text-sm text-muted-foreground">
-          Need access?{" "}
-          <a href="mailto:sumeet@continuumapi.com" className="font-medium text-foreground hover:underline">
-            Contact us
-          </a>
+          {isSignup ? (
+            <>Already have an account? <Link to="/login" className="font-medium text-foreground hover:underline">Sign in</Link></>
+          ) : (
+            <>New here? <Link to="/signup" className="font-medium text-foreground hover:underline">Create a free account</Link></>
+          )}
+        </p>
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          Need SSO for your whole team?{" "}
+          <a href="mailto:sumeet@continuumapi.com" className="font-medium hover:underline">Talk to us</a>
         </p>
       </div>
     </div>

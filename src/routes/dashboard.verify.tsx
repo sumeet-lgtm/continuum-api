@@ -87,6 +87,7 @@ function VerifyPage() {
     { key: "dmarcValid", label: "DMARC policy found" },
     { key: "dkimFound", label: "DKIM configured" },
     { key: "blacklisted", label: "Domain blacklisted", badIfTrue: true },
+    { key: "isLookalike", label: "Look-alike / typosquat domain", badIfTrue: true },
   ];
 
   const renderCheck = (def: CheckDef) => {
@@ -179,6 +180,11 @@ function VerifyPage() {
                       Listed on: {blacklists.join(", ")}
                     </li>
                   )}
+                  {checks.isLookalike === true && (checks as Record<string, unknown>).impersonates != null && (
+                    <li className="ml-6 text-xs text-[oklch(0.42_0.18_27)]">
+                      Impersonates: {String((checks as Record<string, unknown>).impersonates)}
+                    </li>
+                  )}
                 </ul>
               </div>
             </div>
@@ -193,9 +199,9 @@ function VerifyPage() {
         </div>
       )}
 
-      {result && (
+      {result && checks.smtpChecked === false && (
         <div className="rounded-lg border border-[oklch(0.85_0.12_85)] bg-[oklch(0.97_0.05_95)] p-4 text-sm text-[oklch(0.35_0.08_70)]">
-          <strong className="font-medium">Note:</strong> SMTP probing is currently disabled. Emails show &quot;unknown&quot; when SMTP cannot be checked. Do not treat &quot;unknown&quot; as safe to send without additional verification.
+          <strong className="font-medium">Note:</strong> SMTP could not be confirmed for this address (mailbox server unreachable, timed out, or greylisted). Status reflects syntax, MX, and domain-health signals only — do not treat &quot;unknown&quot; as safe to send without a retry.
         </div>
       )}
 
