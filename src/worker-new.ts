@@ -40,9 +40,15 @@ console.log('[worker-new] campaign + sequence + warmup + IMAP + automation worke
 
 const shutdown = async () => {
   console.log('[worker-new] shutting down...');
-  await Promise.all(closable.map(w => w.close()));
+  // allSettled, not all — one worker's close() rejecting must not stop the
+  // rest from closing, and must not turn a clean shutdown into a crash.
+  await Promise.allSettled(closable.map(w => w.close()));
   process.exit(0);
 };
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGTERM', () => void shutdown());
+process.on('SIGINT', () => void shutdown());
+process.on('unhandledRejection', (reason) => {
+  console.error('[worker-new] unhandled rejection:', reason);
+  process.exit(1);
+});

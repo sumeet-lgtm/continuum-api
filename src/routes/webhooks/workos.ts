@@ -40,7 +40,11 @@ export async function workosWebhookRoutes(fastify: FastifyInstance): Promise<voi
           return reply.status(401).send({ error: 'Missing workos-signature header' });
         }
         try {
-          getWorkOS().webhooks.constructEvent({
+          // constructEvent returns a Promise and rejects (not throws) on a
+          // bad signature — the missing await here used to let that
+          // rejection go unhandled and crash the entire process (not just
+          // this request) on every invalid signature.
+          await getWorkOS().webhooks.constructEvent({
             payload: rawBody,
             sigHeader,
             secret: config.WORKOS_WEBHOOK_SECRET,
