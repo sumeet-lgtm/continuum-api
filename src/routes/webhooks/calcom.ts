@@ -1,4 +1,4 @@
-import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyContextConfig } from 'fastify';
+import { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { config } from '../../config.js';
 import { sendEmail } from '../../lib/email.js';
@@ -29,14 +29,20 @@ function fmt(dt: string | undefined): string {
   }
 }
 
-const routeConfig: { config: FastifyContextConfig } = { config: { rawBody: true } };
-
 export async function calcomWebhookRoutes(fastify: FastifyInstance): Promise<void> {
+  // Same reasoning as billing/workos webhooks: HMAC must be checked against
+  // the exact raw bytes Cal.com signed, not a re-serialized JSON.stringify.
+  // Scoped to this plugin only; the handler parses JSON manually as a result.
+  fastify.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (_req, body, done) => done(null, body),
+  );
+
   fastify.post(
     '/webhooks/calcom',
-    routeConfig,
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const rawBody = (request as FastifyRequest & { rawBody?: string }).rawBody ?? JSON.stringify(request.body);
+      const rawBody = request.body as string;
       const sig = request.headers['x-cal-signature-256'] as string | undefined;
 
       if (!verifyCalcomSignature(rawBody, sig)) {
@@ -44,7 +50,12 @@ export async function calcomWebhookRoutes(fastify: FastifyInstance): Promise<voi
         return reply.status(401).send({ error: 'Invalid signature' });
       }
 
-      const payload = request.body as Record<string, unknown>;
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(rawBody) as Record<string, unknown>;
+      } catch {
+        return reply.status(400).send({ error: 'Invalid JSON' });
+      }
       const triggerEvent = (payload.triggerEvent as string) ?? '';
 
       // Only act on new bookings and cancellations

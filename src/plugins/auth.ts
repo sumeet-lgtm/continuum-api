@@ -45,11 +45,6 @@ declare module 'fastify' {
     apiKey: ApiKeyRecord;
     sessionUser?: OrgSessionUser;
   }
-  interface FastifyContextConfig {
-    // Declared on the WorkOS/Cal.com webhook routes, but nothing currently
-    // populates request.rawBody from it — see routes/webhooks/{workos,calcom}.ts.
-    rawBody?: boolean;
-  }
 }
 
 function extractRawKey(request: FastifyRequest): string | null {

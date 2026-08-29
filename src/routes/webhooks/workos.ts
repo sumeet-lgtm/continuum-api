@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply, FastifyContextConfig } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WorkOS } from '@workos-inc/node';
 import { config } from '../../config.js';
 import { prisma } from '../../lib/prisma.js';
@@ -17,14 +17,21 @@ function getWorkOS(): WorkOS {
   return _workos;
 }
 
-const routeConfig: { config: FastifyContextConfig } = { config: { rawBody: true } };
-
 export async function workosWebhookRoutes(fastify: FastifyInstance): Promise<void> {
+  // The signature must be verified against the EXACT raw bytes WorkOS signed —
+  // re-serializing the parsed body via JSON.stringify is not guaranteed to
+  // match byte-for-byte (key order, spacing, escaping). Scoped to this
+  // plugin only; the handler below parses JSON manually as a result.
+  fastify.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (_req, body, done) => done(null, body),
+  );
+
   fastify.post(
     '/webhooks/workos',
-    routeConfig,
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const rawBody = (request as FastifyRequest & { rawBody?: string }).rawBody ?? JSON.stringify(request.body);
+      const rawBody = request.body as string;
       const sigHeader = request.headers['workos-signature'] as string | undefined;
 
       // Verify signature when secret is configured
@@ -43,7 +50,12 @@ export async function workosWebhookRoutes(fastify: FastifyInstance): Promise<voi
         }
       }
 
-      const event = request.body as Record<string, unknown>;
+      let event: Record<string, unknown>;
+      try {
+        event = JSON.parse(rawBody) as Record<string, unknown>;
+      } catch {
+        return reply.status(400).send({ error: 'Invalid JSON' });
+      }
       const eventType = event.event as string;
       const data = event.data as Record<string, unknown>;
 
