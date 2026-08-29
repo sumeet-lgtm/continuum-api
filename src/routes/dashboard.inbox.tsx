@@ -31,6 +31,8 @@ const CATEGORY_COLORS: Record<string, string> = {
   not_interested: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
   out_of_office: "bg-muted text-muted-foreground",
   question: "bg-muted text-muted-foreground",
+  unsubscribe: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  bounced: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
 };
 
 function InboxPage() {
