@@ -334,11 +334,18 @@ async function updateKeys(
     if (r.count > 0) return r.count;
   }
   if (target.email) {
-    const r = await prisma.apiKey.updateMany({
-      where: { ownerId: target.email },
-      data:  { plan, monthlyLimit, monthlySendLimit },
-    });
-    return r.count;
+    // ownerId is a User.id (cuid), never an email — this was comparing a
+    // cuid column against an email string and could never match anything.
+    // Resolve the user by email first, same as the other two paths resolve
+    // by an actual identifier.
+    const user = await prisma.user.findUnique({ where: { email: target.email }, select: { id: true } });
+    if (user) {
+      const r = await prisma.apiKey.updateMany({
+        where: { ownerId: user.id },
+        data:  { plan, monthlyLimit, monthlySendLimit },
+      });
+      return r.count;
+    }
   }
   return 0;
 }
