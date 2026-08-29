@@ -392,6 +392,35 @@ function AccuracyCard({ accuracy }: { accuracy: AccuracyStats }) {
           {pctVal}%
         </div>
       </div>
+      <AccuracyBreakdown buckets={accuracy.buckets} />
+    </div>
+  );
+}
+
+// Shows bounce rate broken out by what the engine predicted — proof the
+// score itself tracks real-world outcomes, not just a valid/invalid coin
+// flip. A bucket without enough volume yet shows "—" instead of guessing.
+function AccuracyBreakdown({ buckets }: { buckets: AccuracyBucket[] }) {
+  const order: AccuracyBucket["verified_status"][] = ["valid", "risky", "unknown"];
+  const labels: Record<AccuracyBucket["verified_status"], string> = {
+    valid: "Predicted valid", risky: "Predicted risky", unknown: "Predicted unknown",
+  };
+  const sorted = order.map((s) => buckets.find((b) => b.verified_status === s)).filter((b): b is AccuracyBucket => !!b);
+  if (sorted.every((b) => !b.sample_size_ok)) return null;
+
+  return (
+    <div className="mt-4 pt-4 border-t border-border grid grid-cols-3 gap-3">
+      {sorted.map((b) => (
+        <div key={b.verified_status}>
+          <div className="text-[11px] text-muted-foreground">{labels[b.verified_status]}</div>
+          <div className="mt-0.5 text-sm font-medium tabular-nums">
+            {b.sample_size_ok ? `${b.bounce_rate}% bounced` : "—"}
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            {b.sample_size_ok ? `${b.total_sent.toLocaleString()} sent` : `${b.total_sent} sent so far`}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
