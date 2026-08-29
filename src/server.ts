@@ -68,6 +68,18 @@ async function buildApp(): Promise<FastifyInstance> {
     },
   });
 
+  // ─── CVE-2026-25223 mitigation (GHSA-jx2c-rxcm-jvmq) ───────────────────────
+  // A tab character in Content-Type (e.g. "application/json\ta") bypasses
+  // Fastify's body-validation schema selection while the body still parses
+  // as the original type — Fastify's own recommended workaround pending the
+  // 5.7.2+ upgrade this project hasn't taken yet.
+  app.addHook('onRequest', async (request, reply) => {
+    const contentType = request.headers['content-type'];
+    if (contentType?.includes('\t')) {
+      return reply.status(400).send({ error: 'Invalid Content-Type header' });
+    }
+  });
+
   // ─── Request/response logging ──────────────────────────────────────────────
   app.addHook('onRequest', async (request) => {
     logger.info(
