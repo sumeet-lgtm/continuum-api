@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createHash } from 'crypto';
 import {
   generateApiKey,
   hashApiKey,
@@ -46,17 +47,14 @@ describe('hashApiKey', () => {
     expect(hashApiKey('cnt_key_one')).not.toBe(hashApiKey('cnt_key_two'));
   });
 
-  it('incorporates the API_KEY_SALT (different results in different envs)', () => {
-    // The salt is "test-salt-that-is-at-least-16-chars" from global setup
-    // We can't test the salt directly without access to the env, but we can
-    // verify hashing is not a plain SHA-256 of the raw key by comparing
-    // a known SHA-256 of the raw key without salt.
+  it('is plain unsalted SHA-256 of the raw key (documented behavior, not a salted hash)', () => {
+    // Despite API_KEY_SALT's name, it is NOT mixed into key hashing — this
+    // pins that down so a future change to hashApiKey is deliberate, not
+    // accidental. Not a real weakness on its own: generated keys already
+    // carry 24 random bytes of entropy. See .env.example's API_KEY_SALT note.
     const raw = 'cnt_raw_key_value';
-    const hash = hashApiKey(raw);
-    // If there was no salt the hash would be SHA-256("cnt_raw_key_value")
-    // With our test salt it will be different
-    const naiveSha256 = '1a879da87a6a87c5cf7c18dcbf5e8cb1eed61ae3a48e21b50b9b35cb3d5f7e48';
-    expect(hash).not.toBe(naiveSha256);
+    const expected = createHash('sha256').update(raw).digest('hex');
+    expect(hashApiKey(raw)).toBe(expected);
   });
 });
 

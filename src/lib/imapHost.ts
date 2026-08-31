@@ -39,7 +39,7 @@ export async function testImapConnection(creds: {
   try {
     const { decryptValue } = await import('./crypto.js');
     const { config } = await import('../config.js');
-    const secret = (config as Record<string, unknown>)['MAILBOX_CREDS_SECRET'] as string ?? config.API_KEY_SALT;
+    const secret = config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
     const password = decryptValue(creds.passwordEnc, secret);
 
     const imap = await import('imap-simple');

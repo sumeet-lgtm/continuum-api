@@ -19,6 +19,22 @@ export interface MonitorRecheckPayload {
   source:    string;
 }
 
+export interface SendJobPayload {
+  sendMessageId: string;
+  to: string;
+  subject: string;
+  htmlBody?: string | undefined;
+  textBody?: string | undefined;
+  from: string;
+  replyTo?: string | string[] | undefined;
+  cc?: string[] | undefined;
+  bcc?: string[] | undefined;
+  attachments?: { filename: string; content: string; content_type: string }[] | undefined;
+  headers?: Record<string, string> | undefined;
+  apiKeyId: string;
+  domainId?: string | null | undefined;
+}
+
 // ─── API response shapes ──────────────────────────────────────────────────────
 
 export interface BulkJobResponse {

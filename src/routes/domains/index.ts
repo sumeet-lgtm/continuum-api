@@ -33,7 +33,7 @@ const createSchema = z.object({
 });
 
 function getDkimSecret(): string {
-  return (config as Record<string, unknown>)['DOMAIN_KEY_SECRET'] as string ?? config.API_KEY_SALT;
+  return config.DOMAIN_KEY_SECRET ?? config.API_KEY_SALT;
 }
 
 export async function domainRoutes(fastify: FastifyInstance): Promise<void> {

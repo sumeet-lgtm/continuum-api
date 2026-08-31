@@ -1,10 +1,12 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { sendViaSes, isSesConfigured } from '../../lib/ses.js';
+import { checkInboxPlacement, type PlacementResult } from '../../lib/inboxPlacement.js';
 import { config } from '../../config.js';
 
 const createSchema = z.object({
@@ -15,10 +17,13 @@ const createSchema = z.object({
   domain_id: z.string().optional(),
 });
 
-// Seed email addresses for inbox placement testing
+// Seed email addresses for inbox placement testing. An address without a
+// configured seed account falls back to a placeholder so the probe send
+// still has somewhere to go — checkInboxPlacement() reports that provider
+// as 'unavailable' rather than fabricating a placement for it.
 const SEED_ADDRESSES: Array<{ provider: string; email: string }> = [
-  { provider: 'gmail', email: process.env['SEED_GMAIL_USER'] ?? 'seed.continuum.gmail@gmail.com' },
-  { provider: 'outlook', email: process.env['SEED_OUTLOOK_USER'] ?? 'seed.continuum.outlook@outlook.com' },
+  { provider: 'gmail', email: config.SEED_GMAIL_USER ?? 'seed.continuum.gmail@gmail.com' },
+  { provider: 'outlook', email: config.SEED_OUTLOOK_USER ?? 'seed.continuum.outlook@outlook.com' },
 ];
 
 export async function inboxTestRoutes(fastify: FastifyInstance): Promise<void> {
@@ -38,16 +43,22 @@ export async function inboxTestRoutes(fastify: FastifyInstance): Promise<void> {
       select: { id: true, subject: true, fromEmail: true, status: true, createdAt: true },
     });
 
-    // Send to all seed addresses (non-blocking)
+    // Send to all seed addresses (non-blocking). Each probe carries a
+    // unique header so the placement check below can find this exact
+    // message rather than guessing from timing/subject alone.
     const fromAddress = `${from_name} <${from_email}>`;
+    const testMarker = randomUUID();
     const sendPromises = SEED_ADDRESSES.map(seed =>
-      sendViaSes({ to: seed.email, from: fromAddress, subject, htmlBody: html_body }).catch(() => null)
+      sendViaSes({
+        to: seed.email, from: fromAddress, subject, htmlBody: html_body,
+        headers: { 'X-Continuum-Test-Id': testMarker },
+      }).catch(() => null)
     );
 
     void Promise.all(sendPromises).then(async () => {
-      // After 90s, check placement (mocked unless IMAP is configured)
+      // Give the probe time to actually land before checking for it.
       await new Promise(r => setTimeout(r, 90000));
-      const results = await checkPlacement();
+      const results = await checkInboxPlacement(testMarker);
       await prisma.inboxTest.update({
         where: { id: test.id },
         data: { status: 'complete', results, score: calculateScore(results), checkedAt: new Date() },
@@ -79,26 +90,12 @@ export async function inboxTestRoutes(fastify: FastifyInstance): Promise<void> {
   });
 }
 
-async function checkPlacement(): Promise<Record<string, string>> {
-  // Default: return "checking" status
-  // When IMAP credentials are available, imapWorker will update this
-  const results: Record<string, string> = {};
-  for (const seed of SEED_ADDRESSES) {
-    results[seed.provider] = 'unknown';
-  }
-
-  // If seed Gmail credentials are configured, attempt IMAP check
-  const gmailUser = (config as Record<string, unknown>)['SEED_GMAIL_USER'] as string | undefined;
-  if (gmailUser) {
-    results['gmail'] = 'inbox'; // Placeholder — real IMAP check in imapWorker
-  }
-
-  return results;
-}
-
-function calculateScore(results: Record<string, string>): number {
-  const values = Object.values(results);
-  if (values.length === 0) return 50;
-  const inboxCount = values.filter(v => v === 'inbox').length;
-  return Math.round(inboxCount / values.length * 100);
+// Score only counts providers that were actually checked — a provider with
+// no seed account configured ('unavailable') or that errored out ('error')
+// wasn't tested at all and shouldn't move the score in either direction.
+export function calculateScore(results: Record<string, PlacementResult>): number | null {
+  const checked = Object.values(results).filter((v) => v === 'inbox' || v === 'spam' || v === 'not_found');
+  if (checked.length === 0) return null;
+  const inboxCount = checked.filter((v) => v === 'inbox').length;
+  return Math.round((inboxCount / checked.length) * 100);
 }

@@ -19,6 +19,34 @@ export class SesNotConfiguredError extends Error {
   }
 }
 
+// Raw MIME headers below are built by string interpolation, so any value
+// that reaches them must first be stripped of CR/LF — an embedded newline
+// would otherwise let a caller inject an extra header (e.g. a forged Bcc)
+// or break out into a new MIME part. Folding to a space rather than
+// stripping outright keeps legitimate multi-line input (a subject a client
+// wrapped) readable instead of silently concatenating words together.
+function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[\r\n]+/g, ' ').trim();
+}
+
+// A header NAME containing a newline (or anything outside a normal token)
+// is not plausible accidental input — reject the send instead of trying to
+// sanitize it, since silently dropping/rewriting it could mask what the
+// caller actually intended.
+const HEADER_NAME_RE = /^[A-Za-z0-9-]+$/;
+function assertValidHeaderName(name: string): void {
+  if (!HEADER_NAME_RE.test(name)) {
+    throw new Error(`Invalid header name: ${JSON.stringify(name)}`);
+  }
+}
+
+// Attachment filename/content-type are embedded inside a quoted MIME
+// attribute (name="...", filename="..."); besides CR/LF, a bare quote would
+// let a value escape the attribute and inject further attributes/headers.
+function sanitizeMimeAttribute(value: string): string {
+  return value.replace(/[\r\n"]/g, '').trim();
+}
+
 let client: SESv2Client | null = null;
 
 function getClient(): SESv2Client {
@@ -76,20 +104,21 @@ export async function sendViaSes(input: SendViaSesInput): Promise<SendViaSesResu
     const boundary = `=_continuum_${Date.now()}`;
     const lines: string[] = [];
 
-    lines.push(`From: ${input.from}`);
-    lines.push(`To: ${input.to}`);
-    if (input.cc?.length) lines.push(`Cc: ${input.cc.join(', ')}`);
-    if (replyToAddresses?.length) lines.push(`Reply-To: ${replyToAddresses.join(', ')}`);
-    lines.push(`Subject: ${input.subject}`);
+    lines.push(`From: ${sanitizeHeaderValue(input.from)}`);
+    lines.push(`To: ${sanitizeHeaderValue(input.to)}`);
+    if (input.cc?.length) lines.push(`Cc: ${input.cc.map(sanitizeHeaderValue).join(', ')}`);
+    if (replyToAddresses?.length) lines.push(`Reply-To: ${replyToAddresses.map(sanitizeHeaderValue).join(', ')}`);
+    lines.push(`Subject: ${sanitizeHeaderValue(input.subject)}`);
     lines.push(`MIME-Version: 1.0`);
 
     if (input.listUnsubscribeHeader) {
-      lines.push(`List-Unsubscribe: ${input.listUnsubscribeHeader}`);
+      lines.push(`List-Unsubscribe: ${sanitizeHeaderValue(input.listUnsubscribeHeader)}`);
       lines.push(`List-Unsubscribe-Post: List-Unsubscribe=One-Click`);
     }
     if (input.headers) {
       for (const [k, v] of Object.entries(input.headers)) {
-        lines.push(`${k}: ${v}`);
+        assertValidHeaderName(k);
+        lines.push(`${k}: ${sanitizeHeaderValue(v)}`);
       }
     }
 
@@ -120,9 +149,11 @@ export async function sendViaSes(input: SendViaSesInput): Promise<SendViaSesResu
 
     // Attachments
     for (const att of (input.attachments ?? [])) {
+      const safeContentType = sanitizeMimeAttribute(att.content_type);
+      const safeFilename = sanitizeMimeAttribute(att.filename);
       lines.push(`--${boundary}`);
-      lines.push(`Content-Type: ${att.content_type}; name="${att.filename}"`);
-      lines.push(`Content-Disposition: attachment; filename="${att.filename}"`);
+      lines.push(`Content-Type: ${safeContentType}; name="${safeFilename}"`);
+      lines.push(`Content-Disposition: attachment; filename="${safeFilename}"`);
       lines.push(`Content-Transfer-Encoding: base64`);
       lines.push('');
       lines.push(att.content);

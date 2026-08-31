@@ -9,7 +9,7 @@ import { config } from '../config.js';
 // anyone could forge a valid confirmation link for any contact/list pair,
 // which defeats the entire point of double opt-in as a consent record.
 function secret(): string {
-  return (config as Record<string, unknown>)['OPTIN_SECRET'] as string ?? config.API_KEY_SALT;
+  return config.OPTIN_SECRET ?? config.API_KEY_SALT;
 }
 
 export function generateOptinToken(contactId: string, listId: string): string {

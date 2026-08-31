@@ -15,6 +15,7 @@ import { generateUnsubToken, generateUnsubHtml } from '../../lib/unsubscribe.js'
 import { generateOpenToken, generateClickToken, injectTracking } from '../../lib/tracking.js';
 import { processTemplate } from '../../lib/spintax.js';
 import { sendQueue } from '../../lib/queue.js';
+import type { SendJobPayload } from '../../types/job.js';
 
 // ─── Input schema ─────────────────────────────────────────────────────────────
 
@@ -317,14 +318,19 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       }
 
       const existingJob = await sendQueue.getJob(id);
-      const existingData = (existingJob?.data ?? {}) as Record<string, unknown>;
+      // The job for a scheduled send always originated from this same route
+      // (the initial POST /v1/send), so its data is a real SendJobPayload —
+      // this cast just documents that BullMQ itself only knows it as
+      // untyped JSON.
+      const existingData = existingJob?.data;
+      if (!existingData) throw Errors.notFound('Scheduled message not found or already sent.');
 
       if (existingJob) await existingJob.remove();
 
       const newScheduledAt = body.scheduled_at ? new Date(body.scheduled_at) : msg.scheduledAt!;
       const newDelay = Math.max(0, newScheduledAt.getTime() - Date.now());
 
-      const updatedJobData = {
+      const updatedJobData: SendJobPayload = {
         ...existingData,
         ...(body.subject !== undefined ? { subject: body.subject } : {}),
         ...(body.html_body !== undefined ? { htmlBody: body.html_body } : {}),

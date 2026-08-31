@@ -120,6 +120,29 @@ services:
     networks:
       - continuum
 
+  # ─── Send Worker (scheduled sends) ────────────────────────────────────────
+  worker-send:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: continuum-worker-send
+    command: ['node', 'dist/workers/sendWorker.js']
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://continuum:continuum@postgres:5432/continuum
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: debug
+      API_KEY_SALT: ${API_KEY_SALT:-dev-salt-only-change-for-prod}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - continuum
+
   # ─── Postgres ──────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine

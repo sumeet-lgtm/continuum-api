@@ -5,7 +5,7 @@ const SEP = '.';
 
 export function generateUnsubToken(email: string, apiKeyId: string): string {
   const payload = Buffer.from(JSON.stringify({ e: email, k: apiKeyId, t: Date.now() })).toString('base64url');
-  const secret = (config as Record<string, unknown>)['UNSUBSCRIBE_SECRET'] as string ?? config.API_KEY_SALT;
+  const secret = config.UNSUBSCRIBE_SECRET ?? config.API_KEY_SALT;
   const sig = hmacSign(secret, payload);
   return `${payload}${SEP}${sig}`;
 }
@@ -14,7 +14,7 @@ export function verifyUnsubToken(token: string): { email: string; apiKeyId: stri
   const parts = token.split(SEP);
   if (parts.length !== 2) return null;
   const [payload, sig] = parts as [string, string];
-  const secret = (config as Record<string, unknown>)['UNSUBSCRIBE_SECRET'] as string ?? config.API_KEY_SALT;
+  const secret = config.UNSUBSCRIBE_SECRET ?? config.API_KEY_SALT;
   if (!hmacVerify(secret, payload, sig)) return null;
   try {
     const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { e: string; k: string; t: number };

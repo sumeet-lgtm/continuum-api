@@ -1,0 +1,99 @@
+name: CI
+
+# Nothing previously gated a commit before it reached production — deploys
+# went out via a manual `railway up` from a developer's machine with no
+# automated check in between. That's how a missing `await` on a webhook
+# handler (see commit c251d18) once crashed the entire API process on any
+# malformed request. This workflow is the gate that was missing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Typecheck, promise-safety, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      # Needed before typecheck/tests can see @prisma/client's generated types.
+      - run: npx prisma generate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Blocking: specifically the two rules that would have caught the
+      # missing-await bug in c251d18 before it ever reached production.
+      # Scoped narrowly (not the full `npm run lint`) because the full
+      # ruleset — mostly pre-existing Prettier formatting — currently has
+      # ~12,900 findings across the codebase; fixing that backlog is a
+      # separate, deliberate cleanup decision, not something to gate every
+      # future PR on by accident.
+      - name: Promise-safety lint (blocking)
+        run: npx eslint src --ext .ts --no-eslintrc -c .eslintrc.promise-check.json
+
+      - name: Full lint (informational — not yet a merge gate)
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Test suite
+        run: npm run test
+
+  migrations:
+    name: Tracked migration history applies cleanly to a fresh database
+    runs-on: ubuntu-latest
+    # This is the direct regression guard for the fix that made every
+    # timestamped migration folder in prisma/migrations/ actually tracked in
+    # git (they weren't — see .gitignore history). If this job goes red,
+    # the tracked migration history can no longer rebuild the schema from
+    # scratch.
+    #
+    # Known gap this job does NOT cover: several schema changes were
+    # applied to production as loose top-level .sql files via
+    # run-migration.mjs instead of as real Prisma migrations (see that
+    # script and the .sql files directly under prisma/migrations/ that
+    # aren't inside a timestamped folder). `prisma migrate deploy` doesn't
+    # apply those, so this job proves the *tracked* history is consistent,
+    # not that it fully reproduces the current production schema. Folding
+    # those into real migrations needs a coordinated production step
+    # (`prisma migrate resolve --applied ...`) so the next real deploy
+    # doesn't try to re-run schema changes that already exist — do that
+    # deliberately, not as a side effect of this workflow.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: continuum
+          POSTGRES_PASSWORD: continuum
+          POSTGRES_DB: continuum
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U continuum"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Apply the full migration history to a fresh database
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://continuum:continuum@localhost:5432/continuum

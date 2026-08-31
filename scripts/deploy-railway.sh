@@ -8,11 +8,17 @@
 #   - .env file created by scripts/setup.sh
 #   - railway project initialised  (railway init)
 #
-# Creates 4 Railway services from the same repo:
+# Creates 5 Railway services from the same repo:
 #   api            - Fastify API server
 #   worker-bulk    - CSV bulk verification
 #   worker-monitor - Email monitoring cron
 #   worker-webhook - Webhook delivery
+#   worker-send    - Scheduled send delivery
+#
+# Note: this script is the source of truth for what's deployed. If a service
+# is running in Railway that isn't listed here (check `railway status` /
+# the Railway dashboard), either add it here or tear it down — don't let
+# the two drift apart again.
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -65,6 +71,14 @@ ENV_VARS=(
   "WEBHOOK_TIMEOUT_MS=10000"
   "LOG_LEVEL=info"
   "API_KEY_SALT=${API_KEY_SALT}"
+  # Required in production — config.ts refuses to start without every one
+  # of these set to a real value (see .env.example for what each guards).
+  "DOMAIN_KEY_SECRET=${DOMAIN_KEY_SECRET}"
+  "UNSUBSCRIBE_SECRET=${UNSUBSCRIBE_SECRET}"
+  "TRACKING_SECRET=${TRACKING_SECRET}"
+  "MAILBOX_CREDS_SECRET=${MAILBOX_CREDS_SECRET}"
+  "OPTIN_SECRET=${OPTIN_SECRET}"
+  "SESSION_SECRET=${SESSION_SECRET}"
 )
 
 for VAR in "${ENV_VARS[@]}"; do
@@ -103,6 +117,12 @@ step "Deploying webhook worker"
 railway service create worker-webhook 2>/dev/null || true
 railway up --service worker-webhook --detach 2>&1 | tail -3
 ok "Webhook worker deployed"
+
+step "Deploying send worker"
+railway service create worker-send 2>/dev/null || true
+railway variables set --service worker-send "START_CMD=node dist/workers/sendWorker.js" --silent 2>/dev/null || true
+railway up --service worker-send --detach 2>&1 | tail -3
+ok "Send worker deployed"
 
 # ─── Get public URL ───────────────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@ import { config } from '../config.js';
 const SEP = '.';
 
 function secret(): string {
-  return (config as Record<string, unknown>)['TRACKING_SECRET'] as string ?? config.API_KEY_SALT;
+  return config.TRACKING_SECRET ?? config.API_KEY_SALT;
 }
 
 export function generateOpenToken(sendMessageId: string): string {

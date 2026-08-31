@@ -78,7 +78,7 @@ async function pollMailboxes(): Promise<void> {
       }
 
       const { decryptValue } = await import('../lib/crypto.js');
-      const mailboxSecret = (config as Record<string, unknown>)['MAILBOX_CREDS_SECRET'] as string ?? config.API_KEY_SALT;
+      const mailboxSecret = config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
       const password = decryptValue(mailbox.passwordEnc!, mailboxSecret);
 
       const connection = await imap.connect({

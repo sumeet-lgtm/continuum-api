@@ -8,6 +8,7 @@ import { encryptValue } from '../../lib/crypto.js';
 import { testSmtpConnection } from '../../lib/smtp.js';
 import { testImapConnection } from '../../lib/imapHost.js';
 import { config } from '../../config.js';
+import { getMailboxLimit } from '../../plugins/usageMeter.js';
 
 const createSchema = z.object({
   type: z.enum(['smtp', 'gmail', 'outlook']),
@@ -27,7 +28,7 @@ const warmupSchema = z.object({
 });
 
 function getMailboxSecret(): string {
-  return (config as Record<string, unknown>)['MAILBOX_CREDS_SECRET'] as string ?? config.API_KEY_SALT;
+  return config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
 }
 
 export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
@@ -38,6 +39,16 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
 
     const apiKeyId = request.apiKey.id;
     const { type, host, port, username, password, daily_limit, send_delay_min_ms, send_delay_max_ms } = parsed.data;
+
+    // Enforce per-plan mailbox cap — advertised on the pricing page but
+    // previously never checked here, unlike every other plan-gated resource.
+    const mailboxLimit = getMailboxLimit(request.apiKey.plan);
+    const existingCount = await prisma.mailbox.count({ where: { apiKeyId } });
+    if (existingCount >= mailboxLimit) {
+      throw Errors.validationFailed({
+        limit: `Your ${request.apiKey.plan ?? 'free'} plan allows ${mailboxLimit} mailboxes. Delete some or upgrade to add more.`,
+      });
+    }
 
     const passwordEnc = password ? encryptValue(password, getMailboxSecret()) : null;
 

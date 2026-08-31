@@ -13,8 +13,6 @@ dist-scripts/
 .env.local
 .env.*.local
 
-# Prisma
-prisma/migrations/*/migration.sql
 
 # Logs
 logs/

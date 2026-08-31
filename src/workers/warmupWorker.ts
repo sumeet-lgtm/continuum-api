@@ -48,7 +48,7 @@ function randomItem<T>(arr: T[]): T {
 }
 
 function getMailboxSecret(): string {
-  return (config as Record<string, unknown>)['MAILBOX_CREDS_SECRET'] as string ?? config.API_KEY_SALT;
+  return config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
 }
 
 async function autoOpenAndReply(

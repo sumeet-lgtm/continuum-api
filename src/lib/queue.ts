@@ -1,6 +1,6 @@
 import { Queue, type ConnectionOptions } from 'bullmq';
 import { config } from '../config.js';
-import type { BulkJobPayload, MonitorCheckPayload, MonitorRecheckPayload } from '../types/job.js';
+import type { BulkJobPayload, MonitorCheckPayload, MonitorRecheckPayload, SendJobPayload } from '../types/job.js';
 import type { WebhookDeliveryPayload } from '../types/webhook.js';
 
 // Parse the Redis URL to extract connection details for BullMQ.
@@ -102,7 +102,7 @@ export const imapQueue = new Queue(QUEUE_IMAP, {
   },
 });
 
-export const sendQueue = new Queue(QUEUE_SEND, {
+export const sendQueue = new Queue<SendJobPayload>(QUEUE_SEND, {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: 3,
