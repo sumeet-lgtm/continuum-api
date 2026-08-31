@@ -2,6 +2,7 @@ import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from
 import fp from 'fastify-plugin';
 import { ZodError } from 'zod';
 import { logger } from '../lib/logger.js';
+import { captureException } from '../lib/sentry.js';
 
 export interface ApiError {
   error: string;
@@ -61,6 +62,7 @@ async function errorHandlerPlugin(fastify: FastifyInstance): Promise<void> {
       if (error instanceof AppError) {
         if (error.statusCode >= 500) {
           logger.error({ err: error, requestId }, error.message);
+          captureException(error, { requestId, code: error.code, statusCode: error.statusCode });
         } else {
           logger.info({ code: error.code, requestId }, error.message);
         }
@@ -115,6 +117,7 @@ async function errorHandlerPlugin(fastify: FastifyInstance): Promise<void> {
 
       // Unexpected / unhandled errors
       logger.error({ err: error, requestId }, 'Unhandled error');
+      captureException(error, { requestId });
 
       const body: ApiError = {
         error: 'An unexpected error occurred',

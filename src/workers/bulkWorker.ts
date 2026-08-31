@@ -41,8 +41,14 @@ import { loadDisposableList } from '../engine/disposable.js';
 import { parseCsv } from '../routes/bulk-jobs/index.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { initSentry, installCrashReporting } from '../lib/sentry.js';
 import type { BulkJobPayload } from '../types/job.js';
 import type { VerificationResult } from '../types/verification.js';
+
+if (process.env['NODE_ENV'] !== 'test') {
+  initSentry('worker-bulk');
+  installCrashReporting('worker-bulk');
+}
 
 // DeBounce rate-limits concurrent traffic (429s above ~4-5 in flight). Keep
 // concurrency low so we rarely trip the limit; callMillionVerifier retries the

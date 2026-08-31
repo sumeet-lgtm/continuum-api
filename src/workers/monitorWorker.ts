@@ -35,8 +35,14 @@ import { loadDisposableList } from '../engine/disposable.js';
 import { config } from '../config.js';
 import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
 import { logger } from '../lib/logger.js';
+import { initSentry, installCrashReporting } from '../lib/sentry.js';
 import type { MonitorCheckPayload } from '../types/job.js';
 import type { VerificationStatus } from '../types/verification.js';
+
+if (process.env['NODE_ENV'] !== 'test') {
+  initSentry('worker-monitor');
+  installCrashReporting('worker-monitor');
+}
 
 export const BATCH_SIZE             = 50;
 const MONITOR_CONCURRENCY    = 5;

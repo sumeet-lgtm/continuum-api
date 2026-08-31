@@ -37,7 +37,13 @@ import { prisma } from '../lib/prisma.js';
 import { hmacSign as signWebhookPayload } from '../lib/crypto.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { initSentry, installCrashReporting } from '../lib/sentry.js';
 import type { WebhookDeliveryPayload } from '../types/webhook.js';
+
+if (process.env['NODE_ENV'] !== 'test') {
+  initSentry('worker-webhook');
+  installCrashReporting('worker-webhook');
+}
 
 // ─── Retry configuration ──────────────────────────────────────────────────────
 
