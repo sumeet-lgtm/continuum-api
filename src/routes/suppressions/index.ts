@@ -12,6 +12,14 @@ const addSchema = z.object({
 
 export async function suppressionRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /v1/suppressions
+  //
+  // Previously had no apiKeyId filter at all — every customer got the
+  // entire platform-wide suppression list, including which OTHER
+  // customer's apiKeyId caused each entry. Scoped to entries this key
+  // caused plus unattributed ones (a bounce/complaint whose originating
+  // send couldn't be resolved to a key) — never another named customer's
+  // entries. apiKeyId is no longer returned at all; a customer's own key
+  // is redundant to echo back, and it's the exact field that was leaking.
   fastify.get(
     '/suppressions',
     { preHandler: [requireAuth, requireRateLimit] },
@@ -20,7 +28,10 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const page = Math.max(1, parseInt(q.page ?? '1', 10));
       const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
-      const where = q.reason ? { reason: q.reason as never } : {};
+      const where = {
+        ...(q.reason ? { reason: q.reason as never } : {}),
+        OR: [{ apiKeyId: request.apiKey.id }, { apiKeyId: null }],
+      };
 
       const [items, total] = await Promise.all([
         prisma.suppression.findMany({
@@ -28,7 +39,7 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
           orderBy: { createdAt: 'desc' },
           skip: (page - 1) * limit,
           take: limit,
-          select: { id: true, email: true, reason: true, createdAt: true, apiKeyId: true },
+          select: { id: true, email: true, reason: true, createdAt: true },
         }),
         prisma.suppression.count({ where }),
       ]);
@@ -38,6 +49,16 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
   );
 
   // POST /v1/suppressions
+  //
+  // Was a global upsert keyed only on email — a second customer adding an
+  // address someone else had already suppressed silently reassigned that
+  // record's apiKeyId to themselves, hijacking ownership of another
+  // customer's suppression entry. Now: if it's already suppressed by
+  // anyone, this is a no-op that returns the existing (unowned-looking)
+  // record rather than taking it over; only a genuinely new address
+  // creates a row owned by this key. Enforcement (blocking a send) stays
+  // global regardless of who added it — a real bounce/complaint/opt-out
+  // should hold platform-wide, not just for the customer who caused it.
   fastify.post(
     '/suppressions',
     { preHandler: [requireAuth, requireRateLimit] },
@@ -48,10 +69,15 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const { email } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
-      const record = await prisma.suppression.upsert({
-        where: { email },
-        create: { email, reason: 'manual', apiKeyId },
-        update: { reason: 'manual', apiKeyId },
+      const existing = await prisma.suppression.findUnique({ where: { email } });
+      if (existing) {
+        return reply.status(200).send({
+          id: existing.id, email: existing.email, reason: existing.reason, createdAt: existing.createdAt,
+        });
+      }
+
+      const record = await prisma.suppression.create({
+        data: { email, reason: 'manual', apiKeyId },
         select: { id: true, email: true, reason: true, createdAt: true },
       });
 
@@ -60,17 +86,25 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
   );
 
   // DELETE /v1/suppressions/:email
+  //
+  // Was a global delete keyed only on email — any authenticated customer
+  // could remove ANY other customer's suppression entry, including
+  // reversing a real unsubscribe/complaint and clearing the way to email
+  // an address that had explicitly opted out. Now only removable by the
+  // key that owns it; both "doesn't exist" and "exists but belongs to
+  // someone else" return the same 404 rather than confirming which.
   fastify.delete(
     '/suppressions/:email',
     { preHandler: [requireAuth, requireRateLimit] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { email } = request.params as { email: string };
       const decoded = decodeURIComponent(email).trim().toLowerCase();
+      const apiKeyId = request.apiKey.id;
 
-      const existing = await prisma.suppression.findUnique({ where: { email: decoded } });
+      const existing = await prisma.suppression.findFirst({ where: { email: decoded, apiKeyId } });
       if (!existing) throw Errors.notFound('Suppression entry not found.');
 
-      await prisma.suppression.delete({ where: { email: decoded } });
+      await prisma.suppression.delete({ where: { id: existing.id } });
       return reply.status(200).send({ deleted: true, email: decoded });
     },
   );
