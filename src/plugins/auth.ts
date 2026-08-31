@@ -16,6 +16,7 @@ interface ApiKeyRecord {
   label: string | null;
   ownerId: string | null;
   userId: string | null;
+  orgId: string | null;
   keyRaw: string | null;
   rateLimit: number;
   monthlyLimit: number;

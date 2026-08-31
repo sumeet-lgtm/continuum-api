@@ -224,4 +224,52 @@ export async function orgRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send({ exportId: null, state: 'unavailable', url: null, message: 'Audit logs not yet configured for this organization.' });
     }
   });
+
+  // ── GET /org/api-keys ──────────────────────────────────────────────────────
+  // Previously nothing let an org admin see, let alone act on, the actual
+  // product resources their team's API keys own — org roles only reached
+  // as far as the WorkOS-managed dashboard shell (invites, role changes).
+  // This and the endpoint below are the first real teeth on that: an org
+  // admin can now see every key tagged with their org and revoke one,
+  // the same way they could already remove a member's org access.
+  fastify.get('/org/api-keys', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { orgId } = request.sessionUser!;
+    if (!orgId) throw Errors.forbidden('Not part of an organization');
+
+    const keys = await prisma.apiKey.findMany({
+      where: { orgId },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true, keyPrefix: true, name: true, label: true, permission: true,
+        plan: true, isActive: true, revokedAt: true, createdAt: true, lastUsedAt: true,
+      },
+    });
+
+    return reply.send({ data: keys, total: keys.length });
+  });
+
+  // ── DELETE /org/api-keys/:id ───────────────────────────────────────────────
+  fastify.delete<{ Params: { id: string } }>('/org/api-keys/:id', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    const { orgId, userId, email: actorEmail } = request.sessionUser!;
+    if (!orgId) throw Errors.forbidden('Not part of an organization');
+
+    const { id } = request.params;
+
+    // Scoped to this org specifically — both "doesn't exist" and "exists
+    // but belongs to a different org" return the same 404, rather than
+    // confirming which, the same reasoning as the suppressions delete fix.
+    const target = await prisma.apiKey.findFirst({ where: { id, orgId }, select: { id: true, isActive: true } });
+    if (!target) throw Errors.notFound('API key not found in this organization.');
+
+    await prisma.apiKey.update({
+      where: { id },
+      data: { isActive: false, revokedAt: new Date() },
+    });
+
+    void logAudit(orgId, 'api_key.revoked_by_org_admin', { id: userId, email: actorEmail, ip: request.ip }, [
+      { type: 'api_key', id },
+    ], id);
+
+    return reply.send({ id, revoked: true });
+  });
 }

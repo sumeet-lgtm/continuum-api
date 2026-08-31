@@ -6,6 +6,7 @@ import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { hashApiKey } from '../../lib/crypto.js';
 import { Errors } from '../../plugins/errorHandler.js';
+import { logAudit } from '../../lib/audit.js';
 
 const createSchema = z.object({
   name: z.string().min(1).max(100),
@@ -69,6 +70,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
           restrictedDomainId: domain_id ?? null,
           ownerId: effectiveOwnerId,
           userId: parentKey.userId,
+          orgId: parentKey.orgId,
           plan: parentKey.plan,
           rateLimit: parentKey.rateLimit,
           monthlyLimit: parentKey.monthlyLimit,
@@ -79,6 +81,13 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
           restrictedDomainId: true, plan: true, createdAt: true,
         },
       });
+
+      void logAudit(
+        null, 'api_key.created',
+        { id: parentKey.id, email: parentKey.label ?? parentKey.name ?? parentKey.keyPrefix, ip: request.ip },
+        [{ type: 'api_key', id: newKey.id, name: newKey.name ?? undefined }],
+        parentKey.id,
+      );
 
       // Return raw key once only
       return reply.status(201).send({ ...newKey, key: rawKey });
@@ -116,6 +125,13 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
         where: { id },
         data: { isActive: false, revokedAt: new Date() },
       });
+
+      void logAudit(
+        null, 'api_key.revoked',
+        { id: parentKey.id, email: parentKey.label ?? parentKey.name ?? parentKey.keyPrefix, ip: request.ip },
+        [{ type: 'api_key', id }],
+        parentKey.id,
+      );
 
       return reply.status(200).send({ revoked: true, id });
     },

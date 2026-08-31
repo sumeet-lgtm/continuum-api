@@ -58,6 +58,31 @@ model OrgSettings {
   @@map("org_settings")
 }
 
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+// logAudit() previously no-op'd entirely whenever orgId was null or
+// WORKOS_API_KEY was unset — meaning any customer not on the org/SSO flow
+// (most customers) got zero audit trail, and even org customers had no
+// audit record visible except inside WorkOS's own dashboard. This table
+// is written for every audited action regardless of org/WorkOS config;
+// the WorkOS mirror (when applicable) is additive, not a replacement.
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  orgId      String?  @map("org_id")
+  apiKeyId   String?  @map("api_key_id")
+  action     String
+  actorId    String   @map("actor_id")
+  actorEmail String   @map("actor_email")
+  actorIp    String?  @map("actor_ip")
+  targets    Json
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([orgId])
+  @@index([apiKeyId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
 // ─── API Keys ────────────────────────────────────────────────────────────────
 
 model ApiKey {
@@ -67,6 +92,13 @@ model ApiKey {
   label              String?
   ownerId            String? // external user/org ID from the calling system
   userId             String? // Supabase auth user ID
+  // WorkOS org this key belongs to, when the owning user signed in via an
+  // org SSO connection. Previously nothing tied an API key to an org at
+  // all — org admin/member roles governed the WorkOS-managed dashboard
+  // shell (invites, role changes) but had no bearing on the actual
+  // product resources (verifications, sends, contacts, ...) every one of
+  // those keys owns. See routes/org/index.ts's api-keys endpoints.
+  orgId              String?   @map("org_id")
   keyRaw             String? // full raw key stored for dashboard use
   rateLimit          Int       @default(1000) // requests per minute ceiling
   monthlyLimit       Int       @default(1000) // max verifications per month
@@ -104,6 +136,7 @@ model ApiKey {
   inboxTests     InboxTest[]
   automations    Automation[]
 
+  @@index([orgId])
   @@map("api_keys")
 }
 
