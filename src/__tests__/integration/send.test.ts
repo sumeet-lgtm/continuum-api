@@ -40,7 +40,7 @@ vi.mock('../../lib/prisma.js', () => ({
 vi.mock('../../lib/redis.js', () => ({
   redis:    { incr: vi.fn().mockResolvedValue(1), expire: vi.fn(), ttl: vi.fn().mockResolvedValue(55), ping: vi.fn().mockResolvedValue('PONG') },
   pingRedis: vi.fn().mockResolvedValue(true),
-  redisKey:  { rateLimit: (id: string) => `rl:${id}` },
+  redisKey:  { rateLimit: (id: string) => `rl:${id}`, ipRateLimit: (scope: string, ip: string) => `rl:ip:${scope}:${ip}` },
   getRedis:  vi.fn(),
 }));
 
@@ -105,6 +105,7 @@ function makeKey(overrides: Record<string, unknown> = {}) {
     label: 'test',
     ownerId: null,
     userId: null,
+    orgId: null,
     keyRaw: null,
     rateLimit: 1000,
     monthlyLimit: 1000,

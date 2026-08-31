@@ -20,7 +20,7 @@ vi.mock('../../lib/redis.js', () => ({
     ping: vi.fn().mockResolvedValue('PONG'),
   },
   pingRedis: vi.fn().mockResolvedValue(true),
-  redisKey:  { rateLimit: vi.fn(), monitorLock: (id: string) => `lock:monitor:${id}` },
+  redisKey:  { rateLimit: vi.fn(), ipRateLimit: vi.fn(), monitorLock: (id: string) => `lock:monitor:${id}` },
   getRedis:  vi.fn(),
 }));
 

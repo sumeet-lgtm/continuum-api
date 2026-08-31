@@ -6,6 +6,7 @@ import { config } from '../../config.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { sendEmail, welcomeEmail, loginAlertEmail } from '../../lib/email.js';
 import { hashApiKey } from '../../lib/crypto.js';
+import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 
 let _workos: WorkOS | null = null;
 
@@ -52,19 +53,24 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.redirect(authorizationURL, 302);
   }
 
-  fastify.get('/auth/login/google', (req, rep) => initiateLogin('GoogleOAuth', req, rep));
-  fastify.get('/auth/login/microsoft', (req, rep) => initiateLogin('MicrosoftOAuth', req, rep));
-  fastify.get('/auth/login/github', (req, rep) => initiateLogin('GitHubOAuth', req, rep));
-  fastify.get('/auth/login/sso', (req, rep) => initiateLogin('authkit', req, rep));
+  // No API key exists yet at this point in the flow, so these are IP-scoped
+  // rather than key-scoped — previously unlimited.
+  const loginRateLimit = { preHandler: [requireIpRateLimit('auth-login', 30)] };
+  fastify.get('/auth/login/google', loginRateLimit, (req, rep) => initiateLogin('GoogleOAuth', req, rep));
+  fastify.get('/auth/login/microsoft', loginRateLimit, (req, rep) => initiateLogin('MicrosoftOAuth', req, rep));
+  fastify.get('/auth/login/github', loginRateLimit, (req, rep) => initiateLogin('GitHubOAuth', req, rep));
+  fastify.get('/auth/login/sso', loginRateLimit, (req, rep) => initiateLogin('authkit', req, rep));
 
   // Legacy alias kept so existing bookmarks / older clients still work
-  fastify.get('/auth/sso/login', (req, rep) => initiateLogin('authkit', req, rep));
+  fastify.get('/auth/sso/login', loginRateLimit, (req, rep) => initiateLogin('authkit', req, rep));
 
   // ─── GET /auth/sso/callback ─────────────────────────────────────────────────
   // WorkOS redirects here after authentication. Exchanges code for a user
   // profile, upserts the user row, creates an API key if they don't have one,
   // and issues a signed session JWT before redirecting to the dashboard.
-  fastify.get('/auth/sso/callback', async (request: FastifyRequest, reply: FastifyReply) => {
+  // This is the expensive step (a real WorkOS API round-trip plus DB writes),
+  // so it gets its own IP-scoped budget rather than sharing the initiators'.
+  fastify.get('/auth/sso/callback', { preHandler: [requireIpRateLimit('auth-callback', 30)] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { code, state } = request.query as Record<string, string>;
 
     let redirectTarget = config.DASHBOARD_URL;
@@ -158,7 +164,16 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
             label: `${workosUser.firstName ?? workosUser.email.split('@')[0]}'s key`,
             ownerId: user.id,
             plan: 'free',
+            orgId: workosOrgId ?? null,
           },
+        });
+      } else if (workosOrgId && !apiKey.orgId) {
+        // Key predates the user joining this org (or predates this field
+        // existing at all) — backfill it so org-admin key management
+        // covers keys that were already active, not just newly created ones.
+        apiKey = await prisma.apiKey.update({
+          where: { id: apiKey.id },
+          data: { orgId: workosOrgId },
         });
       }
 

@@ -9,6 +9,7 @@ import type {
   EmailDeliveredPayload, EmailBouncedPayload, EmailComplainedPayload,
 } from '../../types/webhook.js';
 import type { MonitorRecheckPayload } from '../../types/job.js';
+import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 
 // ─── SES event shapes (only the fields read) ─────────────────────────────────
 
@@ -37,6 +38,12 @@ export async function sendEventsRoute(fastify: FastifyInstance): Promise<void> {
 
   fastify.post(
     '/send/events',
+    // IP-scoped, not key-scoped — there's no API key on an SNS callback.
+    // Each request (valid or not) makes verifySnsMessage fetch and cache a
+    // signing cert over HTTPS before the signature check runs, so this
+    // bounds how many of those expensive lookups one source can trigger
+    // per minute, independent of whether the signature ultimately passes.
+    { preHandler: [requireIpRateLimit('sns-events', 600)] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       let msg: SnsMessage;
       try {

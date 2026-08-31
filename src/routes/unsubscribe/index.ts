@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { requireRateLimit } from '../../plugins/rateLimit.js';
+import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { verifyUnsubToken } from '../../lib/unsubscribe.js';
 
@@ -35,10 +35,12 @@ const INVALID_HTML = `<!DOCTYPE html>
 </head><body><div class="card"><h1>Invalid or expired link</h1><p>This unsubscribe link is invalid or has expired.</p></div></body></html>`;
 
 export async function unsubscribeRoutes(fastify: FastifyInstance): Promise<void> {
-  // GET /v1/unsubscribe?token=... — browser one-click unsubscribe
+  // GET /v1/unsubscribe?token=... — browser one-click unsubscribe. No API
+  // key on this request (it's a public email link) — requireRateLimit is a
+  // no-op without one, so this is IP-scoped instead.
   fastify.get(
     '/unsubscribe',
-    { preHandler: [requireRateLimit] },
+    { preHandler: [requireIpRateLimit('unsubscribe', 60)] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { token } = request.query as { token?: string };
 
@@ -75,7 +77,7 @@ export async function unsubscribeRoutes(fastify: FastifyInstance): Promise<void>
   // POST /v1/unsubscribe — RFC 8058 machine-readable one-click
   fastify.post(
     '/unsubscribe',
-    { preHandler: [requireRateLimit] },
+    { preHandler: [requireIpRateLimit('unsubscribe', 60)] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const body = request.body as Record<string, string> | undefined;
       const token = (body?.['token'] as string | undefined) ?? (request.query as Record<string, string>)['token'];

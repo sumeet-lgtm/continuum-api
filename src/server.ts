@@ -4,6 +4,11 @@ import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import { config, isDev, isTest } from './config.js';
 import { logger } from './lib/logger.js';
+import { redactUrl } from './lib/redact.js';
+import { initSentry, installCrashReporting } from './lib/sentry.js';
+
+initSentry('api');
+installCrashReporting('api');
 import { disconnectPrisma } from './lib/prisma.js';
 import { closeQueues } from './lib/queue.js';
 import { authPlugin } from './plugins/auth.js';
@@ -25,6 +30,7 @@ import { suppressionRoutes } from './routes/suppressions/index.js';
 import { messagesRoutes } from './routes/messages/index.js';
 import { usageRoutes } from './routes/usage/index.js';
 import { apiKeyRoutes } from './routes/api-keys/index.js';
+import { accountRoutes } from './routes/account/index.js';
 import { domainRoutes } from './routes/domains/index.js';
 import { templateRoutes } from './routes/templates/index.js';
 import { unsubscribeRoutes } from './routes/unsubscribe/index.js';
@@ -86,7 +92,7 @@ async function buildApp(): Promise<FastifyInstance> {
       {
         requestId: request.id,
         method: request.method,
-        url: request.url,
+        url: redactUrl(request.url),
         ip: request.ip,
       },
       'Incoming request',
@@ -98,7 +104,7 @@ async function buildApp(): Promise<FastifyInstance> {
       {
         requestId: request.id,
         method: request.method,
-        url: request.url,
+        url: redactUrl(request.url),
         statusCode: reply.statusCode,
         responseTime: reply.elapsedTime,
       },
@@ -157,6 +163,7 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(messagesRoutes, { prefix: '/v1' });
   await app.register(usageRoutes, { prefix: '/v1' });
   await app.register(apiKeyRoutes, { prefix: '/v1' });
+  await app.register(accountRoutes, { prefix: '/v1' });
   await app.register(domainRoutes, { prefix: '/v1' });
   await app.register(templateRoutes, { prefix: '/v1' });
   await app.register(analyticsRoutes, { prefix: '/v1' });
@@ -259,16 +266,9 @@ async function start(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
-  // Catch unhandled promise rejections — log and exit rather than silently corrupting state
-  process.on('unhandledRejection', (reason) => {
-    logger.fatal({ reason }, 'Unhandled promise rejection — exiting');
-    process.exit(1);
-  });
-
-  process.on('uncaughtException', (err) => {
-    logger.fatal({ err }, 'Uncaught exception — exiting');
-    process.exit(1);
-  });
+  // unhandledRejection/uncaughtException are handled by
+  // installCrashReporting('api') above, at module load — installed once
+  // before start() even runs, so a crash during startup is covered too.
 }
 
 // Export for testing

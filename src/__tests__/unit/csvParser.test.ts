@@ -6,7 +6,7 @@ vi.mock('../../lib/prisma.js', () => ({
   disconnectPrisma: vi.fn(),
 }));
 // Mock other libs pulled in transitively by the route file
-vi.mock('../../lib/redis.js',    () => ({ redis: {}, pingRedis: vi.fn(), redisKey: {}, getRedis: vi.fn() }));
+vi.mock('../../lib/redis.js',    () => ({ redis: {}, pingRedis: vi.fn(), redisKey: { rateLimit: vi.fn(), ipRateLimit: vi.fn() }, getRedis: vi.fn() }));
 vi.mock('../../lib/queue.js',    () => ({ bulkQueue: {}, webhookQueue: {}, monitorQueue: {}, closeQueues: vi.fn(), redisConnection: {} }));
 vi.mock('../../lib/supabase.js', () => ({ uploadToStorage: vi.fn(), downloadFromStorage: vi.fn(), createSignedUrl: vi.fn(), deleteFromStorage: vi.fn() }));
 vi.mock('../../engine/disposable.js', () => ({ loadDisposableList: vi.fn(), isDisposableDomain: vi.fn(), getBlocklistStats: vi.fn() }));

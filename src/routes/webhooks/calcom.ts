@@ -1,20 +1,41 @@
 import { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import { createHmac, timingSafeEqual } from 'crypto';
-import { config } from '../../config.js';
+import { config, isProd } from '../../config.js';
 import { sendEmail } from '../../lib/email.js';
+import { logger } from '../../lib/logger.js';
 
 // Cal.com sends a HMAC-SHA256 signature in the X-Cal-Signature-256 header.
 // Set CALCOM_WEBHOOK_SECRET in Railway to the same secret you paste in Cal.com.
-function verifyCalcomSignature(body: string, header: string | undefined): boolean {
+//
+// Distinct from "signature didn't match" — an unset secret in production
+// used to mean "skip verification entirely," accepting any unauthenticated
+// POST. Mirrors the Dodo billing webhook's fail-closed behavior: unset in
+// dev/staging is fine (nothing to compare against yet), unset in prod is a
+// misconfiguration that must reject the request, not silently trust it.
+type SignatureCheck = 'valid' | 'invalid' | 'not_configured_in_prod';
+
+function verifyCalcomSignature(body: string, header: string | undefined): SignatureCheck {
   const secret = config.CALCOM_WEBHOOK_SECRET;
-  if (!secret) return true; // secret not configured — skip verification (dev/staging)
-  if (!header) return false;
+  if (!secret) return isProd ? 'not_configured_in_prod' : 'valid';
+  if (!header) return 'invalid';
   const expected = createHmac('sha256', secret).update(body).digest('hex');
   try {
-    return timingSafeEqual(Buffer.from(header, 'hex'), Buffer.from(expected, 'hex'));
+    return timingSafeEqual(Buffer.from(header, 'hex'), Buffer.from(expected, 'hex')) ? 'valid' : 'invalid';
   } catch {
-    return false;
+    return 'invalid';
   }
+}
+
+// Escapes a value before it's interpolated into the HTML email below — these
+// fields (name, company, notes, ...) come straight from a public booking
+// form's free-text inputs, so an attacker fully controls their content.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function fmt(dt: string | undefined): string {
@@ -45,7 +66,12 @@ export async function calcomWebhookRoutes(fastify: FastifyInstance): Promise<voi
       const rawBody = request.body as string;
       const sig = request.headers['x-cal-signature-256'] as string | undefined;
 
-      if (!verifyCalcomSignature(rawBody, sig)) {
+      const sigCheck = verifyCalcomSignature(rawBody, sig);
+      if (sigCheck === 'not_configured_in_prod') {
+        logger.error('Cal.com webhook rejected: CALCOM_WEBHOOK_SECRET not configured in production');
+        return reply.status(500).send({ error: 'Webhook not configured' });
+      }
+      if (sigCheck === 'invalid') {
         fastify.log.warn('Cal.com webhook signature mismatch — ignoring');
         return reply.status(401).send({ error: 'Invalid signature' });
       }
@@ -85,16 +111,16 @@ export async function calcomWebhookRoutes(fastify: FastifyInstance): Promise<voi
       const html = `
 <h2>New Enterprise Call Booked 🎉</h2>
 <table cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">
-  <tr><td style="color:#666;white-space:nowrap">Name</td><td><strong>${name}</strong></td></tr>
-  <tr><td style="color:#666">Email</td><td><a href="mailto:${email}">${email}</a></td></tr>
-  ${company ? `<tr><td style="color:#666">Company</td><td>${company}</td></tr>` : ''}
-  <tr><td style="color:#666">Event</td><td>${eventTitle}</td></tr>
-  <tr><td style="color:#666">Time</td><td>${startTime}${endTime ? ` → ${endTime}` : ''}${timezone ? ` (${timezone})` : ''}</td></tr>
-  ${meetingUrl ? `<tr><td style="color:#666">Join link</td><td><a href="${meetingUrl}">${meetingUrl}</a></td></tr>` : ''}
-  ${notes ? `<tr><td style="color:#666;vertical-align:top">Notes</td><td style="white-space:pre-wrap">${notes}</td></tr>` : ''}
+  <tr><td style="color:#666;white-space:nowrap">Name</td><td><strong>${escapeHtml(name)}</strong></td></tr>
+  <tr><td style="color:#666">Email</td><td><a href="mailto:${escapeHtml(email)}">${escapeHtml(email)}</a></td></tr>
+  ${company ? `<tr><td style="color:#666">Company</td><td>${escapeHtml(company)}</td></tr>` : ''}
+  <tr><td style="color:#666">Event</td><td>${escapeHtml(eventTitle)}</td></tr>
+  <tr><td style="color:#666">Time</td><td>${escapeHtml(startTime)}${endTime ? ` → ${escapeHtml(endTime)}` : ''}${timezone ? ` (${escapeHtml(timezone)})` : ''}</td></tr>
+  ${meetingUrl ? `<tr><td style="color:#666">Join link</td><td><a href="${escapeHtml(meetingUrl)}">${escapeHtml(meetingUrl)}</a></td></tr>` : ''}
+  ${notes ? `<tr><td style="color:#666;vertical-align:top">Notes</td><td style="white-space:pre-wrap">${escapeHtml(notes)}</td></tr>` : ''}
 </table>
 <p style="margin-top:16px;color:#888;font-size:12px;">
-  Booking ID: ${booking.uid ?? 'n/a'} · via Cal.com webhook
+  Booking ID: ${escapeHtml(String(booking.uid ?? 'n/a'))} · via Cal.com webhook
 </p>`.trim();
 
       const isCancellation = triggerEvent === 'BOOKING_CANCELLED';

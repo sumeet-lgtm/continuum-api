@@ -52,6 +52,64 @@ async function checkRateLimit(
   }
 }
 
+async function checkIpRateLimit(
+  scope: string,
+  ip: string,
+  limitRpm: number,
+): Promise<RateLimitInfo | undefined> {
+  const key = redisKey.ipRateLimit(scope, ip);
+
+  try {
+    const count = await redis.incr(key);
+
+    if (count === 1) {
+      await redis.expire(key, 60);
+    }
+
+    if (count > limitRpm) {
+      const ttl = await redis.ttl(key);
+      const retryAfterMs = ttl > 0 ? ttl * 1000 : 60_000;
+      throw Errors.rateLimited(retryAfterMs);
+    }
+
+    const remaining = Math.max(0, limitRpm - count);
+    const ttl = await redis.ttl(key);
+    const resetAt = Date.now() + (ttl > 0 ? ttl * 1000 : 60_000);
+
+    return { limit: limitRpm, remaining, resetAt };
+  } catch (err) {
+    if (err instanceof Error && 'statusCode' in err) {
+      throw err;
+    }
+    logger.warn({ err, scope, ip }, 'Redis IP rate limit check failed — failing open');
+    return undefined;
+  }
+}
+
+/**
+ * Rate limiter for routes with no API key to key on — the tracking pixel,
+ * click redirect, unsubscribe confirm link, and the SNS bounce/complaint
+ * webhook are all reachable by anyone, unauthenticated. requireRateLimit
+ * above is a no-op on these (it bails out when request.apiKey is unset),
+ * which left them with no volume limit at all.
+ *
+ * Returns a preHandler bound to a fixed per-minute limit and a scope name
+ * so different public routes don't share one IP's budget.
+ *
+ * Usage:
+ *   { preHandler: [requireIpRateLimit('track', 300)] }
+ */
+export function requireIpRateLimit(scope: string, limitRpm: number) {
+  return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const info = await checkIpRateLimit(scope, request.ip, limitRpm);
+    if (info) {
+      void reply.header('X-RateLimit-Limit', String(info.limit));
+      void reply.header('X-RateLimit-Remaining', String(info.remaining));
+      void reply.header('X-RateLimit-Reset', String(Math.ceil(info.resetAt / 1000)));
+    }
+  };
+}
+
 async function rateLimitPluginFn(fastify: FastifyInstance): Promise<void> {
   // No global hook — rate limiting is applied per-route via requireRateLimit preHandler
   void fastify;

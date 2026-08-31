@@ -1,12 +1,16 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../../lib/prisma.js';
 import { verifyOpenToken, verifyClickToken, TRANSPARENT_GIF } from '../../lib/tracking.js';
+import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 
 export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /track/open — tracking pixel. Accepts token as path param OR query param.
   // Railway proxy truncates path segments >100 chars, so the injected pixel always uses ?t= query param.
+  // No API key on this request (it's an anonymous pixel load), so IP-scoped
+  // rather than key-scoped rate limiting — this was previously unlimited.
   fastify.get(
     '/track/open',
+    { preHandler: [requireIpRateLimit('track-open', 300)] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const q = request.query as { t?: string; token?: string };
       const token = q.t ?? q.token ?? '';
@@ -50,6 +54,7 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /track/click — click redirect. Same query-param approach as open.
   fastify.get(
     '/track/click',
+    { preHandler: [requireIpRateLimit('track-click', 300)] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const q = request.query as { t?: string; token?: string };
       const token = q.t ?? q.token ?? '';

@@ -25,7 +25,7 @@ vi.mock('../../lib/prisma.js', () => ({
 vi.mock('../../lib/redis.js', () => ({
   redis:    { incr: vi.fn().mockResolvedValue(1), expire: vi.fn(), ttl: vi.fn().mockResolvedValue(55), ping: vi.fn().mockResolvedValue('PONG') },
   pingRedis: vi.fn().mockResolvedValue(true),
-  redisKey:  { rateLimit: (id: string) => `rl:${id}` },
+  redisKey:  { rateLimit: (id: string) => `rl:${id}`, ipRateLimit: (scope: string, ip: string) => `rl:ip:${scope}:${ip}` },
   getRedis:  vi.fn(),
 }));
 
@@ -83,7 +83,7 @@ const mockQueueAdd     = vi.mocked(monitorQueue.add);
 const TEST_KEY     = 'cnt_testmonitorkey0123456789abcdefgh';
 const TEST_KEY_REC = {
   id: 'key-mon-001', keyHash: '', keyPrefix: 'cnt_testmonitor',
-  label: 'test', ownerId: null, userId: null, keyRaw: null, rateLimit: 1000,
+  label: 'test', ownerId: null, userId: null, orgId: null, keyRaw: null, rateLimit: 1000,
   monthlyLimit: 100000, currentMonthUsage: 0, usageResetAt: new Date(), plan: 'free',
   isActive: true, createdAt: new Date(), revokedAt: null,
   name: null, monthlySendLimit: 500, currentMonthSendUsage: 0, sendUsageResetAt: new Date(),

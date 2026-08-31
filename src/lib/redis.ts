@@ -99,6 +99,11 @@ export async function pingRedis(): Promise<boolean> {
 // Key namespace helpers — all keys are prefixed to avoid collisions
 export const redisKey = {
   rateLimit:    (apiKeyId: string)  => `rl:${apiKeyId}`,
+  // For unauthenticated routes (tracking pixel, unsubscribe, webhooks) —
+  // there's no apiKeyId to key on, so this scopes by route + caller IP
+  // instead. Scoped per-route so a burst against one public endpoint
+  // doesn't eat into another's budget for the same IP.
+  ipRateLimit:  (scope: string, ip: string) => `rl:ip:${scope}:${ip}`,
   bulkJobLock:  (jobId: string)     => `lock:bulk:${jobId}`,
   monitorLock:  (monitorId: string) => `lock:monitor:${monitorId}`,
 } as const;

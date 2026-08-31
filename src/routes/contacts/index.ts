@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { requireAuth } from '../../plugins/auth.js';
-import { requireRateLimit } from '../../plugins/rateLimit.js';
+import { requireRateLimit, requireIpRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { generateOptinToken, verifyOptinToken } from '../../lib/optinToken.js';
@@ -191,7 +191,7 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   // GET /v1/confirm?token=xxx — double opt-in confirmation (no auth required — email link)
-  fastify.get('/confirm', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/confirm', { preHandler: [requireIpRateLimit('confirm', 60)] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const q = request.query as { token?: string };
     if (!q.token) {
       return reply.status(400).type('text/html').send('<h2>Invalid confirmation link.</h2>');

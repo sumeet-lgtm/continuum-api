@@ -41,6 +41,20 @@ export function getMonitorLimit(plan: string | null): number {
   return PLAN_MONITOR_LIMITS[plan ?? 'free'] ?? PLAN_MONITOR_LIMITS['free']!;
 }
 
+// Mailbox ceiling per plan — matches the counts advertised on the pricing
+// page. Previously unenforced: any plan could create unlimited mailboxes,
+// unlike every other quota in this file.
+const PLAN_MAILBOX_LIMITS: Record<string, number> = {
+  free:    1,
+  starter: 5,
+  growth:  25,
+  scale:   100,
+};
+
+export function getMailboxLimit(plan: string | null): number {
+  return PLAN_MAILBOX_LIMITS[plan ?? 'free'] ?? PLAN_MAILBOX_LIMITS['free']!;
+}
+
 export async function requireMonthlyQuota(
   request: FastifyRequest,
   reply: FastifyReply,

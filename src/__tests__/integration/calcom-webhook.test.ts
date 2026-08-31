@@ -107,4 +107,82 @@ describe('POST /webhooks/calcom', () => {
 
     expect(res.statusCode).toBe(400);
   });
+
+  it('HTML-escapes attendee-controlled fields before they reach the internal notification email', async () => {
+    const rawBody = JSON.stringify({
+      triggerEvent: 'BOOKING_CREATED',
+      payload: {
+        title: 'Chat',
+        attendees: [{ name: '<img src=x onerror=alert(1)>', email: 'attacker@example.com' }],
+        responses: { notes: { value: '</td></tr><script>alert(document.cookie)</script>' } },
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/calcom',
+      headers: { 'content-type': 'application/json', 'x-cal-signature-256': sign(rawBody) },
+      payload: rawBody,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const emailedHtml = mockSendEmail.mock.calls[0]?.[2] as string;
+    expect(emailedHtml).not.toContain('<img src=x onerror=alert(1)>');
+    expect(emailedHtml).not.toContain('<script>alert(document.cookie)</script>');
+    expect(emailedHtml).toContain('&lt;img src=x onerror=alert(1)&gt;');
+  });
+});
+
+describe('POST /webhooks/calcom — unset secret in production (fail closed)', () => {
+  it('rejects every request rather than skipping verification when CALCOM_WEBHOOK_SECRET is unset in production', async () => {
+    vi.resetModules();
+    vi.doMock('../../config.js', () => ({
+      config: { CALCOM_WEBHOOK_SECRET: undefined },
+      isProd: true,
+    }));
+    vi.doMock('../../lib/email.js', () => ({ sendEmail: vi.fn().mockResolvedValue(true) }));
+
+    const { calcomWebhookRoutes: prodRoutes } = await import('../../routes/webhooks/calcom.js');
+    const { sendEmail: prodSendEmail } = await import('../../lib/email.js');
+    const prodApp = Fastify();
+    await prodApp.register(prodRoutes);
+    await prodApp.ready();
+
+    const res = await prodApp.inject({
+      method: 'POST',
+      url: '/webhooks/calcom',
+      headers: { 'content-type': 'application/json' },
+      payload: '{"triggerEvent":"BOOKING_CREATED","payload":{}}',
+    });
+
+    expect(res.statusCode).toBe(500);
+    expect(vi.mocked(prodSendEmail)).not.toHaveBeenCalled();
+    await prodApp.close();
+  });
+
+  it('still processes requests when the secret is unset outside production (dev/staging)', async () => {
+    vi.resetModules();
+    vi.doMock('../../config.js', () => ({
+      config: { CALCOM_WEBHOOK_SECRET: undefined },
+      isProd: false,
+    }));
+    vi.doMock('../../lib/email.js', () => ({ sendEmail: vi.fn().mockResolvedValue(true) }));
+
+    const { calcomWebhookRoutes: devRoutes } = await import('../../routes/webhooks/calcom.js');
+    const { sendEmail: devSendEmail } = await import('../../lib/email.js');
+    const devApp = Fastify();
+    await devApp.register(devRoutes);
+    await devApp.ready();
+
+    const res = await devApp.inject({
+      method: 'POST',
+      url: '/webhooks/calcom',
+      headers: { 'content-type': 'application/json' },
+      payload: '{"triggerEvent":"BOOKING_CREATED","payload":{}}',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(devSendEmail)).toHaveBeenCalledTimes(1);
+    await devApp.close();
+  });
 });
