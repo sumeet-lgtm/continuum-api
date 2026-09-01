@@ -1,9 +1,9 @@
 import { startCampaignWorker } from './workers/campaignWorker.js';
 import { startSequenceWorker, scheduleSequenceTicks } from './workers/sequenceWorker.js';
-import { startWarmupWorker } from './workers/warmupWorker.js';
-import { startImapWorker } from './workers/imapWorker.js';
+import { startWarmupWorker, scheduleWarmupTicks } from './workers/warmupWorker.js';
+import { startImapWorker, scheduleImapTicks } from './workers/imapWorker.js';
 import { runAutomationWorker } from './workers/automationWorker.js';
-import { sequenceQueue } from './lib/queue.js';
+import { sequenceQueue, warmupQueue, imapQueue } from './lib/queue.js';
 
 const closable: Array<{ close(): Promise<void> }> = [];
 
@@ -17,10 +17,25 @@ void scheduleSequenceTicks(sequenceQueue).catch((err: unknown) => {
 
 if (process.env['WARMUP_POOL_ENABLED'] === 'true') {
   closable.push(startWarmupWorker());
+
+  // Schedule recurring warmup ticks (hourly) — without this the warmup
+  // worker above starts and listens forever, but nothing ever enqueues a
+  // job for it to process, so warmup silently never actually runs.
+  // Idempotent (fixed jobId), safe to call on every restart.
+  void scheduleWarmupTicks(warmupQueue).catch((err: unknown) => {
+    console.error('[worker-new] failed to schedule warmup ticks:', err);
+  });
 }
 
 if (process.env['IMAP_POLL_ENABLED'] === 'true') {
   closable.push(startImapWorker());
+
+  // Same gap as warmup above: the worker starts and listens, but without
+  // this nothing ever enqueues a poll job — reply detection, bounce, and
+  // unsubscribe-via-IMAP silently never ran.
+  void scheduleImapTicks(imapQueue).catch((err: unknown) => {
+    console.error('[worker-new] failed to schedule IMAP ticks:', err);
+  });
 }
 
 // Automation worker runs every 5 minutes via setInterval
