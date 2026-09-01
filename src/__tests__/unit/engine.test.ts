@@ -314,6 +314,19 @@ describe('verifyEmail engine pipeline', () => {
       expect(result.checks.isDisposable).toBe(true);
       expect(result.subStatus).toBe('disposable_domain');
     });
+
+    it('skips the SMTP probe/provider entirely for a disposable domain — the scorer ignores the result anyway, so it would just be a wasted paid-provider credit', async () => {
+      mockMxFound();
+      mockIsDisposable.mockReturnValue(true);
+      mockSmtpAccepted(); // if this got called despite the skip, status/score would differ from the assertions below
+
+      const result = await verifyEmail({ ...baseInput, email: 'user@mailinator.com' });
+
+      expect(mockSmtpProbe).not.toHaveBeenCalled();
+      expect(result.checks.smtpChecked).toBe(false);
+      expect(result.status).toBe('risky');
+      expect(result.subStatus).toBe('disposable_domain');
+    });
   });
 
   // ─── Role accounts ────────────────────────────────────────────────────────

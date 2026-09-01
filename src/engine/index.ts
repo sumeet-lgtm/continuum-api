@@ -115,6 +115,10 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   };
 
   const t3 = Date.now();
+  // The scorer below gives isDisposable the final word regardless of the
+  // SMTP result (see scorer.ts: disposable_smtp_rejected / disposable_domain
+  // both ignore smtpReachable entirely) — so a disposable domain's SMTP
+  // check is a paid provider credit spent on a result that gets discarded.
   // Cache first — a hit here means we skip both the socket probe and any
   // provider call entirely. Own SMTP probe is next: direct socket probe, or
   // the SMTP_PROBE_URL relay when set (works around cloud providers
@@ -122,23 +126,27 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   // for when our own probe can't reach a verdict at all (blocked, timed
   // out, no relay configured) rather than the primary source of truth —
   // verification quality shouldn't be capped by a reseller's coverage.
-  const cached = await getSmtpCache(email);
-  if (cached) {
-    smtpResult = { ...cached, rawResponse: null };
-    logger.debug({ email }, 'SMTP cache hit — skipped probe and provider entirely');
-  } else if (mxResult.records.length > 0) {
-    try {
-      smtpResult = await smtpProbeWithFallback(email, mxResult.records);
-      if (smtpResult.checked) await setSmtpCache(email, { ...smtpResult, fromCache: false });
-    } catch (err) {
-      logger.error({ err, email, mxHosts: mxResult.records }, 'SMTP probe threw unexpectedly');
+  if (disposable) {
+    logger.debug({ email }, 'Disposable domain — skipping SMTP probe/provider, scorer ignores it anyway');
+  } else {
+    const cached = await getSmtpCache(email);
+    if (cached) {
+      smtpResult = { ...cached, rawResponse: null };
+      logger.debug({ email }, 'SMTP cache hit — skipped probe and provider entirely');
+    } else if (mxResult.records.length > 0) {
+      try {
+        smtpResult = await smtpProbeWithFallback(email, mxResult.records);
+        if (smtpResult.checked) await setSmtpCache(email, { ...smtpResult, fromCache: false });
+      } catch (err) {
+        logger.error({ err, email, mxHosts: mxResult.records }, 'SMTP probe threw unexpectedly');
+      }
     }
-  }
-  if (!smtpResult.checked) {
-    const mvResult = await smtpVerifyWithCache(email);
-    if (mvResult.checked) {
-      smtpResult = mvResult;
-      logger.info({ email, fromCache: mvResult.fromCache }, 'SMTP via MillionVerifier fallback (own probe inconclusive)');
+    if (!smtpResult.checked) {
+      const mvResult = await smtpVerifyWithCache(email);
+      if (mvResult.checked) {
+        smtpResult = mvResult;
+        logger.info({ email, fromCache: mvResult.fromCache }, 'SMTP via MillionVerifier fallback (own probe inconclusive)');
+      }
     }
   }
   const smtpMs = Date.now() - t3;

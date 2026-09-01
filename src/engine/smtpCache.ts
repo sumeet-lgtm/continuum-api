@@ -67,19 +67,29 @@ export async function smtpVerifyWithCache(email: string): Promise<SmtpCacheResul
     return { ...cached, fromCache: true, rawResponse: '' };
   }
 
-  // 2. No cache — call MillionVerifier
-  if (!config.MILLIONVERIFIER_API_KEY) {
-    return { checked: false, reachable: null, isCatchAll: null, greylisted: false, fromCache: false, rawResponse: '', error: 'No SMTP API key configured' };
+  // 2. No cache — try ZeroBounce first when configured (paid credits,
+  // called directly, no proxy needed), falling back to the existing
+  // proxy-routed DeBounce/Bouncer/MillionVerifier chain whenever
+  // ZeroBounce doesn't produce a usable verdict (unconfigured,
+  // unreachable, rate-limited past retries, or genuinely "unknown") —
+  // one provider's outage or low balance no longer takes the whole
+  // SMTP-check layer down with it.
+  let result: SmtpCacheResult;
+  if (config.ZEROBOUNCE_API_KEY) {
+    result = await callZeroBounce(email);
+    if (!result.checked) {
+      result = await callMillionVerifier(email);
+    }
+  } else {
+    result = await callMillionVerifier(email);
   }
 
-  const mvResult = await callMillionVerifier(email);
-  
   // 3. Store in cache
-  if (mvResult.checked) {
-    await storeCache(email, mvResult);
+  if (result.checked) {
+    await storeCache(email, result);
   }
 
-  return { ...mvResult, fromCache: false };
+  return { ...result, fromCache: false };
 }
 
 // ─── Cache helpers ─────────────────────────────────────────────────────────────
@@ -275,6 +285,78 @@ async function callMillionVerifier(email: string): Promise<SmtpCacheResult> {
   }
 
   logger.warn({ email, lastError, attempts: SMTP_MAX_ATTEMPTS }, 'SMTP check exhausted retries');
+  return notChecked(lastError);
+}
+
+// ─── ZeroBounce API call ──────────────────────────────────────────────────────
+// Called directly over HTTPS — unlike DeBounce/Bouncer/MillionVerifier,
+// ZeroBounce's validate endpoint is a standard public API with no need to
+// route through the Cloudflare Worker proxy.
+
+async function callZeroBounce(email: string): Promise<SmtpCacheResult> {
+  const apiKey = config.ZEROBOUNCE_API_KEY;
+  if (!apiKey) return notChecked('ZeroBounce not configured');
+
+  let lastError = 'API unreachable';
+
+  for (let attempt = 1; attempt <= SMTP_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      const delay = SMTP_RETRY_BASE_MS * 2 ** (attempt - 2) + Math.random() * 400;
+      await new Promise((r) => setTimeout(r, delay));
+    }
+
+    try {
+      const url = `https://api.zerobounce.net/v2/validate?api_key=${encodeURIComponent(apiKey)}&email=${encodeURIComponent(email)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+
+      if (res.status === 429 || res.status >= 500) {
+        lastError = `provider ${res.status}`;
+        continue;
+      }
+      if (!res.ok) {
+        logger.warn({ status: res.status, email }, 'ZeroBounce API error');
+        return notChecked('API error');
+      }
+
+      const data = await res.json() as {
+        address?: string;
+        status?: string; // valid|invalid|catch-all|unknown|spamtrap|abuse|do_not_mail|disposable|toxic
+        sub_status?: string;
+        error?: string;
+      };
+
+      if (data.error && isRateLimitError(String(data.error))) {
+        lastError = 'provider 429';
+        continue;
+      }
+      if (!data.status) {
+        return notChecked(data.error ?? 'ZeroBounce verification failed');
+      }
+
+      switch (data.status) {
+        case 'valid':
+          return { checked: true, reachable: true, isCatchAll: false, greylisted: false, fromCache: false, rawResponse: null, error: null };
+
+        case 'catch-all':
+          return { checked: true, reachable: true, isCatchAll: true, greylisted: false, fromCache: false, rawResponse: null, error: null };
+
+        case 'invalid':
+        case 'spamtrap':
+        case 'abuse':
+        case 'do_not_mail':
+          return { checked: true, reachable: false, isCatchAll: false, greylisted: false, fromCache: false, rawResponse: null, error: null };
+
+        // 'unknown' and anything undocumented — genuinely inconclusive,
+        // not a confident verdict either way.
+        default:
+          return notChecked('smtp_unknown');
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : 'API unreachable';
+    }
+  }
+
+  logger.warn({ email, lastError, attempts: SMTP_MAX_ATTEMPTS }, 'ZeroBounce check exhausted retries');
   return notChecked(lastError);
 }
 

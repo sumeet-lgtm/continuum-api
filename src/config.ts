@@ -43,6 +43,10 @@ const baseEnvSchema = z.object({
   MV_PROXY_KEY: z.string().optional(),
   DEBOUNCE_API_KEY: z.string().optional(),
   BOUNCER_API_KEY: z.string().optional(),
+  // Called directly (no proxy needed — ZeroBounce's public API doesn't
+  // require routing around the way DeBounce/Bouncer/MillionVerifier do).
+  // Tried first when set, ahead of the proxy-routed providers below.
+  ZEROBOUNCE_API_KEY: z.string().optional(),
 
   // Billing (Dodo Payments)
   DODO_PAYMENTS_API_KEY: z.string().optional(),
