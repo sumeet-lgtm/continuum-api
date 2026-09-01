@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Send, Zap, TestTube, ZapOff } from "lucide-react";
+import { Plus, Send, Zap, TestTube, ZapOff, KeyRound } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/mailboxes")({
   head: () => ({ meta: [{ title: "Mailboxes — Continuum API" }] }),
@@ -25,6 +25,7 @@ interface Mailbox {
   lastErrorMsg?: string | null;
   lastCheckedAt: string | null;
   warmupConfig?: WarmupConfig | null;
+  connectedViaOAuth?: boolean;
 }
 
 function MailboxesPage() {
@@ -46,6 +47,40 @@ function MailboxesPage() {
   };
 
   useEffect(() => { load(); }, [primaryKey]);
+
+  // Land back here after the Google/Microsoft consent screen redirects to
+  // the backend callback, which redirects here with ?connected= or
+  // ?oauth_error= — surface it once, then strip it from the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("connected");
+    const oauthError = params.get("oauth_error");
+    if (connected) {
+      toast.success(`${connected === "google" ? "Gmail" : "Outlook"} mailbox connected`);
+      load();
+    } else if (oauthError) {
+      const messages: Record<string, string> = {
+        mailbox_limit_reached: "Your plan's mailbox limit is reached — delete one or upgrade to connect another.",
+        invalid_or_expired_state: "That connection attempt expired — try connecting again.",
+        connect_failed: "Couldn't finish connecting that mailbox. Try again.",
+      };
+      toast.error(messages[oauthError] ?? "Mailbox connection failed.");
+    }
+    if (connected || oauthError) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const connectOAuth = async (provider: "google" | "microsoft") => {
+    if (!primaryKey?.keyRaw) return;
+    try {
+      const { url } = await api.withKey.get<{ url: string }>(`/v1/mailboxes/oauth/${provider}/start`, primaryKey.keyRaw);
+      window.location.href = url;
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    }
+  };
 
   const add = async () => {
     if (!primaryKey?.keyRaw) return;
@@ -121,9 +156,17 @@ function MailboxesPage() {
           <h1 className="text-2xl font-display font-medium tracking-tight">Mailboxes</h1>
           <p className="text-sm text-muted-foreground">Connect SMTP or OAuth mailboxes for multi-mailbox rotation in sequences.</p>
         </header>
-        <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}>
-          <Plus className="h-4 w-4" /> Connect Mailbox
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => connectOAuth("google")}>
+            <KeyRound className="h-4 w-4" /> Connect Gmail
+          </Button>
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => connectOAuth("microsoft")}>
+            <KeyRound className="h-4 w-4" /> Connect Outlook
+          </Button>
+          <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}>
+            <Plus className="h-4 w-4" /> Connect SMTP
+          </Button>
+        </div>
       </div>
 
       {adding && (
@@ -177,7 +220,9 @@ function MailboxesPage() {
                   </div>
                   <div className="min-w-0">
                     <div className="font-medium truncate">{m.username}</div>
-                    <div className="text-xs text-muted-foreground capitalize">{m.type} · {m.sentToday}/{m.dailyLimit} today</div>
+                    <div className="text-xs text-muted-foreground capitalize">
+                      {m.type} {m.connectedViaOAuth && "· OAuth"} · {m.sentToday}/{m.dailyLimit} today
+                    </div>
                     {m.status === "error" && m.lastErrorMsg && (
                       <div className="text-xs text-destructive mt-0.5">{m.lastErrorMsg}</div>
                     )}

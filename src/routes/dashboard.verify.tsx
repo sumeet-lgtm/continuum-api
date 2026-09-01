@@ -81,6 +81,7 @@ function VerifyPage() {
     { key: "smtpReachable", label: "Mailbox reachable" },
     { key: "isCatchAll", label: "Catch-all domain" },
     { key: "greylisted", label: "Greylisted" },
+    { key: "freeEmail", label: "Free email provider", warnIfTrue: true },
   ];
   const DOMAIN_CHECKS: CheckDef[] = [
     { key: "spfValid", label: "SPF record valid" },
@@ -183,6 +184,11 @@ function VerifyPage() {
                   {checks.isLookalike === true && (checks as Record<string, unknown>).impersonates != null && (
                     <li className="ml-6 text-xs text-[oklch(0.42_0.18_27)]">
                       Impersonates: {String((checks as Record<string, unknown>).impersonates)}
+                    </li>
+                  )}
+                  {(checks as Record<string, unknown>).didYouMean != null && (
+                    <li className="ml-6 text-xs text-muted-foreground">
+                      Did you mean: {String((checks as Record<string, unknown>).didYouMean)}?
                     </li>
                   )}
                 </ul>
