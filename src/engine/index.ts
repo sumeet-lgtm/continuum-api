@@ -8,7 +8,7 @@ import { smtpProbeWithFallback } from './smtp.js';
 import { smtpVerifyWithCache, getSmtpCache, setSmtpCache } from './smtpCache.js';
 import { checkDeliverability } from './deliverability.js';
 import { checkToxic } from './toxic.js';
-import { checkLookalike } from './lookalike.js';
+import { checkLookalike, isFreeEmailProvider } from './lookalike.js';
 import { score } from './scorer.js';
 import { logger } from '../lib/logger.js';
 import type {
@@ -161,6 +161,17 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
     Promise.resolve(checkLookalike(domain)),
   ]);
 
+  const freeEmail = isFreeEmailProvider(domain);
+  // "Did you mean" reuses the lookalike check's own near-miss detection —
+  // subdomain-nesting is a phishing pattern, not a typo, so it doesn't get
+  // a correction suggestion the way edit-distance/homoglyph near-misses do.
+  const didYouMean =
+    lookalikeResult.isLookalike &&
+    lookalikeResult.reason !== 'subdomain_nesting' &&
+    lookalikeResult.impersonates
+      ? `${local}@${lookalikeResult.impersonates}`
+      : null;
+
   // ── 7. Score ───────────────────────────────────────────────────────────────
   const scored = score({
     syntaxValid:   true,
@@ -203,6 +214,8 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
     toxicReason:     toxicResult.reason,
     isLookalike:     lookalikeResult.isLookalike,
     impersonates:    lookalikeResult.impersonates,
+    freeEmail,
+    didYouMean,
     subStatus:       scored.subStatus,
     wallStart,
     timings: { syntaxMs, mxMs, disposableMs, roleMs, smtpMs, totalMs: 0 },
@@ -235,6 +248,8 @@ interface PersistInput {
   toxicReason?:    string | null;
   isLookalike?:    boolean;
   impersonates?:   string | null;
+  freeEmail?:      boolean;
+  didYouMean?:     string | null;
   subStatus:       string  | null;
   wallStart:       number;
   timings:         Omit<EngineTimings, 'totalMs'> & { totalMs: number };
@@ -332,6 +347,8 @@ async function persistAndReturn(raw: PersistInput): Promise<VerificationResult> 
       ...(raw.blacklists !== undefined ? { blacklists: raw.blacklists } : {}),
       ...(raw.isToxic !== undefined ? { isToxic: raw.isToxic } : {}),
       ...(raw.isLookalike !== undefined ? { isLookalike: raw.isLookalike } : {}),
+      ...(raw.freeEmail !== undefined ? { freeEmail: raw.freeEmail } : {}),
+      ...(raw.didYouMean !== undefined ? { didYouMean: raw.didYouMean } : {}),
       ...(raw.impersonates !== undefined ? { impersonates: raw.impersonates } : {}),
       ...(raw.isAbuse !== undefined ? { isAbuse: raw.isAbuse } : {}),
       ...(raw.toxicReason !== undefined ? { toxicReason: raw.toxicReason } : {}),

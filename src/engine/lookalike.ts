@@ -92,6 +92,16 @@ export interface LookalikeResult {
   reason: 'edit_distance' | 'homoglyph' | 'subdomain_nesting' | null;
 }
 
+/**
+ * Is this domain one of the major free/consumer mailbox providers (as
+ * opposed to a company's own corporate domain)? Same list PROTECTED_DOMAINS
+ * already tracks for typosquat detection above — a "free email" flag is
+ * just membership in that same provider set, no separate list to maintain.
+ */
+export function isFreeEmailProvider(domain: string): boolean {
+  return (PROTECTED_DOMAINS as readonly string[]).includes(domain.toLowerCase());
+}
+
 export function checkLookalike(domain: string): LookalikeResult {
   const lower = domain.toLowerCase();
 

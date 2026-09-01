@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { checkLookalike } from '../../engine/lookalike.js';
+import { checkLookalike, isFreeEmailProvider } from '../../engine/lookalike.js';
 
 describe('checkLookalike', () => {
   it('does not flag exact protected domains', () => {
@@ -56,5 +56,27 @@ describe('checkLookalike', () => {
     // "aol" is intentionally excluded from nesting checks via length guard
     // to avoid flagging every domain containing common short substrings.
     expect(checkLookalike('aolympics.com').isLookalike).toBe(false);
+  });
+});
+
+describe('isFreeEmailProvider', () => {
+  it('flags major consumer webmail providers', () => {
+    expect(isFreeEmailProvider('gmail.com')).toBe(true);
+    expect(isFreeEmailProvider('outlook.com')).toBe(true);
+    expect(isFreeEmailProvider('yahoo.com')).toBe(true);
+    expect(isFreeEmailProvider('icloud.com')).toBe(true);
+  });
+
+  it('is case-insensitive', () => {
+    expect(isFreeEmailProvider('Gmail.COM')).toBe(true);
+  });
+
+  it('does not flag a corporate domain', () => {
+    expect(isFreeEmailProvider('acme.com')).toBe(false);
+    expect(isFreeEmailProvider('continuumapi.com')).toBe(false);
+  });
+
+  it('does not flag a typosquat as free — that is a lookalike, not a real provider', () => {
+    expect(isFreeEmailProvider('gmial.com')).toBe(false);
   });
 });

@@ -22,6 +22,8 @@ export interface VerificationChecks {
   toxicReason?:  string | null;
   isLookalike?:  boolean;
   impersonates?: string | null;
+  freeEmail?:    boolean;
+  didYouMean?:   string | null;
 }
 
 export interface VerificationResult {
