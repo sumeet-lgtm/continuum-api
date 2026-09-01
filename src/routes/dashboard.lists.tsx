@@ -26,8 +26,8 @@ function ListsPage() {
   const load = () => {
     if (!primaryKey?.keyRaw) return;
     api.withKey
-      .get<{ lists: MailingList[] }>("/v1/lists", primaryKey.keyRaw)
-      .then((r) => setLists(r.lists ?? []))
+      .get<{ data: MailingList[] }>("/v1/lists", primaryKey.keyRaw)
+      .then((r) => setLists(r.data ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };
@@ -45,6 +45,16 @@ function ListsPage() {
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }
+  };
+
+  const remove = async (l: MailingList) => {
+    if (!primaryKey?.keyRaw) return;
+    if (!confirm(`Delete list "${l.name}"? This cannot be undone.`)) return;
+    try {
+      await api.withKey.del(`/v1/lists/${l.id}`, primaryKey.keyRaw);
+      toast.success("List deleted");
+      load();
+    } catch (e: unknown) { toast.error((e as Error).message); }
   };
 
   return (
@@ -103,7 +113,7 @@ function ListsPage() {
                   <Link to="/dashboard/contacts" search={{ list: l.id }}>
                     <Button variant="outline" size="sm">Manage</Button>
                   </Link>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive"><Trash2 className="h-3.5 w-3.5" /></Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => remove(l)}><Trash2 className="h-3.5 w-3.5" /></Button>
                 </div>
               </div>
             </div>

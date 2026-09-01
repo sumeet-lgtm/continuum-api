@@ -32,7 +32,7 @@ interface Monitor {
 
 interface CheckLog {
   id: string;
-  status: string;
+  newStatus: string;
   checkedAt: string;
 }
 
@@ -119,7 +119,7 @@ function MonitoringPage() {
   const recheck = async (m: Monitor) => {
     if (!apiKey?.keyRaw) return;
     try {
-      await fetch(`${API_BASE}/v1/monitoring/${m.id}/check`, {
+      await fetch(`${API_BASE}/v1/monitoring/${m.id}/recheck`, {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey.keyRaw}`, "x-api-key": apiKey.keyRaw },
       });
@@ -132,9 +132,9 @@ function MonitoringPage() {
   const openHistory = async (m: Monitor) => {
     setActive(m);
     setHistory([]);
-    const res = await fetch(`${API_BASE}/v1/monitors/${m.id}/history?limit=50`, { headers: { "X-API-Key": apiKey?.keyRaw ?? "" } });
-    const data = res.ok ? await res.json() : [];
-    setHistory((data ?? []) as CheckLog[]);
+    const res = await fetch(`${API_BASE}/v1/monitoring/${m.id}/checks?limit=50`, { headers: { "X-API-Key": apiKey?.keyRaw ?? "" } });
+    const data = res.ok ? await res.json() : { data: [] };
+    setHistory((data?.data ?? []) as CheckLog[]);
   };
 
   return (
@@ -217,7 +217,7 @@ function MonitoringPage() {
               <tbody>
                 {history.map((h) => (
                   <tr key={h.id} className="border-b border-border last:border-0">
-                    <td className="px-5 py-2"><StatusBadge status={h.status} /></td>
+                    <td className="px-5 py-2"><StatusBadge status={h.newStatus} /></td>
                     <td className="px-5 py-2 text-xs text-muted-foreground text-right">
                       {new Date(h.checkedAt).toLocaleString()}
                     </td>
