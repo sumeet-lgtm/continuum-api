@@ -51,31 +51,49 @@ function getMailboxSecret(): string {
   return config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
 }
 
+interface WarmupMailboxCreds {
+  host: string | null;
+  port: number | null;
+  username: string;
+  passwordEnc: string | null;
+  oauthTokenEnc: string | null;
+}
+
+async function buildImapAuth(mailbox: WarmupMailboxCreds): Promise<{ password?: string; xoauth2?: string }> {
+  if (mailbox.oauthTokenEnc) {
+    const { getOAuthAccessToken, buildXoauth2Token } = await import('../lib/oauth/tokens.js');
+    const { accessToken } = await getOAuthAccessToken(mailbox.oauthTokenEnc);
+    return { xoauth2: buildXoauth2Token(mailbox.username, accessToken) };
+  }
+  return { password: decryptValue(mailbox.passwordEnc!, getMailboxSecret()) };
+}
+
 async function autoOpenAndReply(
-  targetMailbox: { host: string | null; port: number | null; username: string; passwordEnc: string | null },
-  fromMailbox: { host: string | null; port: number | null; username: string; passwordEnc: string | null },
+  targetMailbox: WarmupMailboxCreds,
+  fromMailbox: WarmupMailboxCreds,
   warmupSubject: string,
   shouldReply: boolean,
 ): Promise<void> {
-  if (!targetMailbox.passwordEnc || !targetMailbox.host) return;
+  if (!(targetMailbox.passwordEnc || targetMailbox.oauthTokenEnc) || !targetMailbox.host) return;
 
   try {
     const imap = await import('imap-simple').catch(() => null);
     if (!imap) return;
 
-    const secret = getMailboxSecret();
-    const password = decryptValue(targetMailbox.passwordEnc, secret);
+    const authConfig = await buildImapAuth(targetMailbox);
 
     const connection = await imap.connect({
+      // Cast: node-imap's types mark password required even when xoauth2
+      // is supplied instead (see imapHost.ts for the same note).
       imap: {
         user: targetMailbox.username,
-        password,
         host: deriveImapHost(targetMailbox.host),
         port: IMAP_PORT,
         tls: true,
         tlsOptions: { rejectUnauthorized: false },
         authTimeout: 10000,
-      },
+        ...authConfig,
+      } as import('imap').Config,
     });
 
     // Search for the warmup email in INBOX
@@ -101,33 +119,22 @@ async function autoOpenAndReply(
       // Try to move from spam/promotions to INBOX if it landed there
       // (already opened INBOX, so this is for emails that arrived there)
 
-      // Optionally send a short reply
-      if (shouldReply && fromMailbox.passwordEnc && fromMailbox.host) {
-        const fromPassword = decryptValue(fromMailbox.passwordEnc, secret);
-        const replySmtp = {
-          host: fromMailbox.host,
-          port: fromMailbox.port ?? 587,
-          username: fromMailbox.username,
-          passwordEnc: fromMailbox.passwordEnc,
+      // Optionally send a short reply, FROM the target mailbox BACK to the
+      // source mailbox — so the target mailbox needs SMTP creds too.
+      if (shouldReply && (targetMailbox.passwordEnc || targetMailbox.oauthTokenEnc) && targetMailbox.host) {
+        const targetSmtp = {
+          host: targetMailbox.host,
+          port: targetMailbox.port ?? 587,
+          username: targetMailbox.username,
+          passwordEnc: targetMailbox.passwordEnc,
+          oauthTokenEnc: targetMailbox.oauthTokenEnc,
         };
-
-        // We send FROM the target mailbox BACK to the source mailbox
-        // This means target mailbox needs SMTP too
-        if (targetMailbox.passwordEnc && targetMailbox.host) {
-          const targetSmtp = {
-            host: targetMailbox.host,
-            port: targetMailbox.port ?? 587,
-            username: targetMailbox.username,
-            passwordEnc: targetMailbox.passwordEnc,
-          };
-          await sendViaSmtp(targetSmtp, {
-            from: targetMailbox.username,
-            to: fromMailbox.username,
-            subject: `Re: ${subject}`,
-            textBody: randomItem(WARMUP_REPLIES),
-          }).catch(err => logger.debug({ err }, 'Warmup reply send failed (non-fatal)'));
-        }
-        void fromPassword; // used implicitly through decryptValue above
+        await sendViaSmtp(targetSmtp, {
+          from: targetMailbox.username,
+          to: fromMailbox.username,
+          subject: `Re: ${subject}`,
+          textBody: randomItem(WARMUP_REPLIES),
+        }).catch(err => logger.debug({ err }, 'Warmup reply send failed (non-fatal)'));
       }
 
       break; // Process one warmup email per tick per mailbox pair
@@ -160,7 +167,7 @@ async function processWarmupTick(): Promise<void> {
   for (const wc of warmupConfigs) {
     const { mailbox } = wc;
     if (mailbox.status !== 'active') continue;
-    if (!mailbox.passwordEnc || !mailbox.host) {
+    if (!(mailbox.passwordEnc || mailbox.oauthTokenEnc) || !mailbox.host) {
       logger.warn({ mailboxId: mailbox.id }, 'Warmup mailbox missing SMTP credentials — skipping');
       continue;
     }
@@ -196,7 +203,8 @@ async function processWarmupTick(): Promise<void> {
             host: mailbox.host!,
             port: mailbox.port ?? 587,
             username: mailbox.username,
-            passwordEnc: mailbox.passwordEnc!,
+            passwordEnc: mailbox.passwordEnc,
+            oauthTokenEnc: mailbox.oauthTokenEnc,
           },
           {
             from: mailbox.username,

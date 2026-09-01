@@ -212,10 +212,15 @@ export async function processSequenceTick(): Promise<void> {
     const recipientESP = await detectESP(enrollment.email);
 
     // Resolve sending mailbox: prefer ESP-matched mailbox from the pool
-    let selectedMailbox: { id: string; host: string | null; port: number | null; username: string; passwordEnc: string | null } | null = null;
+    let selectedMailbox: { id: string; host: string | null; port: number | null; username: string; passwordEnc: string | null; oauthTokenEnc: string | null } | null = null;
     const poolMailboxes = await prisma.mailbox.findMany({
-      where: { apiKeyId: sequence.apiKeyId, status: 'active', passwordEnc: { not: null }, host: { not: null } },
-      select: { id: true, type: true, host: true, port: true, username: true, passwordEnc: true, sentToday: true, dailyLimit: true },
+      where: {
+        apiKeyId: sequence.apiKeyId,
+        status: 'active',
+        host: { not: null },
+        OR: [{ passwordEnc: { not: null } }, { oauthTokenEnc: { not: null } }],
+      },
+      select: { id: true, type: true, host: true, port: true, username: true, passwordEnc: true, oauthTokenEnc: true, sentToday: true, dailyLimit: true },
     });
 
     // Only pick mailboxes that haven't hit their daily limit
@@ -238,7 +243,7 @@ export async function processSequenceTick(): Promise<void> {
       : `${sequence.fromName} <${sequence.fromEmail}>`;
 
     try {
-      if (selectedMailbox?.host && selectedMailbox?.passwordEnc) {
+      if (selectedMailbox?.host && (selectedMailbox?.passwordEnc || selectedMailbox?.oauthTokenEnc)) {
         // Cold outreach path: send via user's own SMTP mailbox
         await sendViaSmtp(
           {
@@ -246,6 +251,7 @@ export async function processSequenceTick(): Promise<void> {
             port: selectedMailbox.port ?? 587,
             username: selectedMailbox.username,
             passwordEnc: selectedMailbox.passwordEnc,
+            oauthTokenEnc: selectedMailbox.oauthTokenEnc,
           },
           {
             from: fromAddress,

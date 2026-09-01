@@ -9,6 +9,26 @@ import { testSmtpConnection } from '../../lib/smtp.js';
 import { testImapConnection } from '../../lib/imapHost.js';
 import { config } from '../../config.js';
 import { getMailboxLimit } from '../../plugins/usageMeter.js';
+import { encryptOAuthToken } from '../../lib/oauth/tokens.js';
+import { signOAuthState, verifyOAuthState } from '../../lib/oauth/state.js';
+import { isGoogleOAuthConfigured, getGoogleAuthUrl, exchangeGoogleCode } from '../../lib/oauth/google.js';
+import { isMicrosoftOAuthConfigured, getMicrosoftAuthUrl, exchangeMicrosoftCode } from '../../lib/oauth/microsoft.js';
+import { logger } from '../../lib/logger.js';
+
+const OAUTH_PROVIDER_DEFAULTS: Record<'google' | 'microsoft', { host: string; port: number }> = {
+  google: { host: 'smtp.gmail.com', port: 587 },
+  microsoft: { host: 'smtp.office365.com', port: 587 },
+};
+
+// Mailbox.type uses the same 'gmail'/'outlook' vocabulary as the manual
+// connect form's createSchema below — 'google'/'microsoft' only exists as
+// the OAuth *provider* identifier (URLs, scopes, which token endpoint to
+// refresh against), so an OAuth- and manually-connected mailbox for the
+// same real provider end up with the same type value.
+const PROVIDER_TO_MAILBOX_TYPE: Record<'google' | 'microsoft', 'gmail' | 'outlook'> = {
+  google: 'gmail',
+  microsoft: 'outlook',
+};
 
 const createSchema = z.object({
   type: z.enum(['smtp', 'gmail', 'outlook']),
@@ -32,6 +52,92 @@ function getMailboxSecret(): string {
 }
 
 export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
+  // GET /v1/mailboxes/oauth/:provider/start — authenticated; returns the
+  // provider's consent-screen URL for the dashboard to redirect the
+  // browser to. Not a server-side redirect itself since this is behind the
+  // same Bearer/API-key auth as every other route here — the browser needs
+  // the URL to navigate to on its own.
+  fastify.get<{ Params: { provider: string } }>(
+    '/mailboxes/oauth/:provider/start',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest<{ Params: { provider: string } }>, reply: FastifyReply) => {
+      const { provider } = request.params;
+      const state = signOAuthState(request.apiKey.id);
+
+      if (provider === 'google') {
+        if (!isGoogleOAuthConfigured()) throw Errors.validationFailed({ provider: 'Google mailbox connect is not configured on this deployment yet.' });
+        return reply.status(200).send({ url: getGoogleAuthUrl(state) });
+      }
+      if (provider === 'microsoft') {
+        if (!isMicrosoftOAuthConfigured()) throw Errors.validationFailed({ provider: 'Microsoft mailbox connect is not configured on this deployment yet.' });
+        return reply.status(200).send({ url: getMicrosoftAuthUrl(state) });
+      }
+      throw Errors.validationFailed({ provider: 'provider must be "google" or "microsoft"' });
+    },
+  );
+
+  // GET /v1/mailboxes/oauth/:provider/callback — public; hit directly by
+  // Google/Microsoft with only ?code&state, no auth header. Identity comes
+  // from the signed state (see verifyOAuthState above), not requireAuth.
+  fastify.get<{ Params: { provider: string }; Querystring: { code?: string; state?: string; error?: string } }>(
+    '/mailboxes/oauth/:provider/callback',
+    async (request: FastifyRequest<{ Params: { provider: string }; Querystring: { code?: string; state?: string; error?: string } }>, reply: FastifyReply) => {
+      const { provider } = request.params;
+      const { code, state, error } = request.query;
+      const dashboardUrl = `${config.DASHBOARD_URL}/dashboard/mailboxes`;
+
+      if (error) return reply.redirect(`${dashboardUrl}?oauth_error=${encodeURIComponent(error)}`);
+      if (!code || !state) return reply.redirect(`${dashboardUrl}?oauth_error=missing_code`);
+      if (provider !== 'google' && provider !== 'microsoft') return reply.redirect(`${dashboardUrl}?oauth_error=unknown_provider`);
+
+      const verified = verifyOAuthState(state);
+      if (!verified) return reply.redirect(`${dashboardUrl}?oauth_error=invalid_or_expired_state`);
+
+      try {
+        const { refreshToken, email } = provider === 'google'
+          ? await exchangeGoogleCode(code)
+          : await exchangeMicrosoftCode(code);
+
+        const oauthTokenEnc = encryptOAuthToken({ provider, refreshToken });
+        const { host, port } = OAUTH_PROVIDER_DEFAULTS[provider];
+        const mailboxType = PROVIDER_TO_MAILBOX_TYPE[provider];
+
+        // Re-connecting the same provider account updates the existing
+        // mailbox's token in place instead of creating a duplicate row.
+        const existing = await prisma.mailbox.findFirst({
+          where: { apiKeyId: verified.apiKeyId, type: mailboxType, username: email },
+        });
+
+        if (existing) {
+          await prisma.mailbox.update({
+            where: { id: existing.id },
+            data: { oauthTokenEnc, passwordEnc: null, status: 'active', lastErrorMsg: null, host, port },
+          });
+        } else {
+          // No requireAuth on this route (see comment above) — request.apiKey
+          // isn't populated, so the plan has to be looked up directly.
+          const apiKeyRecord = await prisma.apiKey.findUnique({ where: { id: verified.apiKeyId }, select: { plan: true } });
+          const mailboxLimit = getMailboxLimit(apiKeyRecord?.plan ?? null);
+          const existingCount = await prisma.mailbox.count({ where: { apiKeyId: verified.apiKeyId } });
+          if (existingCount >= mailboxLimit) {
+            return reply.redirect(`${dashboardUrl}?oauth_error=mailbox_limit_reached`);
+          }
+          await prisma.mailbox.create({
+            data: {
+              apiKeyId: verified.apiKeyId, type: mailboxType, username: email,
+              oauthTokenEnc, host, port, status: 'active',
+            },
+          });
+        }
+
+        return reply.redirect(`${dashboardUrl}?connected=${provider}`);
+      } catch (err) {
+        logger.error({ err, provider }, 'OAuth mailbox connect failed');
+        return reply.redirect(`${dashboardUrl}?oauth_error=connect_failed`);
+      }
+    },
+  );
+
   // POST /v1/mailboxes
   fastify.post('/mailboxes', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const parsed = createSchema.safeParse(request.body);
@@ -70,9 +176,12 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
     const mailboxes = await prisma.mailbox.findMany({
       where: { apiKeyId },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, type: true, host: true, username: true, dailyLimit: true, sentToday: true, status: true, lastErrorMsg: true, warmupConfig: true, createdAt: true },
+      select: { id: true, type: true, host: true, username: true, dailyLimit: true, sentToday: true, status: true, lastErrorMsg: true, warmupConfig: true, createdAt: true, oauthTokenEnc: true },
     });
-    return reply.status(200).send({ data: mailboxes });
+    // oauthTokenEnc is an encrypted blob — never send it to the client, only
+    // whether one exists, so the dashboard knows to hide the password field.
+    const data = mailboxes.map(({ oauthTokenEnc, ...rest }) => ({ ...rest, connectedViaOAuth: oauthTokenEnc !== null }));
+    return reply.status(200).send({ data });
   });
 
   // GET /v1/mailboxes/:id
@@ -81,10 +190,11 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const mailbox = await prisma.mailbox.findFirst({
       where: { id, apiKeyId },
-      select: { id: true, type: true, host: true, port: true, username: true, dailyLimit: true, sentToday: true, sendDelayMinMs: true, sendDelayMaxMs: true, status: true, lastErrorMsg: true, lastCheckedAt: true, warmupConfig: true, createdAt: true },
+      select: { id: true, type: true, host: true, port: true, username: true, dailyLimit: true, sentToday: true, sendDelayMinMs: true, sendDelayMaxMs: true, status: true, lastErrorMsg: true, lastCheckedAt: true, warmupConfig: true, createdAt: true, oauthTokenEnc: true },
     });
     if (!mailbox) throw Errors.notFound('Mailbox not found.');
-    return reply.status(200).send(mailbox);
+    const { oauthTokenEnc, ...rest } = mailbox;
+    return reply.status(200).send({ ...rest, connectedViaOAuth: oauthTokenEnc !== null });
   });
 
   // DELETE /v1/mailboxes/:id
@@ -104,7 +214,7 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
     const mailbox = await prisma.mailbox.findFirst({ where: { id, apiKeyId } });
     if (!mailbox) throw Errors.notFound('Mailbox not found.');
 
-    if (!mailbox.host || !mailbox.passwordEnc) {
+    if (!mailbox.host || !(mailbox.passwordEnc || mailbox.oauthTokenEnc)) {
       await prisma.mailbox.update({ where: { id }, data: { status: 'error', lastErrorMsg: 'Missing host or credentials' } });
       return reply.status(200).send({ ok: false, error: 'Missing SMTP host or credentials' });
     }
@@ -115,6 +225,7 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
       port: mailbox.port ?? 587,
       username: mailbox.username,
       passwordEnc: mailbox.passwordEnc,
+      oauthTokenEnc: mailbox.oauthTokenEnc,
     });
 
     // IMAP is only needed for reply detection and warmup auto-open/reply —
@@ -126,6 +237,7 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
       host: mailbox.host,
       username: mailbox.username,
       passwordEnc: mailbox.passwordEnc,
+      oauthTokenEnc: mailbox.oauthTokenEnc,
     });
 
     await prisma.mailbox.update({

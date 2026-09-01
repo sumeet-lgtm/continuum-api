@@ -105,6 +105,17 @@ const baseEnvSchema = z.object({
   WORKOS_API_KEY: z.string().optional(),
   WORKOS_CLIENT_ID: z.string().optional(),
 
+  // Mailbox OAuth connect (Gmail / Outlook one-click connect) — each pair is
+  // independently optional; the dashboard's "Connect with Google/Outlook"
+  // buttons are simply hidden until the matching pair is set, same pattern
+  // as every other optional integration in this file.
+  GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
+  GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
+  MICROSOFT_OAUTH_CLIENT_ID: z.string().optional(),
+  MICROSOFT_OAUTH_CLIENT_SECRET: z.string().optional(),
+  MICROSOFT_OAUTH_REDIRECT_URI: z.string().url().optional(),
+
   // Cal.com webhook secret (paste here after setting it in Cal.com → Webhooks → Secret)
   CALCOM_WEBHOOK_SECRET: z.string().optional(),
   // WorkOS webhook secret (from WorkOS Dashboard → Webhooks → Endpoint → Secret)

@@ -6,6 +6,7 @@
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { decryptValue } from './crypto.js';
+import { getOAuthAccessToken } from './oauth/tokens.js';
 import { config } from '../config.js';
 import { logger } from './logger.js';
 
@@ -13,7 +14,10 @@ export interface MailboxCredentials {
   host: string;
   port: number;
   username: string;
-  passwordEnc: string;
+  // Exactly one of these is set: passwordEnc for plain SMTP auth, oauthTokenEnc
+  // for a Gmail/Outlook mailbox connected via OAuth (no app password stored).
+  passwordEnc?: string | null;
+  oauthTokenEnc?: string | null;
 }
 
 export interface SmtpSendInput {
@@ -35,13 +39,16 @@ function getMailboxSecret(): string {
   return config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
 }
 
-function buildTransporter(creds: MailboxCredentials): Transporter {
-  const password = decryptValue(creds.passwordEnc, getMailboxSecret());
+async function buildTransporter(creds: MailboxCredentials): Promise<Transporter> {
+  const auth = creds.oauthTokenEnc
+    ? { type: 'OAuth2' as const, user: creds.username, accessToken: (await getOAuthAccessToken(creds.oauthTokenEnc)).accessToken }
+    : { user: creds.username, pass: decryptValue(creds.passwordEnc!, getMailboxSecret()) };
+
   return nodemailer.createTransport({
     host: creds.host,
     port: creds.port,
     secure: creds.port === 465,
-    auth: { user: creds.username, pass: password },
+    auth,
     tls: { rejectUnauthorized: false },
     connectionTimeout: 15000,
     greetingTimeout: 10000,
@@ -50,7 +57,7 @@ function buildTransporter(creds: MailboxCredentials): Transporter {
 }
 
 export async function sendViaSmtp(creds: MailboxCredentials, input: SmtpSendInput): Promise<SmtpSendResult> {
-  const transporter = buildTransporter(creds);
+  const transporter = await buildTransporter(creds);
 
   const extraHeaders: Record<string, string> = { ...(input.headers ?? {}) };
   if (input.listUnsubscribeHeader) {
@@ -77,7 +84,7 @@ export async function sendViaSmtp(creds: MailboxCredentials, input: SmtpSendInpu
 
 export async function testSmtpConnection(creds: MailboxCredentials): Promise<{ ok: boolean; error?: string }> {
   try {
-    const transporter = buildTransporter(creds);
+    const transporter = await buildTransporter(creds);
     await transporter.verify();
     transporter.close();
     return { ok: true };

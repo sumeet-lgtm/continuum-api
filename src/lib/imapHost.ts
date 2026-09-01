@@ -34,29 +34,49 @@ export const IMAP_PORT = 993;
  * failed in production days later.
  */
 export async function testImapConnection(creds: {
-  host: string; username: string; passwordEnc: string;
+  host: string; username: string; passwordEnc?: string | null; oauthTokenEnc?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
   try {
-    const { decryptValue } = await import('./crypto.js');
-    const { config } = await import('../config.js');
-    const secret = config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
-    const password = decryptValue(creds.passwordEnc, secret);
-
     const imap = await import('imap-simple');
+
+    const imapConfig = creds.oauthTokenEnc
+      ? await buildOAuthImapConfig(creds.username, creds.oauthTokenEnc)
+      : await buildPasswordImapConfig(creds.passwordEnc!);
+
+    // node-imap's own type defs mark `password` required even though the
+    // library itself treats it as optional whenever `xoauth2` is set
+    // (confirmed in its source — xoauth2 takes precedence when both are
+    // absent/present) — the cast works around that upstream type gap, not
+    // a real runtime requirement.
     const connection = await imap.connect({
       imap: {
         user: creds.username,
-        password,
         host: deriveImapHost(creds.host),
         port: IMAP_PORT,
         tls: true,
         tlsOptions: { rejectUnauthorized: false },
         authTimeout: 10000,
-      },
+        ...imapConfig,
+      } as import('imap').Config,
     });
     connection.end();
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'IMAP connection failed' };
   }
+}
+
+interface ImapAuthConfig { password?: string; xoauth2?: string }
+
+async function buildPasswordImapConfig(passwordEnc: string): Promise<ImapAuthConfig> {
+  const { decryptValue } = await import('./crypto.js');
+  const { config } = await import('../config.js');
+  const secret = config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
+  return { password: decryptValue(passwordEnc, secret) };
+}
+
+async function buildOAuthImapConfig(username: string, oauthTokenEnc: string): Promise<ImapAuthConfig> {
+  const { getOAuthAccessToken, buildXoauth2Token } = await import('./oauth/tokens.js');
+  const { accessToken } = await getOAuthAccessToken(oauthTokenEnc);
+  return { xoauth2: buildXoauth2Token(username, accessToken) };
 }

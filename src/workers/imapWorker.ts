@@ -65,8 +65,11 @@ async function pollMailboxes(): Promise<void> {
   if (!cfg['IMAP_POLL_ENABLED']) return;
 
   const mailboxes = await prisma.mailbox.findMany({
-    where: { status: 'active', passwordEnc: { not: null } },
-    select: { id: true, type: true, host: true, port: true, username: true, passwordEnc: true },
+    where: {
+      status: 'active',
+      OR: [{ passwordEnc: { not: null } }, { oauthTokenEnc: { not: null } }],
+    },
+    select: { id: true, type: true, host: true, port: true, username: true, passwordEnc: true, oauthTokenEnc: true },
   });
 
   for (const mailbox of mailboxes) {
@@ -77,20 +80,29 @@ async function pollMailboxes(): Promise<void> {
         break;
       }
 
-      const { decryptValue } = await import('../lib/crypto.js');
-      const mailboxSecret = config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
-      const password = decryptValue(mailbox.passwordEnc!, mailboxSecret);
+      let authConfig: { password?: string; xoauth2?: string };
+      if (mailbox.oauthTokenEnc) {
+        const { getOAuthAccessToken, buildXoauth2Token } = await import('../lib/oauth/tokens.js');
+        const { accessToken } = await getOAuthAccessToken(mailbox.oauthTokenEnc);
+        authConfig = { xoauth2: buildXoauth2Token(mailbox.username, accessToken) };
+      } else {
+        const { decryptValue } = await import('../lib/crypto.js');
+        const mailboxSecret = config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
+        authConfig = { password: decryptValue(mailbox.passwordEnc!, mailboxSecret) };
+      }
 
       const connection = await imap.connect({
+        // Cast: node-imap's types mark password required even when xoauth2
+        // is supplied instead (see imapHost.ts for the same note).
         imap: {
           user: mailbox.username,
-          password,
           host: deriveImapHost(mailbox.host ?? 'imap.gmail.com'),
           port: IMAP_PORT,
           tls: true,
           tlsOptions: { rejectUnauthorized: false },
           authTimeout: 10000,
-        },
+          ...authConfig,
+        } as import('imap').Config,
       });
 
       await connection.openBox('INBOX');
