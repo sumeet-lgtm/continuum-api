@@ -31,6 +31,7 @@ export const QUEUE_SEQUENCE = 'continuum-sequence';
 export const QUEUE_WARMUP = 'continuum-warmup';
 export const QUEUE_IMAP = 'continuum-imap';
 export const QUEUE_SEND = 'continuum-send';
+export const QUEUE_DISPOSABLE_LIST = 'continuum-disposable-list';
 
 // ─── Queue instances ──────────────────────────────────────────────────────────
 // Queues are lightweight producers — instantiated in the API server.
@@ -112,6 +113,16 @@ export const sendQueue = new Queue<SendJobPayload>(QUEUE_SEND, {
   },
 });
 
+export const disposableListQueue = new Queue(QUEUE_DISPOSABLE_LIST, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: { type: 'exponential', delay: 60000 },
+    removeOnComplete: { count: 20, age: 2592000 },
+    removeOnFail: { count: 20, age: 2592000 },
+  },
+});
+
 /**
  * Gracefully close all queue connections.
  * Call this during server shutdown.
@@ -120,6 +131,6 @@ export async function closeQueues(): Promise<void> {
   await Promise.all([
     bulkQueue.close(), monitorQueue.close(), webhookQueue.close(),
     campaignQueue.close(), sequenceQueue.close(), warmupQueue.close(),
-    imapQueue.close(), sendQueue.close(),
+    imapQueue.close(), sendQueue.close(), disposableListQueue.close(),
   ]);
 }

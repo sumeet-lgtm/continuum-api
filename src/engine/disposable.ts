@@ -23,7 +23,19 @@ let _loadAttempted = false;
 export function loadDisposableList(): void {
   if (_loadAttempted) return;
   _loadAttempted = true;
+  readBlocklistFromDisk();
+}
 
+/**
+ * Force a re-read of the blocklist file into memory, replacing whatever is
+ * currently loaded. Used by the scheduled refresh job so a freshly-fetched
+ * upstream list takes effect without a process restart.
+ */
+export function reloadDisposableList(): void {
+  readBlocklistFromDisk();
+}
+
+function readBlocklistFromDisk(): void {
   if (!fs.existsSync(BLOCKLIST_PATH)) {
     logger.warn(
       { path: BLOCKLIST_PATH },

@@ -6,93 +6,25 @@
  * Usage:
  *   npx tsx scripts/update-disposable-list.ts
  *
- * Fetches the latest list, merges with local additions, writes to data/disposable-domains.txt.
+ * Fetches the latest list, merges with local additions, writes to
+ * data/disposable-domains.txt. The same fetch/write logic also runs on a
+ * weekly schedule in production via src/workers/disposableListWorker.ts —
+ * this script is for on-demand manual refreshes.
  */
 
-import fs from 'node:fs';
-import path from 'node:path';
-import https from 'node:https';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const OUTPUT_PATH = path.resolve(__dirname, '../data/disposable-domains.txt');
-
-const UPSTREAM_URL =
-  'https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/master/disposable_email_blocklist.conf';
-
-// Local additions that are not in the upstream list
-const LOCAL_ADDITIONS: string[] = [
-  'mailsac.com',
-  'mailsac.org',
-  'maildrop.cc',
-  'tempmail.com',
-  'tempmail.net',
-  'temp-mail.io',
-];
-
-function fetchText(url: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    https
-      .get(url, (res) => {
-        if (res.statusCode === 301 || res.statusCode === 302) {
-          const location = res.headers.location;
-          if (!location) return reject(new Error('Redirect with no Location header'));
-          resolve(fetchText(location));
-          return;
-        }
-        if (res.statusCode !== 200) {
-          return reject(new Error(`HTTP ${res.statusCode ?? 'unknown'} from ${url}`));
-        }
-
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk: Buffer) => chunks.push(chunk));
-        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-        res.on('error', reject);
-      })
-      .on('error', reject);
-  });
-}
+import { refreshDisposableList } from '../src/lib/disposableListRefresh.js';
 
 async function main(): Promise<void> {
-  console.log(`Fetching blocklist from upstream…`);
-  console.log(`  ${UPSTREAM_URL}`);
+  console.log('Fetching blocklist from upstream…');
 
-  let upstream: string;
   try {
-    upstream = await fetchText(UPSTREAM_URL);
+    const { domains } = await refreshDisposableList();
+    console.log(`\n✅ Blocklist updated`);
+    console.log(`   Domains: ${domains}`);
   } catch (err) {
-    console.error('Failed to fetch upstream list:', err);
+    console.error('Failed to refresh blocklist:', err);
     process.exit(1);
   }
-
-  const upstreamDomains = upstream
-    .split('\n')
-    .map((line) => line.trim().toLowerCase())
-    .filter((line) => line.length > 0 && !line.startsWith('#'));
-
-  console.log(`  Fetched ${upstreamDomains.length} domains from upstream`);
-
-  // Merge with local additions
-  const merged = new Set([...upstreamDomains, ...LOCAL_ADDITIONS]);
-  const sorted = [...merged].sort();
-
-  const header = [
-    '# Continuum — disposable email domain blocklist',
-    '# Format: one domain per line, lowercase',
-    `# Updated: ${new Date().toISOString()}`,
-    '# Source: https://github.com/disposable-email-domains/disposable-email-domains',
-    '',
-  ].join('\n');
-
-  const content = header + sorted.join('\n') + '\n';
-
-  // Ensure data directory exists
-  fs.mkdirSync(path.dirname(OUTPUT_PATH), { recursive: true });
-  fs.writeFileSync(OUTPUT_PATH, content, 'utf-8');
-
-  console.log(`\n✅ Blocklist updated`);
-  console.log(`   Domains: ${sorted.length}`);
-  console.log(`   Path:    ${OUTPUT_PATH}`);
 }
 
 void main();

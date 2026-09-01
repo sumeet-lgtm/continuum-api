@@ -25,13 +25,14 @@
  */
 
 import { Worker, Queue, type Job } from 'bullmq';
-import { redisConnection, QUEUE_MONITOR, webhookQueue } from '../lib/queue.js';
+import { redisConnection, QUEUE_MONITOR, webhookQueue, disposableListQueue } from '../lib/queue.js';
 import { redis } from '../lib/redis.js';
 import { prisma } from '../lib/prisma.js';
 import { verifyEmail } from '../engine/index.js';
 import { getPlanLimit, incrementUsageBy } from '../plugins/usageMeter.js';
 import { runEmailSweep } from './emailSweep.js';
 import { loadDisposableList } from '../engine/disposable.js';
+import { startDisposableListWorker, scheduleDisposableListRefresh } from './disposableListWorker.js';
 import { config } from '../config.js';
 import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
 import { logger } from '../lib/logger.js';
@@ -474,9 +475,18 @@ function startMonitorWorker(): void {
   setInterval(() => { void runEmailSweep(); }, 3_600_000);
   void runEmailSweep();
 
+  // Disposable-domain blocklist — refresh from upstream weekly so it doesn't
+  // go stale (this worker already owns loadDisposableList() at boot above).
+  // Idempotent (fixed jobId), safe to call on every restart.
+  const disposableListWorker = startDisposableListWorker();
+  void scheduleDisposableListRefresh(disposableListQueue).catch((err: unknown) => {
+    logger.error({ err }, 'Failed to schedule disposable list refresh');
+  });
+
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Monitor worker shutting down');
     await worker.close();
+    await disposableListWorker.close();
     await monitorQueue.close();
     await prisma.$disconnect();
     process.exit(0);
