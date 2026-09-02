@@ -126,6 +126,41 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  // PATCH /v1/api-keys/:id/quota — override monthly verification quota for a key
+  fastify.patch(
+    '/api-keys/:id/quota',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const parentKey = request.apiKey;
+
+      if (parentKey.permission !== 'full_access') {
+        throw Errors.forbidden('Only full_access keys can adjust quotas.');
+      }
+
+      const body = request.body as { monthlyLimit?: unknown };
+      const monthlyLimit = Number(body?.monthlyLimit);
+      if (!Number.isInteger(monthlyLimit) || monthlyLimit < 0 || monthlyLimit > 10_000_000) {
+        throw Errors.validationFailed([{ field: 'monthlyLimit', message: 'Must be an integer between 0 and 10,000,000 (0 = unlimited)' }]);
+      }
+
+      const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
+      const target = await prisma.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } });
+      if (!target) throw Errors.notFound('API key not found.');
+      if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
+        throw Errors.forbidden('Not authorized to adjust this key.');
+      }
+
+      await prisma.apiKey.update({ where: { id }, data: { monthlyLimit } });
+
+      return reply.status(200).send({
+        id,
+        monthlyLimit,
+        message: monthlyLimit === 0 ? 'Monthly quota cleared — unlimited.' : `Monthly quota set to ${monthlyLimit.toLocaleString()} verifications.`,
+      });
+    },
+  );
+
   // PATCH /v1/api-keys/:id/rate-limit — override rate limit for a key
   fastify.patch(
     '/api-keys/:id/rate-limit',
