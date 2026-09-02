@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, useEffect, useRef } from "react";
-import { CheckCircle2, XCircle, MinusCircle } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { CheckCircle2, XCircle, MinusCircle, Search } from "lucide-react";
 import { API_BASE } from "@/lib/supabase";
 import { useApiKey } from "@/lib/use-api-key";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -21,11 +21,16 @@ interface VerifyResponse {
   [k: string]: unknown;
 }
 
-interface HistoryItem {
+interface VerifRow {
+  id: string;
   email: string;
+  domain: string;
   status: string;
-  score: number | undefined;
-  at: string;
+  subStatus: string | null;
+  flags: { disposable: boolean | null; roleAccount: boolean | null; catchAll: boolean | null };
+  score: number | null;
+  durationMs: number | null;
+  checkedAt: string;
 }
 
 function ScoreRing({ score, status }: { score: number; status?: string }) {
@@ -89,7 +94,38 @@ function VerifyPage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<VerifyResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
+
+  // Verification history (API-backed)
+  const [verifRows, setVerifRows] = useState<VerifRow[]>([]);
+  const [verifTotal, setVerifTotal] = useState(0);
+  const [verifPage, setVerifPage] = useState(1);
+  const [verifLoading, setVerifLoading] = useState(false);
+  const [verifStatus, setVerifStatus] = useState("");
+  const [verifQ, setVerifQ] = useState("");
+  const [verifQInput, setVerifQInput] = useState("");
+
+  const loadVerifs = useCallback(async (page: number, status: string, q: string) => {
+    if (!apiKey?.keyRaw) return;
+    setVerifLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: "20" });
+      if (status) params.set("status", status);
+      if (q) params.set("q", q);
+      const res = await fetch(`${API_BASE}/v1/verifications?${params}`, {
+        headers: { "X-API-Key": apiKey.keyRaw },
+      });
+      if (!res.ok) return;
+      const data = await res.json() as { data: VerifRow[]; pagination: { total: number } };
+      setVerifRows(data.data ?? []);
+      setVerifTotal(data.pagination?.total ?? 0);
+    } catch { /* non-fatal */ } finally {
+      setVerifLoading(false);
+    }
+  }, [apiKey]);
+
+  useEffect(() => {
+    void loadVerifs(verifPage, verifStatus, verifQ);
+  }, [apiKey, verifPage, verifStatus, verifQ, loadVerifs]);
 
   // Note: full key not available client-side after creation. We send the prefix —
   // adjust if your gateway expects the full key. UX still demonstrates the flow.
@@ -113,9 +149,9 @@ function VerifyPage() {
         setError((data as { error?: string }).error ?? `Request failed (${res.status})`);
       } else {
         setResult(data);
-        setHistory((h) =>
-          [{ email, status: data.status ?? "unknown", score: data.score, at: new Date().toISOString() }, ...h].slice(0, 5),
-        );
+        // Reload history to show new result (slight delay for DB write)
+        setTimeout(() => void loadVerifs(1, verifStatus, verifQ), 500);
+        setVerifPage(1);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
@@ -265,25 +301,90 @@ function VerifyPage() {
         </div>
       )}
 
-      <div className="rounded-lg border border-border bg-card">
-        <div className="px-5 py-3 border-b border-border">
-          <h2 className="text-sm font-medium">History (this session)</h2>
+      <div className="rounded-lg border border-border bg-card overflow-hidden">
+        <div className="px-5 py-3 border-b border-border flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="text-sm font-medium">Verification History</h2>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                className="h-7 text-xs pl-7 w-48"
+                placeholder="Search email…"
+                value={verifQInput}
+                onChange={(e) => setVerifQInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { setVerifQ(verifQInput); setVerifPage(1); } }}
+              />
+            </div>
+            <select
+              className="h-7 text-xs rounded-md border border-input bg-background px-2"
+              value={verifStatus}
+              onChange={(e) => { setVerifStatus(e.target.value); setVerifPage(1); }}
+            >
+              <option value="">All</option>
+              <option value="valid">Valid</option>
+              <option value="invalid">Invalid</option>
+              <option value="risky">Risky</option>
+              <option value="unknown">Unknown</option>
+            </select>
+          </div>
         </div>
-        {history.length === 0 ? (
-          <div className="p-6 text-sm text-muted-foreground">Nothing yet.</div>
+
+        {verifLoading ? (
+          <div className="divide-y divide-border">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="flex items-center gap-4 px-5 py-3">
+                <Skeleton className="h-3 w-48 font-mono" />
+                <Skeleton className="h-5 w-16 rounded-full" />
+                <Skeleton className="h-3 w-8 ml-auto" />
+              </div>
+            ))}
+          </div>
+        ) : verifRows.length === 0 ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">No verifications yet.</div>
         ) : (
-          <table className="w-full text-sm">
-            <tbody>
-              {history.map((h, i) => (
-                <tr key={i} className="border-b border-border last:border-0">
-                  <td className="px-5 py-2.5 font-mono text-xs">{h.email}</td>
-                  <td className="px-5 py-2.5"><StatusBadge status={h.status} /></td>
-                  <td className="px-5 py-2.5 tabular-nums">{h.score ?? "—"}</td>
-                  <td className="px-5 py-2.5 text-xs text-muted-foreground">{new Date(h.at).toLocaleTimeString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[560px]">
+                <thead>
+                  <tr className="text-left text-xs text-muted-foreground border-b border-border bg-muted/40">
+                    <th className="px-5 py-2 font-medium">Email</th>
+                    <th className="px-5 py-2 font-medium">Status</th>
+                    <th className="px-5 py-2 font-medium">Score</th>
+                    <th className="px-5 py-2 font-medium">Flags</th>
+                    <th className="px-5 py-2 font-medium">Time</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {verifRows.map((v) => (
+                    <tr key={v.id} className="hover:bg-muted/20 transition-colors">
+                      <td className="px-5 py-2.5 font-mono text-xs truncate max-w-[220px]">{v.email}</td>
+                      <td className="px-5 py-2.5"><StatusBadge status={v.status} /></td>
+                      <td className="px-5 py-2.5 tabular-nums text-xs">{v.score ?? "—"}</td>
+                      <td className="px-5 py-2.5">
+                        <div className="flex gap-1 flex-wrap">
+                          {v.flags.disposable && <span className="text-[10px] rounded-full bg-[oklch(0.96_0.04_27)] text-[oklch(0.42_0.18_27)] px-1.5 py-0.5 border border-[oklch(0.85_0.12_27)]">disposable</span>}
+                          {v.flags.roleAccount && <span className="text-[10px] rounded-full bg-muted text-muted-foreground px-1.5 py-0.5 border border-border">role</span>}
+                          {v.flags.catchAll && <span className="text-[10px] rounded-full bg-muted text-muted-foreground px-1.5 py-0.5 border border-border">catch-all</span>}
+                        </div>
+                      </td>
+                      <td className="px-5 py-2.5 text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+                        {new Date(v.checkedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {verifTotal > 20 && (
+              <div className="px-5 py-3 border-t border-border flex items-center justify-between text-xs text-muted-foreground">
+                <span>{verifTotal.toLocaleString()} total · page {verifPage} of {Math.ceil(verifTotal / 20)}</span>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" className="h-7 text-xs" disabled={verifPage <= 1} onClick={() => setVerifPage((p) => p - 1)}>Prev</Button>
+                  <Button variant="outline" size="sm" className="h-7 text-xs" disabled={verifPage * 20 >= verifTotal} onClick={() => setVerifPage((p) => p + 1)}>Next</Button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
