@@ -4,7 +4,7 @@ import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { StatusBadge } from "@/components/StatusBadge";
-import { BarChart3, TrendingUp, MousePointerClick, AlertCircle, GitBranch, Megaphone, Mail, ChevronDown, ChevronRight, Calendar } from "lucide-react";
+import { BarChart3, TrendingUp, MousePointerClick, AlertCircle, GitBranch, Megaphone, Mail, ChevronDown, ChevronRight, Calendar, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -246,6 +246,7 @@ function AnalyticsPage() {
               <StatCard label="Bounce rate" value={pct(stats.bounce_rate)} color={stats.bounce_rate > 5 ? "text-[oklch(0.58_0.22_27)]" : undefined} icon={AlertCircle} />
               <StatCard label="Complaints" value={stats.complained.toLocaleString()} color={stats.complained > 0 ? "text-[oklch(0.58_0.22_27)]" : undefined} />
             </div>
+            <ReputationPanel bounce_rate={stats.bounce_rate} complaint_rate={stats.complaint_rate} sent={stats.sent} />
             <div className="rounded-lg border border-border bg-card p-5">
               <h2 className="text-sm font-medium mb-4">Daily volume — last 30 days</h2>
               <div className="h-52">
@@ -428,6 +429,113 @@ function AnalyticsPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ReputationMeter({
+  label, value, warn, critical, unit, ispNote,
+}: { label: string; value: number; warn: number; critical: number; unit: string; ispNote: string }) {
+  const pctOf = (v: number, max: number) => Math.min(100, (v / max) * 100);
+  // Scale: bar spans 0 → critical*1.5
+  const max = critical * 1.5;
+  const warnPct = pctOf(warn, max);
+  const critPct = pctOf(critical, max);
+  const valuePct = pctOf(value, max);
+
+  const zone = value >= critical ? "critical" : value >= warn ? "warn" : "good";
+  const zoneColor = zone === "critical"
+    ? "oklch(0.58 0.22 27)" : zone === "warn"
+    ? "oklch(0.78 0.16 75)" : "oklch(0.55 0.16 145)";
+  const zoneBg = zone === "critical"
+    ? "bg-[oklch(0.96_0.05_27)]" : zone === "warn"
+    ? "bg-[oklch(0.97_0.05_75)]" : "bg-[oklch(0.96_0.04_145)]";
+  const zoneText = zone === "critical"
+    ? "text-[oklch(0.45_0.20_27)]" : zone === "warn"
+    ? "text-[oklch(0.50_0.14_75)]" : "text-[oklch(0.35_0.15_145)]";
+  const zoneLabel = zone === "critical" ? "Critical" : zone === "warn" ? "Warning" : "Good";
+
+  return (
+    <div className="flex-1 min-w-0">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm font-mono font-semibold tabular-nums" style={{ color: zoneColor }}>
+            {value.toFixed(value < 1 ? 3 : 1)}{unit}
+          </span>
+          <span className={`text-[10px] rounded-full px-1.5 py-0.5 font-medium ${zoneBg} ${zoneText}`}>{zoneLabel}</span>
+        </div>
+      </div>
+      <div className="relative h-2 rounded-full bg-muted overflow-hidden">
+        {/* Green zone */}
+        <div className="absolute inset-y-0 left-0 rounded-full"
+          style={{ width: `${warnPct}%`, background: "oklch(0.55 0.16 145 / 0.35)" }} />
+        {/* Yellow zone */}
+        <div className="absolute inset-y-0 rounded-full"
+          style={{ left: `${warnPct}%`, width: `${critPct - warnPct}%`, background: "oklch(0.78 0.16 75 / 0.35)" }} />
+        {/* Red zone */}
+        <div className="absolute inset-y-0 rounded-full"
+          style={{ left: `${critPct}%`, width: `${100 - critPct}%`, background: "oklch(0.58 0.22 27 / 0.35)" }} />
+        {/* Value needle */}
+        <div className="absolute inset-y-0 left-0 rounded-full transition-all duration-500"
+          style={{ width: `${valuePct}%`, background: zoneColor }} />
+        {/* Threshold ticks */}
+        <div className="absolute inset-y-0 w-px bg-background/60" style={{ left: `${warnPct}%` }} />
+        <div className="absolute inset-y-0 w-px bg-background/60" style={{ left: `${critPct}%` }} />
+      </div>
+      <div className="flex justify-between mt-1 text-[10px] text-muted-foreground">
+        <span>0{unit}</span>
+        <span className="text-[oklch(0.55_0.14_75)]">{warn}{unit} warn</span>
+        <span className="text-[oklch(0.58_0.18_27)]">{critical}{unit} critical</span>
+      </div>
+      <p className="text-[10px] text-muted-foreground mt-0.5">{ispNote}</p>
+    </div>
+  );
+}
+
+function ReputationPanel({ bounce_rate, complaint_rate, sent }: { bounce_rate: number; complaint_rate: number; sent: number }) {
+  const overallZone = bounce_rate >= 5 || complaint_rate >= 0.3
+    ? "critical" : bounce_rate >= 2 || complaint_rate >= 0.08
+    ? "warn" : "good";
+  const overallBg = overallZone === "critical" ? "bg-[oklch(0.96_0.05_27)] border-[oklch(0.88_0.10_27)]"
+    : overallZone === "warn" ? "bg-[oklch(0.97_0.05_75)] border-[oklch(0.88_0.12_75)]"
+    : "bg-[oklch(0.96_0.04_145)] border-[oklch(0.88_0.10_145)]";
+  const overallText = overallZone === "critical" ? "text-[oklch(0.45_0.20_27)]"
+    : overallZone === "warn" ? "text-[oklch(0.45_0.14_75)]"
+    : "text-[oklch(0.35_0.15_145)]";
+  const overallLabel = overallZone === "critical" ? "At risk — action required"
+    : overallZone === "warn" ? "Monitor closely"
+    : "Healthy";
+  const tooFewSends = sent < 50;
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium">Sending Reputation</h2>
+        </div>
+        {tooFewSends ? (
+          <span className="text-[10px] text-muted-foreground bg-muted rounded-full px-2 py-0.5">Need ≥50 sends for accurate scoring</span>
+        ) : (
+          <span className={`text-[10px] rounded-full px-2.5 py-1 font-medium border ${overallBg} ${overallText}`}>{overallLabel}</span>
+        )}
+      </div>
+      <div className="flex flex-col sm:flex-row gap-6">
+        <ReputationMeter
+          label="Bounce rate"
+          value={bounce_rate}
+          warn={2} critical={5} unit="%"
+          ispNote="Gmail blocks at >5% · Yahoo flags above 4% · Best practice: keep below 2%"
+        />
+        <div className="hidden sm:block w-px bg-border self-stretch" />
+        <ReputationMeter
+          label="Complaint rate"
+          value={complaint_rate}
+          warn={0.08} critical={0.3} unit="%"
+          ispNote="Gmail blocks at >0.1% · Yahoo hard-blocks at >0.3% · Target: below 0.08%"
+        />
+      </div>
     </div>
   );
 }
