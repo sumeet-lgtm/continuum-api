@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Plus, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
+import { Plus, CheckCircle2, XCircle, RefreshCw, KeyRound, Copy, Check } from "lucide-react";
 import { toast } from "sonner";
 import { API_BASE } from "@/lib/supabase";
 import { useApiKey } from "@/lib/use-api-key";
@@ -75,6 +75,9 @@ function WebhooksPage() {
   const [selected, setSelected] = useState<string[]>([EVENTS[0].value]);
   const [active, setActive] = useState<Webhook | null>(null);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+  const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
+  const [rotating, setRotating] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = async () => {
     if (!apiKey?.keyRaw) {
@@ -194,6 +197,29 @@ function WebhooksPage() {
     setDeliveries(((data as { data?: Delivery[] }).data ?? data ?? []) as Delivery[]);
   };
 
+  const rotateSecret = async (w: Webhook) => {
+    if (!apiKey?.keyRaw) return;
+    if (!confirm(`Rotate the signing secret for ${w.url}? Your current secret will stop working immediately.`)) return;
+    setRotating(w.id);
+    try {
+      const res = await fetch(`${API_BASE}/v1/webhooks/${w.id}/rotate-secret`, {
+        method: "POST",
+        headers: { "X-API-Key": apiKey.keyRaw },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message ?? "Rotation failed");
+      }
+      const data = await res.json() as { secret: string };
+      setRotatedSecret(data.secret);
+      setCopied(false);
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setRotating(null);
+    }
+  };
+
   const retryDelivery = async (webhookId: string, deliveryId: string) => {
     if (!apiKey?.keyRaw) return;
     try {
@@ -269,9 +295,14 @@ function WebhooksPage() {
                       {w.successCount ?? 0} success · {w.failureCount ?? 0} failed
                     </p>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
                     <Switch checked={w.isActive} onCheckedChange={() => toggleActive(w)} />
-                    <Button variant="ghost" size="sm" onClick={() => sendPing(w)}>Test ping</Button>
+                    <Button variant="ghost" size="sm" onClick={() => sendPing(w)}>Ping</Button>
+                    <Button variant="ghost" size="sm" title="Rotate signing secret"
+                      onClick={() => rotateSecret(w)} disabled={rotating === w.id}>
+                      <KeyRound className={`h-3.5 w-3.5 mr-1 ${rotating === w.id ? "animate-spin" : ""}`} />
+                      Rotate
+                    </Button>
                     <Button variant="ghost" size="sm" onClick={() => remove(w)}>Delete</Button>
                   </div>
                 </div>
@@ -368,6 +399,39 @@ function verifySignature(rawBody, secret, signatureHeader) {
 }`}
         </code>
       </div>
+
+      {/* Rotated secret one-time reveal */}
+      <Dialog open={!!rotatedSecret} onOpenChange={(v) => { if (!v) setRotatedSecret(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New signing secret</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Your webhook signing secret has been rotated. Copy it now — it will not be shown again.
+              Update your <code className="bg-muted rounded px-1">X-Continuum-Signature</code> verification logic with the new value.
+            </p>
+            <div className="flex items-center gap-2 rounded-md border border-border bg-muted p-3">
+              <code className="flex-1 text-xs font-mono break-all select-all">{rotatedSecret}</code>
+              <button
+                onClick={() => { navigator.clipboard.writeText(rotatedSecret ?? ""); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+                className="shrink-0 rounded p-1.5 hover:bg-background transition-colors"
+                title="Copy"
+              >
+                {copied ? <Check className="h-4 w-4 text-[oklch(0.55_0.16_145)]" /> : <Copy className="h-4 w-4 text-muted-foreground" />}
+              </button>
+            </div>
+            <p className="text-xs text-[oklch(0.58_0.22_27)]">
+              The old secret is now invalid. Any webhook receiver still using it will reject signatures.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setRotatedSecret(null)} disabled={!copied}>
+              {copied ? "Done" : "Copy secret first"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
