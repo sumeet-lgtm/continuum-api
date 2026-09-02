@@ -36,6 +36,7 @@ import { Route as DashboardIpRouteImport } from './routes/dashboard.ip'
 import { Route as DashboardLeadsRouteImport } from './routes/dashboard.leads'
 import { Route as DashboardListsRouteImport } from './routes/dashboard.lists'
 import { Route as DashboardMailboxesRouteImport } from './routes/dashboard.mailboxes'
+import { Route as DashboardMigrateRouteImport } from './routes/dashboard.migrate'
 import { Route as DashboardMessagesRouteImport } from './routes/dashboard.messages'
 import { Route as DashboardMonitoringRouteImport } from './routes/dashboard.monitoring'
 import { Route as DashboardOrganizationRouteImport } from './routes/dashboard.organization'
@@ -190,6 +191,11 @@ const DashboardMessagesRoute = DashboardMessagesRouteImport.update({
   path: '/messages',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardMigrateRoute = DashboardMigrateRouteImport.update({
+  id: '/migrate',
+  path: '/migrate',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardMonitoringRoute = DashboardMonitoringRouteImport.update({
   id: '/monitoring',
   path: '/monitoring',
@@ -279,6 +285,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/lists': typeof DashboardListsRoute
   '/dashboard/mailboxes': typeof DashboardMailboxesRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
+  '/dashboard/migrate': typeof DashboardMigrateRoute
   '/dashboard/monitoring': typeof DashboardMonitoringRoute
   '/dashboard/organization': typeof DashboardOrganizationRoute
   '/dashboard/phone': typeof DashboardPhoneRoute
@@ -320,6 +327,7 @@ export interface FileRoutesByTo {
   '/dashboard/lists': typeof DashboardListsRoute
   '/dashboard/mailboxes': typeof DashboardMailboxesRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
+  '/dashboard/migrate': typeof DashboardMigrateRoute
   '/dashboard/monitoring': typeof DashboardMonitoringRoute
   '/dashboard/organization': typeof DashboardOrganizationRoute
   '/dashboard/phone': typeof DashboardPhoneRoute
@@ -363,6 +371,7 @@ export interface FileRoutesById {
   '/dashboard/lists': typeof DashboardListsRoute
   '/dashboard/mailboxes': typeof DashboardMailboxesRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
+  '/dashboard/migrate': typeof DashboardMigrateRoute
   '/dashboard/monitoring': typeof DashboardMonitoringRoute
   '/dashboard/organization': typeof DashboardOrganizationRoute
   '/dashboard/phone': typeof DashboardPhoneRoute
@@ -407,6 +416,7 @@ export interface FileRouteTypes {
     | '/dashboard/lists'
     | '/dashboard/mailboxes'
     | '/dashboard/messages'
+    | '/dashboard/migrate'
     | '/dashboard/monitoring'
     | '/dashboard/organization'
     | '/dashboard/phone'
@@ -448,6 +458,7 @@ export interface FileRouteTypes {
     | '/dashboard/lists'
     | '/dashboard/mailboxes'
     | '/dashboard/messages'
+    | '/dashboard/migrate'
     | '/dashboard/monitoring'
     | '/dashboard/organization'
     | '/dashboard/phone'
@@ -490,6 +501,7 @@ export interface FileRouteTypes {
     | '/dashboard/lists'
     | '/dashboard/mailboxes'
     | '/dashboard/messages'
+    | '/dashboard/migrate'
     | '/dashboard/monitoring'
     | '/dashboard/organization'
     | '/dashboard/phone'
@@ -714,6 +726,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardMessagesRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/migrate': {
+      id: '/dashboard/migrate'
+      path: '/migrate'
+      fullPath: '/dashboard/migrate'
+      preLoaderRoute: typeof DashboardMigrateRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/monitoring': {
       id: '/dashboard/monitoring'
       path: '/monitoring'
@@ -821,6 +840,7 @@ interface DashboardRouteChildren {
   DashboardListsRoute: typeof DashboardListsRoute
   DashboardMailboxesRoute: typeof DashboardMailboxesRoute
   DashboardMessagesRoute: typeof DashboardMessagesRoute
+  DashboardMigrateRoute: typeof DashboardMigrateRoute
   DashboardMonitoringRoute: typeof DashboardMonitoringRoute
   DashboardOrganizationRoute: typeof DashboardOrganizationRoute
   DashboardPhoneRoute: typeof DashboardPhoneRoute
@@ -856,6 +876,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardListsRoute: DashboardListsRoute,
   DashboardMailboxesRoute: DashboardMailboxesRoute,
   DashboardMessagesRoute: DashboardMessagesRoute,
+  DashboardMigrateRoute: DashboardMigrateRoute,
   DashboardMonitoringRoute: DashboardMonitoringRoute,
   DashboardOrganizationRoute: DashboardOrganizationRoute,
   DashboardPhoneRoute: DashboardPhoneRoute,

@@ -29,6 +29,7 @@ import {
   SlidersHorizontal,
   Layers,
   Zap,
+  ArrowRightLeft,
   Building2,
   ShieldCheck,
   Wrench,
@@ -78,6 +79,7 @@ const NAV: NavItem[] = [
       { to: "/dashboard/lists", label: "Mailing Lists", icon: Users },
       { to: "/dashboard/contacts", label: "Contacts", icon: UserRound },
       { to: "/dashboard/segments", label: "Segments", icon: SlidersHorizontal },
+      { to: "/dashboard/migrate", label: "Migrate", icon: ArrowRightLeft },
     ],
   },
   {
