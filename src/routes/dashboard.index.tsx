@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Area, AreaChart } from "recharts";
-import { Sparkles, KeyRound, Mail, Activity, CheckCircle2, Circle, ArrowRight, Send, GitBranch } from "lucide-react";
+import { Sparkles, KeyRound, Mail, Activity, CheckCircle2, Circle, ArrowRight, Send, GitBranch, ShieldAlert } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -81,6 +81,7 @@ function Overview() {
   const [recent, setRecent] = useState<HistoryItem[]>([]);
   const [chartData, setChartData] = useState<{ date: string; count: number }[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sendHealth, setSendHealth] = useState<{ bounce_rate: number; complaint_rate: number; sent: number } | null>(null);
 
   useEffect(() => {
     if (!primaryKey?.keyRaw) {
@@ -90,11 +91,14 @@ function Overview() {
     (async () => {
       setLoading(true);
       try {
-        const [usageRes, histRes] = await Promise.allSettled([
+        const dateFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const [usageRes, histRes, healthRes] = await Promise.allSettled([
           api.withKey.get<UsageData>("/v1/usage", primaryKey.keyRaw!),
           api.withKey.get<{ history: HistoryItem[]; total: number }>("/v1/history?page=1&limit=10", primaryKey.keyRaw!),
+          api.withKey.get<{ bounce_rate: number; complaint_rate: number; sent: number }>(`/v1/analytics/sends?date_from=${dateFrom}`, primaryKey.keyRaw!),
         ]);
         if (usageRes.status === "fulfilled") setUsage(usageRes.value);
+        if (healthRes.status === "fulfilled") setSendHealth(healthRes.value);
         if (histRes.status === "fulfilled") {
           const rows = histRes.value.history ?? [];
           setRecent(rows);
@@ -193,6 +197,58 @@ function Overview() {
           <p className="mt-2 text-xs text-muted-foreground">
             Resets {new Date(usage.verifications.resetsAt).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}
           </p>
+        )}
+      </div>
+
+      {/* Send quota + reputation health row */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h2 className="text-sm font-medium">Email sends</h2>
+            <span className="text-sm tabular-nums text-muted-foreground">{sendUsed.toLocaleString()} / {sendLimit.toLocaleString()}</span>
+          </div>
+          {(() => {
+            const sendPct = sendLimit > 0 ? Math.min(100, (sendUsed / sendLimit) * 100) : 0;
+            return (
+              <>
+                <div className="h-2 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className={`h-full transition-all ${sendPct >= 100 ? "bg-[oklch(0.58_0.22_27)]" : sendPct >= 80 ? "bg-[oklch(0.78_0.16_75)]" : "bg-foreground"}`}
+                    style={{ width: `${sendPct}%` }}
+                  />
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {sendPct.toFixed(0)}% of monthly send quota used
+                </p>
+              </>
+            );
+          })()}
+        </div>
+
+        {sendHealth && sendHealth.sent >= 10 && (
+          <div className="rounded-lg border border-border bg-card p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <ShieldAlert className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-medium">Sending health (30d)</h2>
+            </div>
+            <div className="flex gap-6">
+              {[
+                { label: "Bounce rate", value: sendHealth.bounce_rate, warn: 2, critical: 5 },
+                { label: "Complaint rate", value: sendHealth.complaint_rate, warn: 0.08, critical: 0.3 },
+              ].map(({ label, value, warn, critical }) => {
+                const isWarn = value >= warn && value < critical;
+                const isCrit = value >= critical;
+                const color = isCrit ? "text-[oklch(0.58_0.22_27)]" : isWarn ? "text-[oklch(0.65_0.14_75)]" : "text-[oklch(0.55_0.16_145)]";
+                return (
+                  <div key={label}>
+                    <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
+                    <p className={`text-xl font-semibold tabular-nums ${color}`}>{value.toFixed(value < 1 ? 3 : 1)}%</p>
+                    <p className={`text-[10px] mt-0.5 ${color}`}>{isCrit ? "Critical" : isWarn ? "Warning" : "Good"}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         )}
       </div>
 
