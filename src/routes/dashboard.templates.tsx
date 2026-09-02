@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Trash2, Edit2, FileText, Eye, X } from "lucide-react";
+import { Plus, Trash2, Edit2, FileText, Eye, X, ChevronDown, ChevronUp } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/templates")({
   head: () => ({ meta: [{ title: "Templates — Continuum API" }] }),
@@ -14,6 +14,151 @@ export const Route = createFileRoute("/dashboard/templates")({
 });
 
 interface Template { id: string; name: string; subject: string; htmlBody?: string; createdAt: string; }
+
+function extractVars(html: string, subject: string): string[] {
+  const matches = new Set<string>();
+  const re = /\{\{(\w+)\}\}/g;
+  let m;
+  for (const src of [html, subject]) {
+    while ((m = re.exec(src)) !== null) matches.add(m[1]!);
+    re.lastIndex = 0;
+  }
+  return [...matches];
+}
+
+function applyVars(text: string, vars: Record<string, string>): string {
+  return text.replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? `{{${k}}}`);
+}
+
+function TemplatePreviewModal({ template, onClose }: { template: { id: string; name: string; subject: string; htmlBody?: string }; onClose: () => void }) {
+  const { primaryKey } = useAuth();
+  const html = template.htmlBody ?? "";
+  const vars = extractVars(html, template.subject);
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(vars.map((v) => [v, ""]))
+  );
+  const [showVars, setShowVars] = useState(vars.length > 0);
+  const [testEmail, setTestEmail] = useState("");
+  const [testFrom, setTestFrom] = useState("");
+  const [sendingTest, setSendingTest] = useState(false);
+  const [showTest, setShowTest] = useState(false);
+
+  const sendTest = async () => {
+    if (!primaryKey?.keyRaw || !testEmail || !testFrom) return;
+    setSendingTest(true);
+    try {
+      await fetch("https://api.continuumapi.com/v1/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
+        body: JSON.stringify({
+          to: [testEmail],
+          from: testFrom,
+          template_id: template.id,
+          variables: values,
+          test: false,
+        }),
+      });
+      toast.success(`Test email sent to ${testEmail}`);
+      setShowTest(false);
+    } catch (e: unknown) {
+      toast.error((e as Error).message ?? "Failed to send");
+    } finally {
+      setSendingTest(false);
+    }
+  };
+
+  const renderedHtml = applyVars(html, values);
+  const renderedSubject = applyVars(template.subject, values);
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm">
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-card shrink-0">
+        <div className="min-w-0">
+          <p className="text-sm font-medium truncate">{template.name}</p>
+          <p className="text-xs text-muted-foreground truncate">{renderedSubject || template.subject}</p>
+        </div>
+        <div className="flex items-center gap-2 ml-4 shrink-0">
+          <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => setShowTest((v) => !v)}>
+            <Eye className="h-3.5 w-3.5" />
+            Send test
+          </Button>
+          <button onClick={onClose} className="rounded p-1.5 hover:bg-muted transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Send test panel */}
+      {showTest && (
+        <div className="shrink-0 border-b border-border bg-card px-5 py-4 space-y-3">
+          <p className="text-xs font-medium">Send a test email with the current variables</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">From address *</Label>
+              <Input className="h-7 text-xs" placeholder="noreply@yourapp.com" value={testFrom} onChange={(e) => setTestFrom(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Send to *</Label>
+              <Input className="h-7 text-xs" placeholder="you@example.com" value={testEmail} onChange={(e) => setTestEmail(e.target.value)} />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" className="h-7 text-xs" onClick={sendTest} disabled={sendingTest || !testEmail || !testFrom}>
+              {sendingTest ? "Sending…" : "Send test email"}
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowTest(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+
+      {/* Variable panel */}
+      {vars.length > 0 && (
+        <div className="shrink-0 border-b border-border bg-muted/30">
+          <button
+            onClick={() => setShowVars((v) => !v)}
+            className="w-full flex items-center justify-between px-5 py-2.5 text-xs font-medium hover:bg-muted/40 transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              Test variables
+              <span className="rounded-full bg-foreground/10 px-1.5 py-0.5 text-[10px]">{vars.length}</span>
+            </span>
+            {showVars ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </button>
+          {showVars && (
+            <div className="px-5 pb-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {vars.map((v) => (
+                <div key={v} className="space-y-1">
+                  <label className="text-[10px] text-muted-foreground font-mono">{`{{${v}}}`}</label>
+                  <Input
+                    className="h-7 text-xs"
+                    placeholder={v}
+                    value={values[v] ?? ""}
+                    onChange={(e) => setValues((prev) => ({ ...prev, [v]: e.target.value }))}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Preview */}
+      <div className="flex-1 overflow-hidden bg-zinc-50 dark:bg-zinc-900 flex justify-center py-4">
+        <div className="w-full max-w-2xl rounded-md shadow-sm overflow-hidden border border-border">
+          <iframe
+            key={renderedHtml}
+            srcDoc={renderedHtml || "<p style='font-family:sans-serif;color:#888;padding:2rem'>No HTML body set for this template.</p>"}
+            sandbox="allow-same-origin"
+            className="w-full h-full border-0 bg-white"
+            style={{ minHeight: 400 }}
+            title={`Preview: ${template.name}`}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function TemplatesPage() {
   const { primaryKey } = useAuth();
@@ -207,25 +352,10 @@ function TemplatesPage() {
       )}
 
       {previewTemplate && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm">
-          <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-card">
-            <div>
-              <p className="text-sm font-medium">{previewTemplate.name}</p>
-              <p className="text-xs text-muted-foreground">{previewTemplate.subject}</p>
-            </div>
-            <button onClick={() => setPreviewTemplate(null)} className="rounded p-1.5 hover:bg-muted transition-colors">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <iframe
-              srcDoc={previewTemplate.htmlBody ?? "<p style='font-family:sans-serif;color:#888;padding:2rem'>No HTML body set for this template.</p>"}
-              sandbox="allow-same-origin"
-              className="w-full h-full border-0 bg-white"
-              title={`Preview: ${previewTemplate.name}`}
-            />
-          </div>
-        </div>
+        <TemplatePreviewModal
+          template={previewTemplate}
+          onClose={() => setPreviewTemplate(null)}
+        />
       )}
     </div>
   );
