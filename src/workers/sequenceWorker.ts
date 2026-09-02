@@ -227,16 +227,29 @@ export async function processSequenceTick(): Promise<void> {
     const availableMailboxes = poolMailboxes.filter(m => m.sentToday < m.dailyLimit);
 
     if (availableMailboxes.length > 0) {
-      const ranked = rankMailboxesByESP(
-        availableMailboxes.map(m => ({ id: m.id, type: m.type, username: m.username })),
-        recipientESP,
-      );
-      const preferredId = sequence.mailboxId && availableMailboxes.find(m => m.id === sequence.mailboxId)
-        ? sequence.mailboxId
-        : ranked[0]?.id;
-      selectedMailbox = availableMailboxes.find(m => m.id === preferredId) ?? availableMailboxes[0] ?? null;
+      // Thread coherence: follow-ups always come from the same mailbox as step 0.
+      // If this is a follow-up (currentStep > 0) and we recorded a mailbox for
+      // this enrollment, prefer that mailbox — fall through to normal selection
+      // only if it's no longer available (over daily limit or disconnected).
+      const threadMailboxId = (enrollment as { mailboxId?: string | null }).mailboxId;
+      const threadMailbox = threadMailboxId
+        ? availableMailboxes.find(m => m.id === threadMailboxId)
+        : null;
+
+      if (threadMailbox && nextStepIndex > 0) {
+        selectedMailbox = threadMailbox;
+      } else {
+        const ranked = rankMailboxesByESP(
+          availableMailboxes.map(m => ({ id: m.id, type: m.type, username: m.username })),
+          recipientESP,
+        );
+        const preferredId = sequence.mailboxId && availableMailboxes.find(m => m.id === sequence.mailboxId)
+          ? sequence.mailboxId
+          : ranked[0]?.id;
+        selectedMailbox = availableMailboxes.find(m => m.id === preferredId) ?? availableMailboxes[0] ?? null;
+      }
     }
-    logger.debug({ recipientESP, selectedMailboxId: selectedMailbox?.id, email: enrollment.email }, 'Sequence mailbox selected');
+    logger.debug({ recipientESP, selectedMailboxId: selectedMailbox?.id, email: enrollment.email, step: nextStepIndex }, 'Sequence mailbox selected');
 
     const fromAddress = sequence.mailboxId && selectedMailbox
       ? selectedMailbox.username  // Send FROM the actual mailbox address for cold outreach
@@ -299,11 +312,16 @@ export async function processSequenceTick(): Promise<void> {
       }
 
       const isLastStep = nextStep === undefined;
+      // On step 0, record the chosen mailbox so all follow-ups come from the
+      // same sender (thread coherence — keeps the conversation in one thread
+      // and avoids the "different sender" confusion Smartlead calls out).
+      const shouldStoreMailbox = nextStepIndex === 0 && selectedMailbox?.id;
       await prisma.sequenceEnrollment.update({
         where: { id: enrollment.id },
         data: {
           currentStep: nextStepIndex + 1,
           nextSendAt,
+          ...(shouldStoreMailbox && { mailboxId: selectedMailbox!.id }),
           ...(isLastStep && { status: 'completed', completedAt: now }),
         },
       });

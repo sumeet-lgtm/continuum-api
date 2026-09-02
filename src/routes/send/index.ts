@@ -14,6 +14,7 @@ import type { EmailSentPayload, EmailSendFailedPayload } from '../../types/webho
 import { generateUnsubToken, generateUnsubHtml } from '../../lib/unsubscribe.js';
 import { generateOpenToken, generateClickToken, injectTracking } from '../../lib/tracking.js';
 import { processTemplate } from '../../lib/spintax.js';
+import { compileMjml } from '../../lib/mjml.js';
 import { sendQueue } from '../../lib/queue.js';
 import type { SendJobPayload } from '../../types/job.js';
 
@@ -31,6 +32,7 @@ const bodySchema = z.object({
   bcc: z.array(z.string().email()).max(50).optional(),
   subject: z.string().min(1).max(500).optional(),
   html_body: z.string().optional(),
+  mjml_body: z.string().optional(),
   text_body: z.string().optional(),
   reply_to: z.union([z.string().email(), z.array(z.string().email())]).optional(),
   attachments: z.array(attachmentSchema).max(20).optional(),
@@ -44,7 +46,8 @@ const bodySchema = z.object({
   verify_before_send: z.boolean().default(false),
   track_opens: z.boolean().optional(),
   track_clicks: z.boolean().optional(),
-}).refine((v) => v.html_body || v.text_body || v.template_id, {
+  test: z.boolean().default(false),
+}).refine((v) => v.html_body || v.mjml_body || v.text_body || v.template_id, {
   message: 'html_body, text_body, or template_id is required',
 }).refine((v) => v.subject || v.template_id, {
   message: 'subject is required when template_id is not provided',
@@ -58,6 +61,11 @@ async function buildEmailContent(
   let subject = input.subject ?? '';
   let htmlBody = input.html_body;
   let textBody = input.text_body;
+
+  // MJML compilation (takes precedence over html_body if both are somehow set)
+  if (input.mjml_body && !htmlBody) {
+    htmlBody = await compileMjml(input.mjml_body);
+  }
 
   // Template resolution
   if (input.template_id) {
@@ -96,6 +104,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         to, cc, bcc, subject: rawSubject, reply_to, attachments, headers, tags,
         idempotency_key, scheduled_at, domain_id, verify_before_send,
         track_opens: requestTrackOpens, track_clicks: requestTrackClicks,
+        test: isTestMode,
       } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
@@ -180,6 +189,26 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         }, { delay: delayMs, jobId: record.id });
 
         return reply.status(200).send({ id: record.id, status: 'scheduled', scheduled_at });
+      }
+
+      // ── Test mode — simulate the send without hitting SES ─────────────────────
+      if (isTestMode) {
+        const { subject: testSubject, htmlBody: testHtml, textBody: testText } = await buildEmailContent(parsed.data, apiKeyId);
+        const testFrom = buildFromAddress(sendingDomain);
+        return reply.status(200).send({
+          id: `test_${Date.now()}`,
+          status: 'simulated',
+          test: true,
+          to,
+          from: testFrom,
+          subject: testSubject,
+          ...(testHtml !== undefined && { html_body: testHtml }),
+          ...(testText !== undefined && { text_body: testText }),
+          domain: sendingDomain?.name ?? null,
+          track_opens: requestTrackOpens ?? sendingDomain?.trackOpens ?? true,
+          track_clicks: requestTrackClicks ?? sendingDomain?.trackClicks ?? true,
+          message: 'Test mode: email was rendered but not sent. No SES call was made and no usage was charged.',
+        });
       }
 
       // ── Inject tracking ────────────────────────────────────────────────────────

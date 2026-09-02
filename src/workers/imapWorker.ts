@@ -150,11 +150,16 @@ async function pollMailboxes(): Promise<void> {
 
             logger.info({ fromEmail, category: classification.category, confidence: classification.confidence }, 'Reply classified');
 
-            // Auto-replies (out-of-office) aren't a real reply — treating one as
-            // one was stopping sequences on the first vacation responder a lead
-            // hit, which silently killed response rates. Let the sequence run
-            // as normal: no status change, no REPLIED subsequence trigger.
+            // OOO auto-replies: pause the enrollment for 3 business days so the
+            // sequence resumes after the lead returns from vacation. We advance
+            // nextSendAt rather than changing status so the enrollment stays
+            // active and the lead isn't treated as having replied.
             if (classification.category === 'out_of_office') {
+              const resumeAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+              await prisma.sequenceEnrollment.update({
+                where: { id: enrollment.id },
+                data: { nextSendAt: resumeAt },
+              }).catch(() => {});
               await prisma.replyEvent.create({
                 data: {
                   mailboxId: mailbox.id, fromEmail: fromEmail.toLowerCase(),
@@ -162,6 +167,7 @@ async function pollMailboxes(): Promise<void> {
                   subject: subject || null, bodySnippet: bodySnippet || null,
                 },
               }).catch(() => {});
+              logger.info({ fromEmail, resumeAt }, 'OOO detected — pausing enrollment for 3 days');
               continue;
             }
 

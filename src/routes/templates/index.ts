@@ -4,16 +4,30 @@ import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
+import { compileMjml } from '../../lib/mjml.js';
 
-const createSchema = z.object({
+const baseTemplateShape = {
   name: z.string().min(1).max(200),
   subject: z.string().min(1).max(500),
-  html_body: z.string().min(1),
+  html_body: z.string().optional(),
+  mjml_body: z.string().optional(),
+  text_body: z.string().optional(),
+  variables: z.array(z.string()).optional(),
+};
+
+const createSchema = z.object(baseTemplateShape).refine(
+  v => v.html_body || v.mjml_body,
+  { message: 'Either html_body or mjml_body is required', path: ['html_body'] },
+);
+
+const updateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  subject: z.string().min(1).max(500).optional(),
+  html_body: z.string().optional(),
+  mjml_body: z.string().optional(),
   text_body: z.string().optional(),
   variables: z.array(z.string()).optional(),
 });
-
-const updateSchema = createSchema.partial();
 
 export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/templates
@@ -22,13 +36,16 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [requireAuth, requireRateLimit] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const parsed = createSchema.safeParse(request.body);
-      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map((i: { path: (string | number)[]; message: string }) => ({ field: i.path.join('.'), message: i.message })));
 
-      const { name, subject, html_body, text_body, variables } = parsed.data;
+      const { name, subject, html_body, mjml_body, text_body, variables } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
+      // Compile MJML to HTML if provided
+      const htmlBody = mjml_body ? await compileMjml(mjml_body) : html_body!;
+
       const template = await prisma.emailTemplate.create({
-        data: { apiKeyId, name, subject, htmlBody: html_body, textBody: text_body ?? null, variables: variables ?? [] },
+        data: { apiKeyId, name, subject, htmlBody, textBody: text_body ?? null, variables: variables ?? [] },
         select: { id: true, name: true, subject: true, variables: true, createdAt: true },
       });
 
@@ -86,7 +103,7 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = request.params as { id: string };
       const parsed = updateSchema.safeParse(request.body);
-      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map((i: { path: (string | number)[]; message: string }) => ({ field: i.path.join('.'), message: i.message })));
 
       const apiKeyId = request.apiKey.id;
       const existing = await prisma.emailTemplate.findFirst({ where: { id, apiKeyId } });

@@ -862,6 +862,7 @@ model SequenceEnrollment {
   sequenceId                       String
   email                            String
   leadId                           String?
+  mailboxId                        String?   // mailbox used for step 0 — reused for all follow-ups (thread coherence)
   status                           String    @default("active") // active|paused|completed|unsubscribed|bounced|replied
   currentStep                      Int       @default(0)
   nextSendAt                       DateTime?

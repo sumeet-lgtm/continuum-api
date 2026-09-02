@@ -16,6 +16,7 @@ import { rateLimitPlugin } from './plugins/rateLimit.js';
 import { errorHandler } from './plugins/errorHandler.js';
 import { healthRoutes } from './routes/health.js';
 import { verifySingleRoute } from './routes/verify/single.js';
+import { verifyPublicRoute } from './routes/verify/public.js';
 import { monitoringRoutes } from './routes/monitor/index.js';
 import { historyRoutes } from './routes/history/index.js';
 import { webhookRoutes } from './routes/webhooks/index.js';
@@ -149,6 +150,7 @@ async function buildApp(): Promise<FastifyInstance> {
   // ─── Routes ───────────────────────────────────────────────────────────────
   await app.register(healthRoutes);
   await app.register(verifySingleRoute, { prefix: '/v1' });
+  await app.register(verifyPublicRoute, { prefix: '/v1' });
   await app.register(monitoringRoutes, { prefix: '/v1' });
   await app.register(historyRoutes, { prefix: '/v1' });
   await app.register(webhookRoutes, { prefix: '/v1' });
