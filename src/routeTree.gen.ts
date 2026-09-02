@@ -29,6 +29,7 @@ import { Route as DashboardBulkRouteImport } from './routes/dashboard.bulk'
 import { Route as DashboardCampaignsRouteImport } from './routes/dashboard.campaigns'
 import { Route as DashboardConnectorsRouteImport } from './routes/dashboard.connectors'
 import { Route as DashboardContactsRouteImport } from './routes/dashboard.contacts'
+import { Route as DashboardDeliverabilityRouteImport } from './routes/dashboard.deliverability'
 import { Route as DashboardDomainsRouteImport } from './routes/dashboard.domains'
 import { Route as DashboardInboxRouteImport } from './routes/dashboard.inbox'
 import { Route as DashboardInboxTestRouteImport } from './routes/dashboard.inbox-test'
@@ -149,6 +150,11 @@ const DashboardConnectorsRoute = DashboardConnectorsRouteImport.update({
 const DashboardContactsRoute = DashboardContactsRouteImport.update({
   id: '/contacts',
   path: '/contacts',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardDeliverabilityRoute = DashboardDeliverabilityRouteImport.update({
+  id: '/deliverability',
+  path: '/deliverability',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardDomainsRoute = DashboardDomainsRouteImport.update({
@@ -277,6 +283,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/campaigns': typeof DashboardCampaignsRoute
   '/dashboard/connectors': typeof DashboardConnectorsRoute
   '/dashboard/contacts': typeof DashboardContactsRoute
+  '/dashboard/deliverability': typeof DashboardDeliverabilityRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
@@ -319,6 +326,7 @@ export interface FileRoutesByTo {
   '/dashboard/campaigns': typeof DashboardCampaignsRoute
   '/dashboard/connectors': typeof DashboardConnectorsRoute
   '/dashboard/contacts': typeof DashboardContactsRoute
+  '/dashboard/deliverability': typeof DashboardDeliverabilityRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
@@ -363,6 +371,7 @@ export interface FileRoutesById {
   '/dashboard/campaigns': typeof DashboardCampaignsRoute
   '/dashboard/connectors': typeof DashboardConnectorsRoute
   '/dashboard/contacts': typeof DashboardContactsRoute
+  '/dashboard/deliverability': typeof DashboardDeliverabilityRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
@@ -408,6 +417,7 @@ export interface FileRouteTypes {
     | '/dashboard/campaigns'
     | '/dashboard/connectors'
     | '/dashboard/contacts'
+    | '/dashboard/deliverability'
     | '/dashboard/domains'
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
@@ -450,6 +460,7 @@ export interface FileRouteTypes {
     | '/dashboard/campaigns'
     | '/dashboard/connectors'
     | '/dashboard/contacts'
+    | '/dashboard/deliverability'
     | '/dashboard/domains'
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
@@ -493,6 +504,7 @@ export interface FileRouteTypes {
     | '/dashboard/campaigns'
     | '/dashboard/connectors'
     | '/dashboard/contacts'
+    | '/dashboard/deliverability'
     | '/dashboard/domains'
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
@@ -670,6 +682,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardContactsRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/deliverability': {
+      id: '/dashboard/deliverability'
+      path: '/deliverability'
+      fullPath: '/dashboard/deliverability'
+      preLoaderRoute: typeof DashboardDeliverabilityRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/domains': {
       id: '/dashboard/domains'
       path: '/domains'
@@ -823,6 +842,7 @@ declare module '@tanstack/react-router' {
 interface DashboardRouteChildren {
   DashboardAiRoute: typeof DashboardAiRoute
   DashboardAnalyticsRoute: typeof DashboardAnalyticsRoute
+  DashboardDeliverabilityRoute: typeof DashboardDeliverabilityRoute
   DashboardApiKeysRoute: typeof DashboardApiKeysRoute
   DashboardAuditLogsRoute: typeof DashboardAuditLogsRoute
   DashboardAutomationsRoute: typeof DashboardAutomationsRoute
@@ -859,6 +879,7 @@ interface DashboardRouteChildren {
 const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardAiRoute: DashboardAiRoute,
   DashboardAnalyticsRoute: DashboardAnalyticsRoute,
+  DashboardDeliverabilityRoute: DashboardDeliverabilityRoute,
   DashboardApiKeysRoute: DashboardApiKeysRoute,
   DashboardAuditLogsRoute: DashboardAuditLogsRoute,
   DashboardAutomationsRoute: DashboardAutomationsRoute,

@@ -34,6 +34,7 @@ import {
   ShieldCheck,
   Wrench,
   Plug,
+  TrendingUp,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Wordmark } from "@/components/Logo";
@@ -96,6 +97,7 @@ const NAV: NavItem[] = [
     ],
   },
   { to: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
+  { to: "/dashboard/deliverability", label: "Deliverability", icon: TrendingUp },
   { to: "/dashboard/verify", label: "Verify", icon: Mail },
   { to: "/dashboard/tools", label: "Deliverability Tools", icon: Wrench },
   { to: "/dashboard/connectors", label: "Connectors", icon: Plug },
