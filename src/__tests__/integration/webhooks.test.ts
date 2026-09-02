@@ -102,7 +102,7 @@ const TEST_KEY_REC = {
   monthlyLimit: 100000, currentMonthUsage: 0, usageResetAt: new Date(), plan: 'free',
   isActive: true, createdAt: new Date(), revokedAt: null,
   name: null, monthlySendLimit: 500, currentMonthSendUsage: 0, sendUsageResetAt: new Date(),
-  permission: 'full_access', restrictedDomainId: null, lastUsedAt: null,
+  permission: 'full_access', restrictedDomainId: null, lastUsedAt: null, extraVerificationCredits: 0, extraSendCredits: 0,
 };
 const AUTH = { authorization: `Bearer ${TEST_KEY}` };
 

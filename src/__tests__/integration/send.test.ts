@@ -121,7 +121,7 @@ function makeKey(overrides: Record<string, unknown> = {}) {
     name: null,
     permission: 'full_access',
     restrictedDomainId: null,
-    lastUsedAt: null,
+    lastUsedAt: null, extraVerificationCredits: 0, extraSendCredits: 0,
     ...overrides,
   };
 }

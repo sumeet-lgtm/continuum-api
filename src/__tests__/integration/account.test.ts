@@ -68,7 +68,7 @@ function makeKey(id: string) {
     rateLimit: 1000, monthlyLimit: 1000, currentMonthUsage: 0, monthlySendLimit: 500, currentMonthSendUsage: 0,
     sendUsageResetAt: new Date(Date.now() + 30 * 86_400_000), usageResetAt: new Date(Date.now() + 30 * 86_400_000),
     plan: 'free', isActive: true, createdAt: new Date(), revokedAt: null, name: null,
-    permission: 'full_access', restrictedDomainId: null, lastUsedAt: null,
+    permission: 'full_access', restrictedDomainId: null, lastUsedAt: null, extraVerificationCredits: 0, extraSendCredits: 0,
   };
 }
 

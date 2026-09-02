@@ -232,4 +232,126 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
       `<!doctype html><html><head><meta charset=utf-8><title>Subscribed</title><style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;text-align:center;color:#111}h1{font-size:2rem;margin-bottom:.5rem}p{color:#555}</style></head><body><h1>✓ You're subscribed!</h1><p>You've confirmed your subscription to <strong>${membership.list.name}</strong>.</p><p>Email: ${membership.contact.email}</p></body></html>`,
     );
   });
+
+  // ── POST /v1/contacts/import ──────────────────────────────────────────────
+  // Bulk migration import. Accepts up to 50,000 contacts in one request.
+  // Upserts contacts and optionally adds them to a list. Also accepts a
+  // separate suppression list (unsubscribes/bounces from the source platform).
+  fastify.post(
+    '/contacts/import',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const bulkSchema = z.object({
+        list_id: z.string().optional(),
+        list_name: z.string().max(200).optional(),
+        contacts: z.array(z.object({
+          email: z.string().email(),
+          first_name: z.string().max(200).optional().nullable(),
+          last_name: z.string().max(200).optional().nullable(),
+          custom_fields: z.record(z.string()).optional(),
+        })).max(50_000),
+        suppressions: z.array(z.object({
+          email: z.string().email(),
+          reason: z.string().optional(),
+        })).max(50_000).optional(),
+        source_platform: z.string().optional(),
+      });
+
+      const parsed = bulkSchema.safeParse(request.body);
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues[0]?.message ?? 'Invalid body');
+
+      const { contacts, suppressions = [], list_id, list_name, source_platform } = parsed.data;
+      const apiKeyId = request.apiKey.id;
+
+      // Resolve or create target list
+      let resolvedListId = list_id ?? null;
+      if (!resolvedListId && list_name) {
+        const newList = await prisma.mailingList.create({
+          data: { apiKeyId, name: list_name, description: `Imported from ${source_platform ?? 'CSV'}` },
+          select: { id: true },
+        });
+        resolvedListId = newList.id;
+      }
+      if (resolvedListId) {
+        const listOwned = await prisma.mailingList.findFirst({ where: { id: resolvedListId, apiKeyId }, select: { id: true } });
+        if (!listOwned) throw Errors.notFound('List not found');
+      }
+
+      // Load existing suppressions in bulk to skip them
+      const suppressionEmails = new Set(
+        (await prisma.suppression.findMany({
+          where: { email: { in: contacts.map(c => c.email.toLowerCase()) } },
+          select: { email: true },
+        })).map(s => s.email),
+      );
+
+      let imported = 0, skipped = 0;
+      const BATCH = 500;
+
+      for (let i = 0; i < contacts.length; i += BATCH) {
+        const batch = contacts.slice(i, i + BATCH).filter(c => !suppressionEmails.has(c.email.toLowerCase()));
+        if (batch.length === 0) { skipped += BATCH; continue; }
+
+        await prisma.$transaction(async (tx) => {
+          for (const c of batch) {
+            const email = c.email.toLowerCase();
+            const contact = await tx.contact.upsert({
+              where: { apiKeyId_email: { apiKeyId, email } },
+              create: {
+                apiKeyId, email,
+                firstName: c.first_name ?? null,
+                lastName: c.last_name ?? null,
+                customFields: (c.custom_fields ?? {}) as Prisma.InputJsonValue,
+              },
+              update: {
+                ...(c.first_name != null && { firstName: c.first_name }),
+                ...(c.last_name != null && { lastName: c.last_name }),
+              },
+              select: { id: true },
+            });
+
+            if (resolvedListId) {
+              await tx.contactListMembership.upsert({
+                where: { contactId_listId: { contactId: contact.id, listId: resolvedListId } },
+                create: { contactId: contact.id, listId: resolvedListId, status: 'subscribed' },
+                update: {},
+              });
+            }
+          }
+        });
+
+        imported += batch.length;
+        skipped += BATCH - batch.length;
+      }
+
+      // Bulk-upsert suppressions
+      let suppressionsAdded = 0;
+      if (suppressions.length > 0) {
+        for (let i = 0; i < suppressions.length; i += BATCH) {
+          const batch = suppressions.slice(i, i + BATCH);
+          await prisma.$executeRaw`
+            INSERT INTO suppressions (email, reason, "createdAt")
+            SELECT unnest(${batch.map(s => s.email.toLowerCase())}::text[]),
+                   unnest(${batch.map(s => s.reason ?? 'unsubscribed')}::text[]),
+                   now()
+            ON CONFLICT (email) DO NOTHING`;
+          suppressionsAdded += batch.length;
+        }
+      }
+
+      if (resolvedListId) {
+        await prisma.mailingList.update({
+          where: { id: resolvedListId },
+          data: { contactCount: imported },
+        }).catch(() => {});
+      }
+
+      return reply.send({
+        imported,
+        skipped,
+        suppressions_added: suppressionsAdded,
+        list_id: resolvedListId,
+      });
+    },
+  );
 }
