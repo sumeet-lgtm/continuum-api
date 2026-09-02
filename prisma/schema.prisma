@@ -123,6 +123,13 @@ model ApiKey {
   restrictedDomainId String?   // if set, sending_access key is pinned to this domain
   lastUsedAt         DateTime?
 
+  // Security: IP allowlist (empty = allow all IPs)
+  allowedIps         String[]  @default([]) @map("allowed_ips")
+
+  // Usage alerts: email owner at 80% of monthly quota
+  usageAlertEnabled  Boolean   @default(true)  @map("usage_alert_enabled")
+  usageAlertSentAt   DateTime? @map("usage_alert_sent_at")
+
   verifications  Verification[]
   bulkJobs       BulkJob[]
   monitors       Monitor[]

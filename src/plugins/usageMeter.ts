@@ -16,6 +16,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { prisma } from '../lib/prisma.js';
 import { Errors } from './errorHandler.js';
 import { logger } from '../lib/logger.js';
+import { sendEmail } from '../lib/email.js';
 
 const PLAN_LIMITS: Record<string, number> = {
   free:    1_000,
@@ -116,10 +117,62 @@ export async function requireMonthlyQuota(
       ? new Date(key.usageResetAt).toISOString().split('T')[0]
       : 'next month');
 
+    // 80% usage alert — fire-and-forget, one per billing month
+    const usageAlert = key as { usageAlertEnabled?: boolean; usageAlertSentAt?: Date | null };
+    if (
+      usageAlert.usageAlertEnabled !== false &&
+      key.currentMonthUsage / limit >= 0.8
+    ) {
+      const sentAt = usageAlert.usageAlertSentAt ? new Date(usageAlert.usageAlertSentAt) : null;
+      const alreadySentThisMonth =
+        sentAt &&
+        sentAt.getFullYear() === now.getFullYear() &&
+        sentAt.getMonth() === now.getMonth();
+
+      if (!alreadySentThisMonth) {
+        void sendUsageAlert(key.id, key.ownerId ?? key.userId, key.currentMonthUsage, limit);
+      }
+    }
+
   } catch (err) {
     if (err instanceof Error && 'statusCode' in err) throw err;
     // Fail open — don't block requests if metering fails
     logger.warn({ err, apiKeyId: key.id }, 'Usage meter check failed — failing open');
+  }
+}
+
+async function sendUsageAlert(
+  keyId: string,
+  ownerId: string | null,
+  used: number,
+  limit: number,
+): Promise<void> {
+  try {
+    const userId = ownerId;
+    if (!userId) return;
+
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+    if (!user?.email) return;
+
+    const pct = Math.round((used / limit) * 100);
+    const remaining = limit - used;
+
+    await sendEmail(
+      user.email,
+      `You've used ${pct}% of your Continuum API quota`,
+      `<p>Hi,</p>
+<p>You've used <strong>${used.toLocaleString()} of ${limit.toLocaleString()} verifications</strong> (${pct}%) this month on Continuum API.</p>
+<p>You have <strong>${remaining.toLocaleString()} verifications remaining</strong> until your quota resets.</p>
+<p>To avoid disruption, consider <a href="https://app.continuumapi.com/dashboard/billing">upgrading your plan or purchasing additional credits</a>.</p>
+<p>— Continuum API</p>`,
+    );
+
+    await prisma.apiKey.update({
+      where: { id: keyId },
+      data: { usageAlertSentAt: new Date() },
+    });
+  } catch (err) {
+    logger.warn({ err, keyId }, 'Failed to send usage alert email');
   }
 }
 

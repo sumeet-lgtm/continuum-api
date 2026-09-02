@@ -32,6 +32,11 @@ interface ApiKeyRecord {
   permission: string;
   restrictedDomainId: string | null;
   lastUsedAt: Date | null;
+  allowedIps: string[];
+  usageAlertEnabled: boolean;
+  usageAlertSentAt: Date | null;
+  extraVerificationCredits: number;
+  extraSendCredits: number;
 }
 
 export interface OrgSessionUser {
@@ -146,6 +151,18 @@ export async function requireAuth(
   _reply: FastifyReply,
 ): Promise<void> {
   await resolveApiKey(request);
+
+  // IP allowlist enforcement: if the key has restrictions, the caller's IP must be in the list.
+  const { allowedIps } = request.apiKey;
+  if (allowedIps && allowedIps.length > 0) {
+    const callerIp = (request.headers['x-forwarded-for'] as string | undefined)
+      ?.split(',')[0]
+      ?.trim() ?? request.ip;
+    if (!allowedIps.includes(callerIp)) {
+      throw Errors.forbidden(`Request from IP ${callerIp} is not allowed by this API key's IP allowlist.`);
+    }
+  }
+
   if (
     request.apiKey.permission === 'sending_access' &&
     !SEND_ONLY_ALLOWED.some((prefix) => request.url.startsWith(prefix))
