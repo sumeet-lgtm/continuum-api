@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      tanstack:
+        patterns: ["@tanstack/*"]
+      radix:
+        patterns: ["@radix-ui/*"]
+      minor-patch:
+        update-types: ["minor", "patch"]
