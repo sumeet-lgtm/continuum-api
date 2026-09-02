@@ -26,7 +26,9 @@ interface EndpointDef {
   auth: "apikey" | "session";
   params?: Param[];
   body?: Param[];
-  example?: string;
+  example?: string;      // cURL
+  nodeExample?: string;  // Node.js / TypeScript
+  pythonExample?: string; // Python
   response?: string;
 }
 
@@ -54,6 +56,23 @@ const SECTIONS: Section[] = [
   -H "X-API-Key: YOUR_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"email": "test@example.com"}'`,
+        nodeExample: `import Continuum from "@continuum/sdk";
+
+const client = new Continuum({ apiKey: "YOUR_KEY" });
+
+const result = await client.verify.single({
+  email: "test@example.com",
+});
+
+console.log(result.status, result.score);
+// "valid" 92`,
+        pythonExample: `from continuum import Continuum
+
+client = Continuum(api_key="YOUR_KEY")
+
+result = client.verify.single(email="test@example.com")
+print(result.status, result.score)
+# "valid" 92`,
         response: `{
   "email": "test@example.com",
   "status": "valid",          // valid | invalid | risky | unknown
@@ -78,6 +97,26 @@ const SECTIONS: Section[] = [
         example: `curl -X POST https://api.continuumapi.com/v1/bulk \\
   -H "X-API-Key: YOUR_KEY" \\
   -F "file=@contacts.csv"`,
+        nodeExample: `import Continuum from "@continuum/sdk";
+import { createReadStream } from "fs";
+
+const client = new Continuum({ apiKey: "YOUR_KEY" });
+
+const job = await client.bulk.upload({
+  file: createReadStream("contacts.csv"),
+});
+
+console.log(job.jobId, job.status);
+// "cjb_abc123" "pending"`,
+        pythonExample: `from continuum import Continuum
+
+client = Continuum(api_key="YOUR_KEY")
+
+with open("contacts.csv", "rb") as f:
+    job = client.bulk.upload(file=f)
+
+print(job.job_id, job.status)
+# "cjb_abc123" "pending"`,
         response: `{
   "jobId": "cjb_abc123",
   "status": "pending",
@@ -139,6 +178,36 @@ const SECTIONS: Section[] = [
     "variables": { "order_id": "ORD-9876", "amount": "$49.00" },
     "idempotency_key": "order-9876-receipt"
   }'`,
+        nodeExample: `import Continuum from "@continuum/sdk";
+
+const client = new Continuum({ apiKey: "YOUR_KEY" });
+
+const msg = await client.email.send({
+  to: "customer@example.com",
+  from: "hello@yourdomain.com",
+  subject: "Your receipt for order #{{order_id}}",
+  templateId: "tmpl_abc123",
+  variables: { order_id: "ORD-9876", amount: "$49.00" },
+  idempotencyKey: "order-9876-receipt",
+});
+
+console.log(msg.id, msg.status);
+// "msg_xyz789" "sent"`,
+        pythonExample: `from continuum import Continuum
+
+client = Continuum(api_key="YOUR_KEY")
+
+msg = client.email.send(
+    to="customer@example.com",
+    from_="hello@yourdomain.com",
+    subject="Your receipt for order #{{order_id}}",
+    template_id="tmpl_abc123",
+    variables={"order_id": "ORD-9876", "amount": "$49.00"},
+    idempotency_key="order-9876-receipt",
+)
+
+print(msg.id, msg.status)
+# "msg_xyz789" "sent"`,
         response: `{
   "id": "msg_xyz789",
   "status": "sent",
@@ -207,6 +276,36 @@ const SECTIONS: Section[] = [
     "list_name": "Newsletter subscribers",
     "source_platform": "mailchimp"
   }'`,
+        nodeExample: `import Continuum from "@continuum/sdk";
+
+const client = new Continuum({ apiKey: "YOUR_KEY" });
+
+const result = await client.contacts.import({
+  contacts: [
+    { email: "alice@example.com", firstName: "Alice" },
+    { email: "bob@example.com", firstName: "Bob" },
+  ],
+  listName: "Newsletter subscribers",
+  sourcePlatform: "mailchimp",
+});
+
+console.log(\`Imported: \${result.imported}\`);
+// "Imported: 2"`,
+        pythonExample: `from continuum import Continuum
+
+client = Continuum(api_key="YOUR_KEY")
+
+result = client.contacts.import_contacts(
+    contacts=[
+        {"email": "alice@example.com", "first_name": "Alice"},
+        {"email": "bob@example.com", "first_name": "Bob"},
+    ],
+    list_name="Newsletter subscribers",
+    source_platform="mailchimp",
+)
+
+print(f"Imported: {result.imported}")
+# "Imported: 2"`,
         response: `{
   "imported": 2,
   "skipped": 0,
@@ -389,9 +488,24 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+type Lang = "curl" | "node" | "python";
+
 function EndpointCard({ ep, apiKeyHint }: { ep: EndpointDef; apiKeyHint: string }) {
   const [open, setOpen] = useState(false);
+  const [lang, setLang] = useState<Lang>("curl");
+
   const exampleWithKey = ep.example?.replace("YOUR_KEY", apiKeyHint || "YOUR_KEY");
+  const nodeWithKey = ep.nodeExample?.replace("YOUR_KEY", apiKeyHint || "YOUR_KEY");
+  const pythonWithKey = ep.pythonExample?.replace("YOUR_KEY", apiKeyHint || "YOUR_KEY");
+
+  const availableLangs: Lang[] = [
+    ...(exampleWithKey ? ["curl" as Lang] : []),
+    ...(nodeWithKey ? ["node" as Lang] : []),
+    ...(pythonWithKey ? ["python" as Lang] : []),
+  ];
+
+  const langLabel: Record<Lang, string> = { curl: "cURL", node: "Node.js", python: "Python" };
+  const currentExample = lang === "node" ? nodeWithKey : lang === "python" ? pythonWithKey : exampleWithKey;
 
   return (
     <div className="rounded-lg border border-border overflow-hidden">
@@ -476,14 +590,29 @@ function EndpointCard({ ep, apiKeyHint }: { ep: EndpointDef; apiKeyHint: string 
             </div>
           )}
 
-          {exampleWithKey && (
+          {availableLangs.length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Example</p>
-                <CopyButton text={exampleWithKey} />
+                <div className="flex items-center gap-0.5 rounded-md border border-border overflow-hidden">
+                  {availableLangs.map((l) => (
+                    <button
+                      key={l}
+                      onClick={() => setLang(l)}
+                      className={cn(
+                        "px-2.5 py-1 text-[11px] font-mono transition-colors",
+                        lang === l
+                          ? "bg-foreground text-background"
+                          : "text-muted-foreground hover:text-foreground hover:bg-muted/60",
+                      )}
+                    >
+                      {langLabel[l]}
+                    </button>
+                  ))}
+                </div>
+                <CopyButton text={currentExample ?? ""} />
               </div>
               <pre className="rounded-md bg-[oklch(0.12_0_0)] text-[oklch(0.88_0_0)] text-xs p-4 overflow-x-auto font-mono leading-relaxed">
-                <code>{exampleWithKey}</code>
+                <code>{currentExample}</code>
               </pre>
             </div>
           )}
