@@ -583,4 +583,82 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
       });
     },
   );
+
+  // ── POST /v1/webhooks/:id/deliveries/:deliveryId/retry ────────────────────
+  // Manually retry a failed or permanently-failed delivery.
+  fastify.post<{ Params: DeliveryParams }>(
+    '/webhooks/:id/deliveries/:deliveryId/retry',
+    {
+      preHandler: [requireAuth, requireRateLimit],
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id', 'deliveryId'],
+          properties: { id: { type: 'string' }, deliveryId: { type: 'string' } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: DeliveryParams }>, reply: FastifyReply) => {
+      const webhook = await prisma.webhook.findUnique({
+        where:  { id: request.params.id },
+        select: { id: true, apiKeyId: true, url: true, secret: true, isActive: true },
+      });
+      if (!webhook || webhook.apiKeyId !== request.apiKey.id) {
+        throw Errors.notFound('Webhook');
+      }
+      if (!webhook.isActive) {
+        throw Errors.validationFailed({ isActive: 'Webhook is inactive. Reactivate it before retrying deliveries.' });
+      }
+
+      const delivery = await prisma.webhookDelivery.findUnique({
+        where:  { id: request.params.deliveryId },
+        select: { id: true, webhookId: true, delivered: true, event: true, eventId: true, payload: true, attempts: true, maxAttempts: true },
+      });
+      if (!delivery || delivery.webhookId !== webhook.id) {
+        throw Errors.notFound('Delivery');
+      }
+      if (delivery.delivered) {
+        throw Errors.validationFailed({ delivered: 'This delivery was already successful.' });
+      }
+
+      // Reset permanently-failed flag so the retry can proceed
+      await prisma.webhookDelivery.update({
+        where: { id: delivery.id },
+        data: {
+          failedPermanently: false,
+          nextRetryAt: null,
+          errorMessage: null,
+        },
+      });
+
+      const nextAttempt = delivery.attempts + 1;
+
+      await webhookQueue.add(
+        'deliver-webhook',
+        {
+          deliveryId:    delivery.id,
+          webhookId:     webhook.id,
+          webhookUrl:    webhook.url,
+          webhookSecret: webhook.secret,
+          event:         delivery.event as never,
+          eventId:       delivery.eventId ?? '',
+          payload:       delivery.payload as never,
+          attemptNumber: nextAttempt,
+        },
+        {
+          jobId:    `webhook-${delivery.id}-retry-${nextAttempt}`,
+          priority: 1,
+        },
+      );
+
+      logger.info({ deliveryId: delivery.id, webhookId: webhook.id, attempt: nextAttempt }, 'Manual retry enqueued');
+
+      return reply.status(202).send({
+        deliveryId:    delivery.id,
+        webhookId:     webhook.id,
+        attemptNumber: nextAttempt,
+        message:       'Retry enqueued.',
+      });
+    },
+  );
 }
