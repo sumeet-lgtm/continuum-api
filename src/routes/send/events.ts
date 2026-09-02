@@ -15,11 +15,13 @@ import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 
 // ─── Bounce rate alert thresholds ─────────────────────────────────────────────
 
-const BOUNCE_WARN_PCT    = 2.0;   // send warning email at 2% (ISP watch threshold)
-const BOUNCE_DANGER_PCT  = 5.0;   // send critical email at 5% (ISP block territory)
-const BOUNCE_WINDOW_MS   = 24 * 60 * 60 * 1000; // rolling 24-hour window
-const BOUNCE_ALERT_COOLDOWN_MS = 4 * 60 * 60 * 1000; // max one alert per 4 hours per key
-const BOUNCE_MIN_SENT    = 50;    // don't alert until at least 50 sends (avoid noise on tiny accounts)
+const BOUNCE_WARN_PCT         = 2.0;
+const BOUNCE_DANGER_PCT       = 5.0;
+const COMPLAINT_WARN_PCT      = 0.08;  // Gmail/Yahoo threshold is 0.1%; warn just below
+const COMPLAINT_DANGER_PCT    = 0.3;   // above this = likely blocklisted
+const BOUNCE_WINDOW_MS        = 24 * 60 * 60 * 1000;
+const BOUNCE_ALERT_COOLDOWN_MS = 4 * 60 * 60 * 1000;
+const BOUNCE_MIN_SENT         = 50;
 
 // ─── SES event shapes (only the fields read) ─────────────────────────────────
 
@@ -174,6 +176,7 @@ async function handleSesEvent(
         eventId: buildEventId('email.complained', sendMessageId), payload,
       });
     }
+    void checkComplaintRate(apiKeyId);
     return;
   }
 
@@ -287,6 +290,84 @@ async function checkBounceRate(apiKeyId: string): Promise<void> {
     logger.info({ apiKeyId, pct: pct.toFixed(1), level, sent, bounced }, 'Bounce rate alert sent');
   } catch (err) {
     logger.warn({ err, apiKeyId }, 'Bounce rate check failed — non-fatal');
+  }
+}
+
+async function checkComplaintRate(apiKeyId: string): Promise<void> {
+  try {
+    const since = new Date(Date.now() - BOUNCE_WINDOW_MS);
+    const [sent, complained] = await Promise.all([
+      prisma.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since } } }),
+      prisma.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since }, status: 'complained' } }),
+    ]);
+
+    if (sent < BOUNCE_MIN_SENT) return;
+
+    const pct = (complained / sent) * 100;
+    const level = pct >= COMPLAINT_DANGER_PCT ? 'critical' : pct >= COMPLAINT_WARN_PCT ? 'warning' : null;
+    if (!level) return;
+
+    const cooldownSince = new Date(Date.now() - BOUNCE_ALERT_COOLDOWN_MS);
+    const recentAlert = await prisma.auditLog.findFirst({
+      where: { action: `complaint_rate.${level}`, actorId: apiKeyId, createdAt: { gte: cooldownSince } },
+      select: { id: true },
+    });
+    if (recentAlert) return;
+
+    const apiKey = await prisma.apiKey.findUnique({
+      where: { id: apiKeyId },
+      select: { ownerId: true, userId: true, label: true, name: true },
+    });
+    if (!apiKey) return;
+
+    const userId = apiKey.ownerId ?? apiKey.userId;
+    if (!userId) return;
+
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+    if (!user?.email) return;
+
+    const keyLabel = apiKey.label ?? apiKey.name ?? apiKeyId.slice(0, 8);
+    const subject  = level === 'critical'
+      ? `Urgent: spam complaint rate at ${pct.toFixed(2)}% — immediate action required`
+      : `Warning: spam complaint rate at ${pct.toFixed(2)}% on your account`;
+
+    await sendEmail({
+      to: user.email,
+      subject,
+      html: `
+        <p>Hi,</p>
+        <p>Your Continuum account has a ${level === 'critical' ? '<strong>critical</strong>' : 'elevated'} spam complaint rate over the last 24 hours:</p>
+        <ul>
+          <li><strong>API key:</strong> ${keyLabel}</li>
+          <li><strong>Sent (last 24h):</strong> ${sent.toLocaleString()}</li>
+          <li><strong>Complained:</strong> ${complained.toLocaleString()}</li>
+          <li><strong>Complaint rate:</strong> ${pct.toFixed(2)}%</li>
+        </ul>
+        ${level === 'critical'
+          ? '<p><strong>🚨 Gmail and Yahoo actively block senders above 0.3% complaint rate.</strong> You may already be in their blocklist.</p>'
+          : '<p>Gmail and Yahoo start filtering at 0.1% complaint rate. You are approaching that threshold.</p>'}
+        <p><strong>Immediate actions recommended:</strong></p>
+        <ul>
+          <li>Ensure every email has a clear, one-click unsubscribe link.</li>
+          <li>Remove anyone who hasn't engaged in the last 90 days.</li>
+          <li>Never send to purchased or scraped lists.</li>
+          <li>Check the <a href="${config.APP_URL ?? 'https://app.continuumapi.com'}/dashboard/suppressions">suppression list</a> to ensure complainers are not re-contacted.</li>
+        </ul>
+      `,
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        action:     `complaint_rate.${level}`,
+        actorId:    apiKeyId,
+        actorEmail: keyLabel,
+        targets:    [{ type: 'api_key', id: apiKeyId, name: keyLabel }],
+      },
+    }).catch(() => {});
+
+    logger.info({ apiKeyId, pct: pct.toFixed(2), level, sent, complained }, 'Complaint rate alert sent');
+  } catch (err) {
+    logger.warn({ err, apiKeyId }, 'Complaint rate check failed — non-fatal');
   }
 }
 
