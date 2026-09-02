@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Copy, Check, Eye, EyeOff, Plus, Trash2, KeyRound, ShieldCheck, Shield, Globe, ChevronDown, ChevronUp, X, Pencil } from "lucide-react";
+import { Copy, Check, Eye, EyeOff, Plus, Trash2, KeyRound, ShieldCheck, Shield, Globe, ChevronDown, ChevronUp, X, Pencil, RefreshCw } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -549,6 +549,7 @@ function ApiKeysPage() {
   const [saving, setSaving] = useState(false);
   const [newKey, setNewKey] = useState<NewKey | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [rotating, setRotating] = useState<string | null>(null);
   const [keyLabels, setKeyLabels] = useState<Record<string, string>>({});
 
   const create = async () => {
@@ -597,6 +598,29 @@ function ApiKeysPage() {
       toast.error((e as Error).message);
     } finally {
       setRevoking(null);
+    }
+  };
+
+  const rotate = async (id: string, name: string) => {
+    if (!primaryKey?.keyRaw || !confirm(`Rotate "${name}"? A new key will be created and this one revoked immediately.`)) return;
+    setRotating(id);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/api-keys/${id}/rotate`, {
+        method: "POST",
+        headers: { "X-API-Key": primaryKey.keyRaw },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message ?? "Failed to rotate key");
+      }
+      const data = await res.json() as { id: string; name: string; key: string; permission: string };
+      setNewKey({ id: data.id, name: data.name, keyRaw: data.key, permission: data.permission });
+      await refreshMe();
+      toast.success("Key rotated — copy your new key now");
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setRotating(null);
     }
   };
 
@@ -653,15 +677,18 @@ function ApiKeysPage() {
       )}
 
       {newKey && (
-        <div className="rounded-lg border border-border bg-muted/60 p-5 space-y-3 max-w-2xl">
-          <div className="flex items-center gap-2 text-[oklch(0.55_0.16_145)]">
+        <div className="rounded-lg border border-[oklch(0.82_0.12_145)] bg-[oklch(0.97_0.03_145)] dark:bg-[oklch(0.18_0.04_145)] p-5 space-y-3 max-w-2xl">
+          <div className="flex items-center gap-2 text-[oklch(0.45_0.16_145)]">
             <ShieldCheck className="h-4 w-4" />
-            <p className="text-sm font-medium">Key created — copy it now. You won't be able to see it again.</p>
+            <p className="text-sm font-medium">Copy your new key now — you won't be able to see it again.</p>
           </div>
           <div>
             <label className="text-xs text-muted-foreground">"{newKey.name}"</label>
             <MaskedKey prefix={newKey.keyRaw.slice(0, 8)} raw={newKey.keyRaw} />
           </div>
+          <Button variant="ghost" size="sm" className="h-6 text-xs text-muted-foreground px-0" onClick={() => setNewKey(null)}>
+            Dismiss
+          </Button>
         </div>
       )}
 
@@ -705,16 +732,28 @@ function ApiKeysPage() {
                       {k.plan ? ` · ${k.plan} plan` : ""}
                     </p>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-destructive shrink-0"
-                    onClick={() => revoke(k.id, k.name ?? k.label ?? "this key")}
-                    disabled={revoking === k.id}
-                    title="Revoke key"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground"
+                      onClick={() => rotate(k.id, k.name ?? k.label ?? "this key")}
+                      disabled={rotating === k.id || revoking === k.id}
+                      title="Rotate key"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${rotating === k.id ? "animate-spin" : ""}`} />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-destructive"
+                      onClick={() => revoke(k.id, k.name ?? k.label ?? "this key")}
+                      disabled={revoking === k.id || rotating === k.id}
+                      title="Revoke key"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
                 <div>
                   <label className="text-xs text-muted-foreground">Key</label>
