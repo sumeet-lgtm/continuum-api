@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { StatusBadge } from "@/components/StatusBadge";
 import { BarChart3, TrendingUp, MousePointerClick, AlertCircle, GitBranch, Megaphone, Mail, ChevronDown, ChevronRight } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export const Route = createFileRoute("/dashboard/analytics")({
   head: () => ({ meta: [{ title: "Analytics — Continuum API" }] }),
@@ -31,6 +32,36 @@ interface DailyBreakdown { date: string; sent: number; replied: number; bounced:
 interface MailboxDetail extends MailboxStat { daily_breakdown: DailyBreakdown[]; }
 
 type Tab = "overview" | "campaigns" | "sequences" | "mailboxes";
+
+function SkeletonAnalytics() {
+  return (
+    <div className="space-y-6">
+      <header>
+        <Skeleton className="h-8 w-28 mb-2" />
+        <Skeleton className="h-4 w-64" />
+      </header>
+      <div className="flex gap-1 border-b border-border pb-0">
+        {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-9 w-24" />)}
+      </div>
+      <div className="rounded-lg border border-border bg-card p-5 space-y-3">
+        <Skeleton className="h-4 w-48" />
+        <Skeleton className="h-4 w-72" />
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[...Array(4)].map((_, i) => (
+          <div key={i} className="rounded-lg border border-border bg-card p-4 space-y-2">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-7 w-20" />
+          </div>
+        ))}
+      </div>
+      <div className="rounded-lg border border-border bg-card p-5 space-y-3">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-52 w-full" />
+      </div>
+    </div>
+  );
+}
 
 function AnalyticsPage() {
   const { primaryKey } = useAuth();
@@ -126,7 +157,7 @@ function AnalyticsPage() {
       </div>
 
       {loading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
+        <SkeletonAnalytics />
       ) : tab === "overview" ? (
         !stats ? (
           <div className="rounded-lg border border-border bg-card p-10 text-center">
@@ -138,15 +169,15 @@ function AnalyticsPage() {
             {accuracy && <AccuracyCard accuracy={accuracy} />}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <StatCard label="Sent" value={stats.sent.toLocaleString()} icon={BarChart3} />
-              <StatCard label="Delivery rate" value={pct(stats.delivery_rate)} icon={TrendingUp} color="text-green-600" />
-              <StatCard label="Open rate" value={pct(stats.open_rate)} icon={TrendingUp} color="text-blue-600" />
-              <StatCard label="Click rate" value={pct(stats.click_rate)} icon={MousePointerClick} color="text-purple-600" />
+              <StatCard label="Delivery rate" value={pct(stats.delivery_rate)} icon={TrendingUp} color="text-[oklch(0.55_0.16_145)]" />
+              <StatCard label="Open rate" value={pct(stats.open_rate)} icon={TrendingUp} color="text-[oklch(0.65_0.16_75)]" />
+              <StatCard label="Click rate" value={pct(stats.click_rate)} icon={MousePointerClick} color="text-[oklch(0.65_0.16_75)]" />
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <StatCard label="Delivered" value={stats.delivered.toLocaleString()} />
-              <StatCard label="Bounced" value={stats.bounced.toLocaleString()} color="text-red-600" />
-              <StatCard label="Bounce rate" value={pct(stats.bounce_rate)} color={stats.bounce_rate > 5 ? "text-red-600" : undefined} icon={AlertCircle} />
-              <StatCard label="Complaints" value={stats.complained.toLocaleString()} color={stats.complained > 0 ? "text-red-600" : undefined} />
+              <StatCard label="Bounced" value={stats.bounced.toLocaleString()} color="text-[oklch(0.58_0.22_27)]" />
+              <StatCard label="Bounce rate" value={pct(stats.bounce_rate)} color={stats.bounce_rate > 5 ? "text-[oklch(0.58_0.22_27)]" : undefined} icon={AlertCircle} />
+              <StatCard label="Complaints" value={stats.complained.toLocaleString()} color={stats.complained > 0 ? "text-[oklch(0.58_0.22_27)]" : undefined} />
             </div>
             <div className="rounded-lg border border-border bg-card p-5">
               <h2 className="text-sm font-medium mb-4">Daily volume — last 30 days</h2>
@@ -164,8 +195,8 @@ function AnalyticsPage() {
                     <YAxis tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} allowDecimals={false} />
                     <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }} />
                     <Area type="monotone" dataKey="sent" stroke="var(--foreground)" strokeWidth={2} fill="url(#sent)" dot={false} name="Sent" />
-                    <Area type="monotone" dataKey="delivered" stroke="oklch(0.55 0.15 250)" strokeWidth={1.5} fill="none" dot={false} name="Delivered" />
-                    <Area type="monotone" dataKey="bounced" stroke="oklch(0.55 0.15 300)" strokeWidth={1.5} fill="none" dot={false} name="Bounced" />
+                    <Area type="monotone" dataKey="delivered" stroke="oklch(0.55 0.16 145)" strokeWidth={1.5} fill="none" dot={false} name="Delivered" />
+                    <Area type="monotone" dataKey="bounced" stroke="oklch(0.58 0.22 27)" strokeWidth={1.5} fill="none" dot={false} name="Bounced" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -203,7 +234,7 @@ function AnalyticsPage() {
                     <td className="px-5 py-3 tabular-nums">{pct(c.delivery_rate)}</td>
                     <td className="px-5 py-3 tabular-nums">{pct(c.open_rate)}</td>
                     <td className="px-5 py-3 tabular-nums">{pct(c.click_rate)}</td>
-                    <td className="px-5 py-3 tabular-nums"><span className={c.bounce_rate > 5 ? "text-red-600" : ""}>{pct(c.bounce_rate)}</span></td>
+                    <td className="px-5 py-3 tabular-nums"><span className={c.bounce_rate > 5 ? "text-[oklch(0.58_0.22_27)]" : ""}>{pct(c.bounce_rate)}</span></td>
                     <td className="px-5 py-3 text-muted-foreground text-xs">{c.sentAt ? new Date(c.sentAt).toLocaleDateString() : "—"}</td>
                   </tr>
                 ))}
@@ -242,7 +273,7 @@ function AnalyticsPage() {
                     <td className="px-5 py-3 tabular-nums">{s.active.toLocaleString()}</td>
                     <td className="px-5 py-3 tabular-nums">{s.completed.toLocaleString()}</td>
                     <td className="px-5 py-3 tabular-nums">{s.replied.toLocaleString()}</td>
-                    <td className="px-5 py-3 tabular-nums font-medium text-blue-600">{pct(s.reply_rate)}</td>
+                    <td className="px-5 py-3 tabular-nums font-medium text-[oklch(0.55_0.16_145)]">{pct(s.reply_rate)}</td>
                     <td className="px-5 py-3 tabular-nums">{pct(s.completion_rate)}</td>
                   </tr>
                 ))}
@@ -251,7 +282,7 @@ function AnalyticsPage() {
           </div>
         )
       ) : mailboxesLoading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
+        <SkeletonAnalytics />
       ) : mailboxes.length === 0 ? (
         <div className="rounded-lg border border-border bg-card p-10 text-center">
           <Mail className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
@@ -312,9 +343,9 @@ function AnalyticsPage() {
                                 <XAxis dataKey="date" tick={{ fontSize: 9, fill: "var(--muted-foreground)" }} tickFormatter={(d: string) => d.slice(5)} />
                                 <YAxis tick={{ fontSize: 9, fill: "var(--muted-foreground)" }} allowDecimals={false} />
                                 <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 11 }} />
-                                <Bar dataKey="sent" fill="oklch(0.55 0.15 250)" name="Sent" radius={[2, 2, 0, 0]} />
-                                <Bar dataKey="replied" fill="oklch(0.55 0.15 150)" name="Replied" radius={[2, 2, 0, 0]} />
-                                <Bar dataKey="bounced" fill="oklch(0.55 0.15 30)" name="Bounced" radius={[2, 2, 0, 0]} />
+                                <Bar dataKey="sent" fill="var(--foreground)" name="Sent" radius={[2, 2, 0, 0]} />
+                                <Bar dataKey="replied" fill="oklch(0.55 0.16 145)" name="Replied" radius={[2, 2, 0, 0]} />
+                                <Bar dataKey="bounced" fill="oklch(0.58 0.22 27)" name="Bounced" radius={[2, 2, 0, 0]} />
                               </BarChart>
                             </ResponsiveContainer>
                           </div>
@@ -372,7 +403,7 @@ function AccuracyCard({ accuracy }: { accuracy: AccuracyStats }) {
   }
 
   const pctVal = accuracy.measured_accuracy_pct!;
-  const color = pctVal >= 97 ? "text-green-600" : pctVal >= 90 ? "text-amber-600" : "text-red-600";
+  const color = pctVal >= 97 ? "text-[oklch(0.55_0.16_145)]" : pctVal >= 90 ? "text-[oklch(0.65_0.16_75)]" : "text-[oklch(0.58_0.22_27)]";
 
   return (
     <div className="rounded-lg border border-border bg-card p-5">
