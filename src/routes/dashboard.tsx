@@ -219,6 +219,7 @@ const NAV: NavItem[] = [
   { to: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { to: "/dashboard/api-keys", label: "API Keys", icon: KeyRound },
   { to: "/dashboard/logs", label: "API Logs", icon: Terminal },
+  { to: "/dashboard/playground", label: "Playground", icon: FlaskConical },
   { to: "/dashboard/api-reference", label: "API Reference", icon: BookOpen },
   {
     to: "/dashboard/transactional",

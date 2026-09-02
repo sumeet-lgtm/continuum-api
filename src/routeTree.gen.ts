@@ -45,6 +45,7 @@ import { Route as DashboardMigrateRouteImport } from './routes/dashboard.migrate
 import { Route as DashboardMonitoringRouteImport } from './routes/dashboard.monitoring'
 import { Route as DashboardOrganizationRouteImport } from './routes/dashboard.organization'
 import { Route as DashboardPhoneRouteImport } from './routes/dashboard.phone'
+import { Route as DashboardPlaygroundRouteImport } from './routes/dashboard.playground'
 import { Route as DashboardSegmentsRouteImport } from './routes/dashboard.segments'
 import { Route as DashboardSequencesRouteImport } from './routes/dashboard.sequences'
 import { Route as DashboardSettingsRouteImport } from './routes/dashboard.settings'
@@ -237,6 +238,11 @@ const DashboardPhoneRoute = DashboardPhoneRouteImport.update({
   path: '/phone',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardPlaygroundRoute = DashboardPlaygroundRouteImport.update({
+  id: '/playground',
+  path: '/playground',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardSegmentsRoute = DashboardSegmentsRouteImport.update({
   id: '/segments',
   path: '/segments',
@@ -308,6 +314,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/privacy': typeof DashboardPrivacyRoute
+  '/dashboard/playground': typeof DashboardPlaygroundRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
@@ -356,6 +363,7 @@ export interface FileRoutesByTo {
   '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/privacy': typeof DashboardPrivacyRoute
+  '/dashboard/playground': typeof DashboardPlaygroundRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
@@ -406,6 +414,7 @@ export interface FileRoutesById {
   '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/privacy': typeof DashboardPrivacyRoute
+  '/dashboard/playground': typeof DashboardPlaygroundRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
@@ -457,6 +466,7 @@ export interface FileRouteTypes {
     | '/dashboard/api-reference'
     | '/dashboard/audit-logs'
     | '/dashboard/privacy'
+    | '/dashboard/playground'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
     | '/dashboard/billing'
@@ -505,6 +515,7 @@ export interface FileRouteTypes {
     | '/dashboard/api-reference'
     | '/dashboard/audit-logs'
     | '/dashboard/privacy'
+    | '/dashboard/playground'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
     | '/dashboard/billing'
@@ -554,6 +565,7 @@ export interface FileRouteTypes {
     | '/dashboard/api-reference'
     | '/dashboard/audit-logs'
     | '/dashboard/privacy'
+    | '/dashboard/playground'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
     | '/dashboard/billing'
@@ -854,6 +866,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardPhoneRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/playground': {
+      id: '/dashboard/playground'
+      path: '/playground'
+      fullPath: '/dashboard/playground'
+      preLoaderRoute: typeof DashboardPlaygroundRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/segments': {
       id: '/dashboard/segments'
       path: '/segments'
@@ -941,6 +960,7 @@ interface DashboardRouteChildren {
   DashboardApiReferenceRoute: typeof DashboardApiReferenceRoute
   DashboardAuditLogsRoute: typeof DashboardAuditLogsRoute
   DashboardPrivacyRoute: typeof DashboardPrivacyRoute
+  DashboardPlaygroundRoute: typeof DashboardPlaygroundRoute
   DashboardAutomationsRoute: typeof DashboardAutomationsRoute
   DashboardBatchSendRoute: typeof DashboardBatchSendRoute
   DashboardBillingRoute: typeof DashboardBillingRoute
@@ -983,6 +1003,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardApiReferenceRoute: DashboardApiReferenceRoute,
   DashboardAuditLogsRoute: DashboardAuditLogsRoute,
   DashboardPrivacyRoute: DashboardPrivacyRoute,
+  DashboardPlaygroundRoute: DashboardPlaygroundRoute,
   DashboardAutomationsRoute: DashboardAutomationsRoute,
   DashboardBatchSendRoute: DashboardBatchSendRoute,
   DashboardBillingRoute: DashboardBillingRoute,
