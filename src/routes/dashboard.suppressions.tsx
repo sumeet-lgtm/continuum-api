@@ -44,6 +44,7 @@ function SuppressionsPage() {
   const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState("");
   const [reason, setReason] = useState("manual");
+  const [stats, setStats] = useState<{ total: number; byReason: Record<string, number> } | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkEmails, setBulkEmails] = useState<string[]>([]);
   const [bulkImporting, setBulkImporting] = useState(false);
@@ -51,11 +52,13 @@ function SuppressionsPage() {
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
-    api.withKey
-      .get<{ data: Suppression[]; total: number }>("/v1/suppressions?page=1&limit=200", primaryKey.keyRaw)
-      .then((r) => { setSuppressions(r.data ?? []); setTotal(r.total ?? 0); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    Promise.allSettled([
+      api.withKey.get<{ data: Suppression[]; total: number }>("/v1/suppressions?page=1&limit=200", primaryKey.keyRaw),
+      api.withKey.get<{ total: number; byReason: Record<string, number> }>("/v1/suppressions/stats", primaryKey.keyRaw),
+    ]).then(([listRes, statsRes]) => {
+      if (listRes.status === "fulfilled") { setSuppressions(listRes.value.data ?? []); setTotal(listRes.value.total ?? 0); }
+      if (statsRes.status === "fulfilled") setStats(statsRes.value);
+    }).finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); }, [primaryKey]);
@@ -162,6 +165,32 @@ function SuppressionsPage() {
           </Button>
         </div>
       </div>
+
+      {/* Reason breakdown stats */}
+      {stats && stats.total > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+          {[
+            { key: "hard_bounce", label: "Hard bounce" },
+            { key: "soft_bounce", label: "Soft bounce" },
+            { key: "complaint", label: "Spam complaint" },
+            { key: "unsubscribed", label: "Unsubscribed" },
+            { key: "manual", label: "Manual" },
+          ].map(({ key, label }) => {
+            const count = stats.byReason[key] ?? 0;
+            const pct = stats.total > 0 ? (count / stats.total) * 100 : 0;
+            return (
+              <div key={key} className="rounded-lg border border-border bg-card p-3">
+                <p className="text-xs text-muted-foreground truncate">{label}</p>
+                <p className="text-lg font-semibold tabular-nums mt-0.5">{count.toLocaleString()}</p>
+                <div className="h-1 rounded-full bg-muted overflow-hidden mt-1.5">
+                  <div className="h-full bg-foreground/60 rounded-full" style={{ width: `${pct}%` }} />
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{pct.toFixed(0)}%</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {adding && (
         <div className="rounded-lg border border-border bg-card p-5 space-y-4 max-w-md">
