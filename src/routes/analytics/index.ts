@@ -337,4 +337,67 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       });
     },
   );
+
+  // GET /v1/analytics/domains — per sending-domain breakdown
+  // Groups send stats by the verified sending domain on each message.
+  // Returns rows ordered by send volume descending.
+  fastify.get(
+    '/analytics/domains',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const apiKeyId = request.apiKey.id;
+      const q = request.query as StatsQuery;
+      const where = buildWhere(apiKeyId, q);
+
+      // Pull all messages that have a domainId, within the requested window
+      const messages = await prisma.sendMessage.findMany({
+        where: { ...where, domainId: { not: null } },
+        select: { domainId: true, status: true },
+      });
+
+      // Aggregate counts per domain in memory (avoids a GROUP BY that needs raw SQL)
+      const byDomain = new Map<string, { sent: number; delivered: number; bounced: number; complained: number }>();
+      for (const msg of messages) {
+        const domId = msg.domainId!;
+        if (!byDomain.has(domId)) byDomain.set(domId, { sent: 0, delivered: 0, bounced: 0, complained: 0 });
+        const d = byDomain.get(domId)!;
+        if (['sent', 'delivered', 'bounced', 'complained', 'failed'].includes(msg.status)) d.sent++;
+        if (msg.status === 'delivered')  d.delivered++;
+        if (msg.status === 'bounced')    d.bounced++;
+        if (msg.status === 'complained') d.complained++;
+      }
+
+      if (byDomain.size === 0) {
+        return reply.status(200).send({ data: [] });
+      }
+
+      // Fetch domain names for the IDs we have
+      const domainIds = Array.from(byDomain.keys());
+      const domains = await prisma.domain.findMany({
+        where: { id: { in: domainIds } },
+        select: { id: true, domain: true, status: true },
+      });
+      const domainMap = new Map(domains.map((d) => [d.id, d]));
+
+      const data = Array.from(byDomain.entries())
+        .map(([id, stats]) => {
+          const dom = domainMap.get(id);
+          return {
+            domain_id:      id,
+            domain:         dom?.domain ?? id,
+            domain_status:  dom?.status ?? 'unknown',
+            sent:           stats.sent,
+            delivered:      stats.delivered,
+            bounced:        stats.bounced,
+            complained:     stats.complained,
+            delivery_rate:  stats.sent > 0 ? +(stats.delivered  / stats.sent * 100).toFixed(1) : 0,
+            bounce_rate:    stats.sent > 0 ? +(stats.bounced     / stats.sent * 100).toFixed(1) : 0,
+            complaint_rate: stats.sent > 0 ? +(stats.complained  / stats.sent * 100).toFixed(2) : 0,
+          };
+        })
+        .sort((a, b) => b.sent - a.sent);
+
+      return reply.status(200).send({ data });
+    },
+  );
 }
