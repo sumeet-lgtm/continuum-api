@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, FlaskConical, CheckCircle2 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/transactional")({
   head: () => ({ meta: [{ title: "Send Email — Continuum API" }] }),
@@ -32,8 +32,9 @@ function TransactionalPage() {
     idempotency_key: "",
   });
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [testMode, setTestMode] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ id: string } | null>(null);
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     if (!primaryKey?.keyRaw) return;
@@ -49,6 +50,7 @@ function TransactionalPage() {
   const send = async () => {
     if (!primaryKey?.keyRaw) return;
     setLoading(true);
+    setResult(null);
     try {
       const body: Record<string, unknown> = {
         from: form.from,
@@ -59,17 +61,20 @@ function TransactionalPage() {
         template_id: form.template_id || undefined,
         scheduled_at: form.scheduled_at || undefined,
         idempotency_key: form.idempotency_key || undefined,
+        ...(testMode && { test: true }),
       };
       if (form.cc) body.cc = form.cc.split(",").map((s) => s.trim()).filter(Boolean);
       if (form.bcc) body.bcc = form.bcc.split(",").map((s) => s.trim()).filter(Boolean);
       if (form.reply_to) body.reply_to = form.reply_to;
 
-      const res = await api.withKey.post<{ id: string }>("/v1/send", body, primaryKey.keyRaw);
+      const res = await api.withKey.post<Record<string, unknown>>("/v1/send", body, primaryKey.keyRaw);
       setResult(res);
-      if (form.scheduled_at) {
-        toast.success("Email scheduled", { description: `Message ID: ${res.id}` });
+      if (testMode) {
+        toast.success("Test simulation complete", { description: "Email rendered — no SES call made, no credit used." });
+      } else if (form.scheduled_at) {
+        toast.success("Email scheduled", { description: `Message ID: ${String(res.id)}` });
       } else {
-        toast.success("Email sent", { description: `Message ID: ${res.id}` });
+        toast.success("Email sent", { description: `Message ID: ${String(res.id)}` });
       }
     } catch (e: unknown) {
       toast.error((e as Error).message);
@@ -178,13 +183,86 @@ function TransactionalPage() {
           </div>
         )}
 
-        <Button onClick={send} disabled={loading || !primaryKey || !form.from || !form.to}>
-          {loading ? "Sending…" : form.scheduled_at ? "Schedule Email" : "Send Email"}
-        </Button>
+        {/* Test mode toggle */}
+        <div className="pt-3 border-t border-border">
+          <label className="flex items-start gap-3 cursor-pointer group">
+            <div className="relative mt-0.5">
+              <input
+                type="checkbox"
+                className="sr-only peer"
+                checked={testMode}
+                onChange={(e) => setTestMode(e.target.checked)}
+              />
+              <div className="w-9 h-5 rounded-full border border-border bg-muted peer-checked:bg-foreground transition-colors" />
+              <div className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-background border border-border shadow-sm transition-transform peer-checked:translate-x-4 peer-checked:border-background" />
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5 text-sm font-medium">
+                <FlaskConical className="h-3.5 w-3.5 text-muted-foreground" />
+                Test mode
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">Renders the email without sending. No SES call, no credit used.</p>
+            </div>
+          </label>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Button onClick={send} disabled={loading || !primaryKey || !form.from || !form.to}>
+            {loading
+              ? testMode ? "Simulating…" : "Sending…"
+              : testMode ? "Simulate (no send)" : form.scheduled_at ? "Schedule Email" : "Send Email"}
+          </Button>
+          {testMode && (
+            <span className="text-xs text-muted-foreground font-mono">test:true will be sent</span>
+          )}
+        </div>
 
         {result && (
-          <div className="rounded-md bg-muted px-3 py-2 text-xs font-mono text-muted-foreground">
-            ✓ {form.scheduled_at ? "Scheduled" : "Sent"} — message ID: {result.id}
+          <div className="space-y-3">
+            {result.test ? (
+              <div className="rounded-lg border border-border bg-muted/30 overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-muted/50">
+                  <FlaskConical className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-xs font-medium text-muted-foreground">Simulated response — email was rendered, not sent</span>
+                </div>
+                <div className="p-4 space-y-3">
+                  {Boolean(result.subject) && (
+                    <div>
+                      <div className="text-xs text-muted-foreground mb-1">Subject</div>
+                      <div className="text-sm font-medium">{String(result.subject)}</div>
+                    </div>
+                  )}
+                  {Boolean(result.from) && (
+                    <div>
+                      <div className="text-xs text-muted-foreground mb-1">From</div>
+                      <div className="text-sm font-mono">{String(result.from)}</div>
+                    </div>
+                  )}
+                  {Boolean(result.html_body) && (
+                    <div>
+                      <div className="text-xs text-muted-foreground mb-1">Rendered HTML preview</div>
+                      <div className="rounded-md border border-border bg-background overflow-hidden max-h-64 overflow-y-auto">
+                        <iframe
+                          srcDoc={String(result.html_body)}
+                          className="w-full"
+                          style={{ height: 240, border: "none" }}
+                          sandbox="allow-same-origin"
+                          title="Email preview"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <div className="text-xs font-mono text-muted-foreground pt-1 border-t border-border">
+                    id: {String(result.id)}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 rounded-md bg-muted px-3 py-2 text-xs font-mono text-muted-foreground">
+                <CheckCircle2 className="h-3.5 w-3.5 text-[oklch(0.55_0.16_145)] shrink-0" />
+                {form.scheduled_at ? "Scheduled" : "Sent"} — message ID: {String(result.id)}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -197,15 +275,17 @@ X-API-Key: ${primaryKey?.keyRaw ?? "<your-api-key>"}
 {
   "from": "noreply@yourapp.com",
   "to": ["recipient@example.com"],
-  "cc": ["cc@example.com"],          // optional
-  "bcc": ["bcc@example.com"],        // optional
-  "reply_to": "support@yourapp.com", // optional
+  "cc": ["cc@example.com"],              // optional
+  "bcc": ["bcc@example.com"],            // optional
+  "reply_to": "support@yourapp.com",     // optional
   "subject": "Your subject",
   "html_body": "<p>Hello {{first_name}}!</p>",
-  "text_body": "Hello!",             // optional
-  "template_id": "tmpl_xxx",        // optional — overrides html_body/subject
+  "mjml_body": "<mjml>...</mjml>",       // optional — compiled server-side
+  "text_body": "Hello!",                 // optional
+  "template_id": "tmpl_xxx",            // optional — overrides html_body/subject
   "scheduled_at": "2026-09-01T09:00:00Z",  // optional
-  "idempotency_key": "welcome-user-123"    // optional
+  "idempotency_key": "welcome-user-123",    // optional
+  "test": true                           // optional — renders without sending, no charge
 }`}</pre>
       </div>
     </div>
