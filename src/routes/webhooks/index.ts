@@ -661,4 +661,44 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
       });
     },
   );
+
+  // ── POST /v1/webhooks/:id/rotate-secret ──────────────────────────────────
+  // Generate a new signing secret for the webhook. The old secret stops
+  // working immediately. The new secret is shown once and never stored in
+  // plaintext again — treat the response like a new API key.
+  fastify.post<{ Params: WebhookParams }>(
+    '/webhooks/:id/rotate-secret',
+    {
+      preHandler: [requireAuth, requireRateLimit],
+      schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
+    },
+    async (request: FastifyRequest<{ Params: WebhookParams }>, reply: FastifyReply) => {
+      const webhook = await prisma.webhook.findUnique({
+        where:  { id: request.params.id },
+        select: { id: true, apiKeyId: true, url: true, isActive: true },
+      });
+      if (!webhook || webhook.apiKeyId !== request.apiKey.id) {
+        throw Errors.notFound('Webhook');
+      }
+      if (!webhook.isActive) {
+        throw Errors.validationFailed({ isActive: 'Webhook is inactive. Reactivate it before rotating the secret.' });
+      }
+
+      const newSecret = generateWebhookSecret();
+
+      await prisma.webhook.update({
+        where: { id: webhook.id },
+        data:  { secret: newSecret },
+      });
+
+      logger.info({ webhookId: webhook.id }, 'Webhook signing secret rotated');
+
+      return reply.status(200).send({
+        webhookId:   webhook.id,
+        secret:      newSecret,
+        _secretNote: 'Replace your X-Continuum-Signature verification with this new secret. The old secret is no longer valid.',
+        rotatedAt:   new Date().toISOString(),
+      });
+    },
+  );
 }
