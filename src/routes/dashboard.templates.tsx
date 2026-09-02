@@ -167,9 +167,12 @@ function TemplatesPage() {
           ))}
         </div>
       ) : templates.length === 0 ? (
-        <div className="rounded-lg border border-border bg-card p-10 text-center">
-          <FileText className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
+        <div className="rounded-lg border border-border bg-card p-10 text-center space-y-3">
+          <FileText className="h-8 w-8 text-muted-foreground mx-auto" />
           <p className="text-sm text-muted-foreground">No templates yet. Create your first one to reuse across sends.</p>
+          <Button size="sm" onClick={() => setCreating(true)}>
+            <Plus className="h-4 w-4 mr-1.5" /> Create template
+          </Button>
         </div>
       ) : (
         <div className="rounded-lg border border-border bg-card overflow-hidden">

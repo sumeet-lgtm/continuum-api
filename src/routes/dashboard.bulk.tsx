@@ -363,8 +363,9 @@ function BulkPage() {
             ))}
           </div>
         ) : jobs.length === 0 ? (
-          <div className="p-10 text-center text-sm text-muted-foreground">
-            No bulk jobs yet. Upload a CSV to get started.
+          <div className="p-10 text-center space-y-3">
+            <p className="text-sm text-muted-foreground">No bulk jobs yet.</p>
+            <p className="text-xs text-muted-foreground">Upload a CSV of email addresses to verify them all in one go — results are downloadable when complete.</p>
           </div>
         ) : (
           <table className="w-full text-sm">

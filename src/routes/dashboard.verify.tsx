@@ -260,8 +260,8 @@ function VerifyPage() {
       )}
 
       {result && checks.smtpChecked === false && (
-        <div className="rounded-lg border border-[oklch(0.85_0.12_85)] bg-[oklch(0.97_0.05_95)] p-4 text-sm text-[oklch(0.35_0.08_70)]">
-          <strong className="font-medium">Note:</strong> SMTP could not be confirmed for this address (mailbox server unreachable, timed out, or greylisted). Status reflects syntax, MX, and domain-health signals only — do not treat &quot;unknown&quot; as safe to send without a retry.
+        <div className="rounded-lg border border-border bg-muted/50 p-4 text-sm text-muted-foreground">
+          <strong className="font-medium text-foreground">Note:</strong> SMTP could not be confirmed for this address (mailbox server unreachable, timed out, or greylisted). Status reflects syntax, MX, and domain-health signals only — do not treat &quot;unknown&quot; as safe to send without a retry.
         </div>
       )}
 

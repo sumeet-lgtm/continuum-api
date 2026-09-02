@@ -215,8 +215,12 @@ function WebhooksPage() {
             ))}
           </div>
         ) : hooks.length === 0 ? (
-          <div className="p-10 text-center text-sm text-muted-foreground">
-            No webhooks configured yet.
+          <div className="p-10 text-center space-y-3">
+            <p className="text-sm text-muted-foreground">No webhooks configured yet.</p>
+            <p className="text-xs text-muted-foreground">Receive real-time event notifications when emails are delivered, bounced, or verified.</p>
+            <Button size="sm" onClick={() => setOpen(true)} className="mt-1">
+              <Plus className="h-4 w-4 mr-1.5" /> Add webhook
+            </Button>
           </div>
         ) : (
           <ul className="divide-y divide-border">

@@ -267,9 +267,12 @@ function DomainsPage() {
           ))}
         </div>
       ) : domains.length === 0 ? (
-        <div className="rounded-lg border border-border bg-card p-10 text-center">
-          <ServerCog className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
+        <div className="rounded-lg border border-border bg-card p-10 text-center space-y-3">
+          <ServerCog className="h-8 w-8 text-muted-foreground mx-auto" />
           <p className="text-sm text-muted-foreground">No sending domains yet. Add a custom domain to improve deliverability with DKIM signing.</p>
+          <Button size="sm" onClick={() => setAdding(true)}>
+            <Plus className="h-4 w-4 mr-1.5" /> Add domain
+          </Button>
         </div>
       ) : (
         <div className="rounded-lg border border-border bg-card overflow-hidden">

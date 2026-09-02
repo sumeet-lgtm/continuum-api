@@ -51,15 +51,19 @@ function ConnectorsPage() {
   const [lists, setLists] = useState<MailingList[]>([]);
   const [sequenceId, setSequenceId] = useState<string>("");
   const [listId, setListId] = useState<string>("");
+  const [loadingData, setLoadingData] = useState(true);
 
   useEffect(() => {
     if (!primaryKey?.keyRaw) return;
-    api.withKey.get<{ data: Sequence[] }>("/v1/sequences", primaryKey.keyRaw)
-      .then((r) => setSequences(r.data ?? []))
-      .catch(() => {});
-    api.withKey.get<{ lists: MailingList[] }>("/v1/lists", primaryKey.keyRaw)
-      .then((r) => setLists(r.lists ?? []))
-      .catch(() => {});
+    setLoadingData(true);
+    Promise.all([
+      api.withKey.get<{ data: Sequence[] }>("/v1/sequences", primaryKey.keyRaw)
+        .then((r) => setSequences(r.data ?? []))
+        .catch(() => {}),
+      api.withKey.get<{ lists: MailingList[] }>("/v1/lists", primaryKey.keyRaw)
+        .then((r) => setLists(r.lists ?? []))
+        .catch(() => {}),
+    ]).finally(() => setLoadingData(false));
   }, [primaryKey]);
 
   const seqParam = sequenceId ? `?sequence_id=${sequenceId}` : "";
@@ -74,7 +78,12 @@ function ConnectorsPage() {
         </p>
       </header>
 
-      {sequences.length > 0 && (
+      {loadingData ? (
+        <div className="rounded-lg border border-border bg-card p-4 flex items-center gap-3">
+          <div className="h-3 w-36 bg-muted rounded animate-pulse" />
+          <div className="h-8 w-56 bg-muted rounded animate-pulse" />
+        </div>
+      ) : sequences.length > 0 && (
         <div className="rounded-lg border border-border bg-card p-4 flex items-center gap-3">
           <label className="text-xs text-muted-foreground shrink-0">Auto-enroll incoming leads into</label>
           <Select value={sequenceId} onValueChange={setSequenceId}>

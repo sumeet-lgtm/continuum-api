@@ -1,9 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Copy, Check, Eye, EyeOff, Plus, Trash2, KeyRound, ShieldCheck, Shield } from "lucide-react";
+import { Copy, Check, Eye, EyeOff, Plus, Trash2, KeyRound, ShieldCheck, Shield, Globe, ChevronDown, ChevronUp, X } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -47,6 +46,115 @@ function MaskedKey({ prefix, raw }: { prefix: string; raw: string | null }) {
         {copied ? <Check className="h-3.5 w-3.5 text-[oklch(0.55_0.16_145)]" /> : <Copy className="h-3.5 w-3.5" />}
         <span className="ml-1.5">{copied ? "Copied" : "Copy"}</span>
       </Button>
+    </div>
+  );
+}
+
+function IpAllowlistPanel({
+  keyId,
+  currentIps,
+  apiKeyRaw,
+  onUpdated,
+}: {
+  keyId: string;
+  currentIps: string[];
+  apiKeyRaw: string;
+  onUpdated: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [ips, setIps] = useState<string[]>(currentIps);
+  const [input, setInput] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const addIp = () => {
+    const trimmed = input.trim();
+    if (!trimmed || ips.includes(trimmed)) return;
+    setIps((prev) => [...prev, trimmed]);
+    setInput("");
+  };
+
+  const removeIp = (ip: string) => setIps((prev) => prev.filter((x) => x !== ip));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/api-keys/${keyId}/ip-allowlist`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKeyRaw },
+        body: JSON.stringify({ ips }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message ?? "Failed to update");
+      }
+      toast.success(ips.length === 0 ? "IP allowlist cleared" : `Allowlist updated (${ips.length} IP${ips.length !== 1 ? "s" : ""})`);
+      onUpdated();
+      setOpen(false);
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="border border-border rounded-md">
+      <button
+        className="w-full flex items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:bg-muted/30 rounded-md transition-colors"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="flex items-center gap-1.5">
+          <Globe className="h-3 w-3" />
+          IP Allowlist
+          {currentIps.length > 0 && (
+            <span className="ml-1 rounded-full bg-foreground text-background px-1.5 py-0.5 text-[10px] font-medium leading-none">
+              {currentIps.length}
+            </span>
+          )}
+        </span>
+        {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 space-y-3 border-t border-border mt-0 pt-3">
+          <p className="text-xs text-muted-foreground">
+            Restrict this key to specific IP addresses or CIDR ranges. Leave empty to allow all IPs.
+          </p>
+
+          {ips.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {ips.map((ip) => (
+                <span key={ip} className="flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-mono">
+                  {ip}
+                  <button onClick={() => removeIp(ip)} className="text-muted-foreground hover:text-foreground">
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <Input
+              className="h-7 text-xs font-mono"
+              placeholder="192.168.1.0/24 or 203.0.113.5"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addIp(); }}
+            />
+            <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={addIp}>Add</Button>
+          </div>
+
+          <div className="flex gap-2">
+            <Button size="sm" className="h-7 text-xs" onClick={save} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setIps(currentIps); setOpen(false); }}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -226,6 +334,14 @@ function ApiKeysPage() {
                       : ""}
                   </p>
                 </div>
+                {primaryKey?.keyRaw && (
+                  <IpAllowlistPanel
+                    keyId={k.id}
+                    currentIps={(k as { allowedIps?: string[] }).allowedIps ?? []}
+                    apiKeyRaw={primaryKey.keyRaw}
+                    onUpdated={refreshMe}
+                  />
+                )}
               </div>
             ))}
           </div>

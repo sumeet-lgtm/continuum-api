@@ -161,8 +161,12 @@ function MonitoringPage() {
             ))}
           </div>
         ) : items.length === 0 ? (
-          <div className="p-10 text-center text-sm text-muted-foreground">
-            No monitored emails yet.
+          <div className="p-10 text-center space-y-3">
+            <p className="text-sm text-muted-foreground">No monitored emails yet.</p>
+            <p className="text-xs text-muted-foreground">Add an email address to get alerted whenever its deliverability status changes.</p>
+            <Button size="sm" onClick={() => setOpen(true)} className="mt-1">
+              <Plus className="h-4 w-4 mr-1.5" /> Add monitor
+            </Button>
           </div>
         ) : (
           <table className="w-full text-sm">
