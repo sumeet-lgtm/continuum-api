@@ -5,11 +5,21 @@ import { verifySnsMessage, type SnsMessage } from '../../lib/snsVerify.js';
 import { invalidateSmtpCache } from '../../engine/smtpCache.js';
 import { monitorQueue } from '../../lib/queue.js';
 import { logger } from '../../lib/logger.js';
+import { sendEmail } from '../../lib/email.js';
+import { config } from '../../config.js';
 import type {
   EmailDeliveredPayload, EmailBouncedPayload, EmailComplainedPayload,
 } from '../../types/webhook.js';
 import type { MonitorRecheckPayload } from '../../types/job.js';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
+
+// ─── Bounce rate alert thresholds ─────────────────────────────────────────────
+
+const BOUNCE_WARN_PCT    = 2.0;   // send warning email at 2% (ISP watch threshold)
+const BOUNCE_DANGER_PCT  = 5.0;   // send critical email at 5% (ISP block territory)
+const BOUNCE_WINDOW_MS   = 24 * 60 * 60 * 1000; // rolling 24-hour window
+const BOUNCE_ALERT_COOLDOWN_MS = 4 * 60 * 60 * 1000; // max one alert per 4 hours per key
+const BOUNCE_MIN_SENT    = 50;    // don't alert until at least 50 sends (avoid noise on tiny accounts)
 
 // ─── SES event shapes (only the fields read) ─────────────────────────────────
 
@@ -202,7 +212,86 @@ async function handleSesEvent(
  *      instead of waiting for its next scheduled interval — the fastest
  *      possible drift alert is "we just watched it bounce for real."
  */
+async function checkBounceRate(apiKeyId: string): Promise<void> {
+  try {
+    const since = new Date(Date.now() - BOUNCE_WINDOW_MS);
+    const [sent, bounced] = await Promise.all([
+      prisma.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since } } }),
+      prisma.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since }, status: 'bounced' } }),
+    ]);
+
+    if (sent < BOUNCE_MIN_SENT) return;
+
+    const pct = (bounced / sent) * 100;
+    const level = pct >= BOUNCE_DANGER_PCT ? 'critical' : pct >= BOUNCE_WARN_PCT ? 'warning' : null;
+    if (!level) return;
+
+    const cooldownSince = new Date(Date.now() - BOUNCE_ALERT_COOLDOWN_MS);
+    const recentAlert = await prisma.auditLog.findFirst({
+      where: { action: `bounce_rate.${level}`, actorId: apiKeyId, createdAt: { gte: cooldownSince } },
+      select: { id: true },
+    });
+    if (recentAlert) return;
+
+    const apiKey = await prisma.apiKey.findUnique({
+      where: { id: apiKeyId },
+      select: { ownerId: true, userId: true, label: true, name: true },
+    });
+    if (!apiKey) return;
+
+    const userId = apiKey.ownerId ?? apiKey.userId;
+    if (!userId) return;
+
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+    if (!user?.email) return;
+
+    const keyLabel = apiKey.label ?? apiKey.name ?? apiKeyId.slice(0, 8);
+    const subject  = level === 'critical'
+      ? `Action required: bounce rate at ${pct.toFixed(1)}% on your account`
+      : `Heads up: bounce rate reaching ${pct.toFixed(1)}% — action recommended`;
+
+    await sendEmail({
+      to: user.email,
+      subject,
+      html: `
+        <p>Hi,</p>
+        <p>Your Continuum account has a ${level === 'critical' ? '<strong>high</strong>' : 'elevated'} email bounce rate over the last 24 hours:</p>
+        <ul>
+          <li><strong>API key:</strong> ${keyLabel}</li>
+          <li><strong>Sent (last 24h):</strong> ${sent.toLocaleString()}</li>
+          <li><strong>Bounced:</strong> ${bounced.toLocaleString()}</li>
+          <li><strong>Bounce rate:</strong> ${pct.toFixed(1)}%</li>
+        </ul>
+        ${level === 'critical'
+          ? '<p><strong>⚠️ Gmail, Yahoo, and Outlook block senders above 5% bounce rate.</strong> If this continues, your sending reputation may be impacted immediately.</p>'
+          : '<p>ISPs typically begin throttling at 2% and blocking at 5%. Taking action now prevents deliverability issues.</p>'}
+        <p><strong>Recommended actions:</strong></p>
+        <ul>
+          <li>Review and clean your recipient lists — remove unengaged addresses.</li>
+          <li>Verify your suppression list includes all previously bounced addresses.</li>
+          <li>Use Continuum's email verification API before sending to new lists.</li>
+        </ul>
+        <p>View your <a href="${config.APP_URL ?? 'https://app.continuumapi.com'}/dashboard/analytics">analytics</a> and <a href="${config.APP_URL ?? 'https://app.continuumapi.com'}/dashboard/suppressions">suppression list</a> in your dashboard.</p>
+      `,
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        action:     `bounce_rate.${level}`,
+        actorId:    apiKeyId,
+        actorEmail: keyLabel,
+        targets:    [{ type: 'api_key', id: apiKeyId, name: keyLabel }],
+      },
+    }).catch(() => {});
+
+    logger.info({ apiKeyId, pct: pct.toFixed(1), level, sent, bounced }, 'Bounce rate alert sent');
+  } catch (err) {
+    logger.warn({ err, apiKeyId }, 'Bounce rate check failed — non-fatal');
+  }
+}
+
 async function correctOnGroundTruth(email: string, apiKeyId: string): Promise<void> {
+  void checkBounceRate(apiKeyId);
   const lower = email.toLowerCase();
   await invalidateSmtpCache(lower);
 
