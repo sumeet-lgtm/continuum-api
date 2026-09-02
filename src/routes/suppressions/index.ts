@@ -53,6 +53,30 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
     },
   );
 
+  // GET /v1/suppressions/stats — reason breakdown counts
+  fastify.get(
+    '/suppressions/stats',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const apiKeyId = request.apiKey.id;
+      const where = { OR: [{ apiKeyId }, { apiKeyId: null }] };
+
+      const groups = await prisma.suppression.groupBy({
+        by: ['reason'],
+        where,
+        _count: { reason: true },
+      });
+
+      const total = await prisma.suppression.count({ where });
+      const byReason: Record<string, number> = {};
+      for (const g of groups) {
+        byReason[g.reason] = g._count.reason;
+      }
+
+      return reply.status(200).send({ total, byReason });
+    },
+  );
+
   // GET /v1/suppressions/export — stream all suppressions for this key as CSV
   fastify.get(
     '/suppressions/export',
