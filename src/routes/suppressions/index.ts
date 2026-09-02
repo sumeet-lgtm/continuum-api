@@ -48,6 +48,43 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
     },
   );
 
+  // GET /v1/suppressions/export — stream all suppressions for this key as CSV
+  fastify.get(
+    '/suppressions/export',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const apiKeyId = request.apiKey.id;
+      const where = { OR: [{ apiKeyId }, { apiKeyId: null }] };
+
+      const date = new Date().toISOString().slice(0, 10);
+      reply.header('Content-Type', 'text/csv; charset=utf-8');
+      reply.header('Content-Disposition', `attachment; filename="suppressions-${date}.csv"`);
+
+      let offset = 0;
+      const batchSize = 1000;
+      let csv = 'email,reason,added_at\n';
+
+      while (true) {
+        const batch = await prisma.suppression.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip: offset,
+          take: batchSize,
+          select: { email: true, reason: true, createdAt: true },
+        });
+        if (batch.length === 0) break;
+        for (const row of batch) {
+          const email = row.email.includes(',') ? `"${row.email}"` : row.email;
+          csv += `${email},${row.reason},${row.createdAt.toISOString()}\n`;
+        }
+        offset += batch.length;
+        if (batch.length < batchSize) break;
+      }
+
+      return reply.status(200).send(csv);
+    },
+  );
+
   // POST /v1/suppressions
   //
   // Was a global upsert keyed only on email — a second customer adding an
