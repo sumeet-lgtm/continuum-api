@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useApiKey } from "@/lib/use-api-key";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { trackEvent, PLAN_VALUES } from "@/lib/analytics";
 
 export const Route = createFileRoute("/dashboard/billing")({
@@ -148,7 +149,21 @@ function BillingPage() {
     }
   };
 
-  if (loading) return <div className="text-sm text-muted-foreground">Loading…</div>;
+  if (loading) return (
+    <div className="space-y-6">
+      <header><Skeleton className="h-8 w-24 mb-2" /><Skeleton className="h-4 w-56" /></header>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {[...Array(3)].map((_, i) => (
+          <div key={i} className="rounded-lg border border-border bg-card p-5 space-y-3">
+            <Skeleton className="h-4 w-24" /><Skeleton className="h-7 w-16" /><Skeleton className="h-3 w-40" />
+          </div>
+        ))}
+      </div>
+      <div className="rounded-lg border border-border bg-card p-5 space-y-3">
+        <Skeleton className="h-4 w-32" /><Skeleton className="h-20 w-full" />
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-6">

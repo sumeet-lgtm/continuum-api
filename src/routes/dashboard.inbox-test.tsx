@@ -121,7 +121,14 @@ function InboxTestPage() {
       <div className="space-y-3">
         <h2 className="text-sm font-semibold">Recent Tests</h2>
         {loading ? (
-          <div className="text-sm text-muted-foreground">Loading…</div>
+          <div className="divide-y divide-border">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="rounded-lg border border-border bg-card p-4 mb-2 flex items-center gap-4">
+                <div className="h-3 w-40 bg-muted rounded animate-pulse" />
+                <div className="h-5 w-12 bg-muted rounded-full animate-pulse ml-auto" />
+              </div>
+            ))}
+          </div>
         ) : tests.length === 0 ? (
           <div className="rounded-lg border border-border bg-card p-8 text-center">
             <Mail className="h-8 w-8 text-muted-foreground mx-auto mb-3" />

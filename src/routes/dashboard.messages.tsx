@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth-context";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   ChevronDown, ChevronRight, CheckCircle2, XCircle, Eye,
   MousePointerClick, Mail, AlertTriangle, Clock, X, Ban, Pencil, Download,
@@ -307,7 +308,28 @@ function MessagesPage() {
 
       <div className="rounded-lg border border-border bg-card overflow-hidden">
         {loading ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">Loading…</div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-muted-foreground border-b border-border bg-muted/40">
+                <th className="px-5 py-3 font-medium w-6"></th>
+                <th className="px-5 py-3 font-medium">To</th>
+                <th className="px-5 py-3 font-medium">Subject</th>
+                <th className="px-5 py-3 font-medium">Status</th>
+                <th className="px-5 py-3 font-medium">Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...Array(8)].map((_, i) => (
+                <tr key={i} className="border-b border-border last:border-0">
+                  <td className="px-5 py-3"><Skeleton className="h-3 w-3" /></td>
+                  <td className="px-5 py-3"><Skeleton className="h-3 w-40" /></td>
+                  <td className="px-5 py-3"><Skeleton className="h-3 w-56" /></td>
+                  <td className="px-5 py-3"><Skeleton className="h-5 w-16 rounded-full" /></td>
+                  <td className="px-5 py-3"><Skeleton className="h-3 w-28" /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         ) : messages.length === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground">No messages found.</div>
         ) : (
@@ -347,7 +369,14 @@ function MessagesPage() {
                     <tr key={`${m.id}-detail`} className="border-b border-border bg-muted/10">
                       <td colSpan={5} className="px-8 py-4">
                         {detailLoading ? (
-                          <p className="text-xs text-muted-foreground">Loading…</p>
+                          <div className="flex gap-6">
+                            <div className="space-y-2 flex-1">
+                              {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-3 w-full" />)}
+                            </div>
+                            <div className="space-y-2 flex-1">
+                              {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-3 w-full" />)}
+                            </div>
+                          </div>
                         ) : detail ? (
                           <DetailPanel
                             detail={detail}

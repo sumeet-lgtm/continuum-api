@@ -59,7 +59,17 @@ function SettingsPage() {
     navigate({ to: "/login" });
   };
 
-  if (loading) return <div className="text-sm text-muted-foreground">Loading…</div>;
+  if (loading) return (
+    <div className="space-y-6 max-w-2xl">
+      <header><div className="h-8 w-24 bg-muted rounded animate-pulse mb-2" /><div className="h-4 w-48 bg-muted rounded animate-pulse" /></header>
+      {[...Array(4)].map((_, i) => (
+        <div key={i} className="rounded-lg border border-border bg-card">
+          <div className="px-5 py-3 border-b border-border"><div className="h-4 w-32 bg-muted rounded animate-pulse" /></div>
+          <div className="p-5 space-y-3"><div className="h-4 w-full bg-muted rounded animate-pulse" /><div className="h-4 w-3/4 bg-muted rounded animate-pulse" /></div>
+        </div>
+      ))}
+    </div>
+  );
 
   return (
     <div className="space-y-6 max-w-2xl">

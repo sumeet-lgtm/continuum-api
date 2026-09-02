@@ -83,7 +83,17 @@ function InboxPage() {
       </div>
 
       {loading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
+        <div className="rounded-lg border border-border bg-card divide-y divide-border overflow-hidden">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="px-5 py-4 flex items-start gap-4">
+              <div className="flex-1 space-y-2">
+                <div className="h-3 w-40 bg-muted rounded animate-pulse" />
+                <div className="h-3 w-56 bg-muted rounded animate-pulse" />
+              </div>
+              <div className="h-5 w-20 bg-muted rounded-full animate-pulse mt-0.5" />
+            </div>
+          ))}
+        </div>
       ) : replies.length === 0 ? (
         <div className="rounded-lg border border-border bg-card p-10 text-center">
           <Inbox className="h-8 w-8 text-muted-foreground mx-auto mb-3" />

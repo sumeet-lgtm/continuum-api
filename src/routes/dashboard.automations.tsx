@@ -410,7 +410,15 @@ function AutomationsPage() {
 
       {/* List */}
       {loading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
+        <div className="rounded-lg border border-border bg-card divide-y divide-border overflow-hidden">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="px-5 py-4 flex items-center gap-4">
+              <div className="h-3 w-44 bg-muted rounded animate-pulse" />
+              <div className="h-5 w-14 bg-muted rounded-full animate-pulse" />
+              <div className="h-3 w-20 bg-muted rounded animate-pulse ml-auto" />
+            </div>
+          ))}
+        </div>
       ) : automations.length === 0 ? (
         <div className="rounded-lg border border-border bg-card p-10 text-center">
           <Zap className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
@@ -495,7 +503,9 @@ function AutomationsPage() {
                 {isExpanded && (
                   <div className="border-t border-border bg-muted/20 p-5 space-y-5">
                     {enrollLoading === a.id ? (
-                      <p className="text-xs text-muted-foreground">Loading…</p>
+                      <div className="space-y-2">
+                        {[...Array(3)].map((_, i) => <div key={i} className="h-3 bg-muted rounded animate-pulse w-full" />)}
+                      </div>
                     ) : (
                       <>
                         {/* Stats */}

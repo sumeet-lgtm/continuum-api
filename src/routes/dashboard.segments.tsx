@@ -242,7 +242,14 @@ function SegmentsPage() {
       )}
 
       {loading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
+        <div className="rounded-lg border border-border bg-card divide-y divide-border overflow-hidden">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="px-5 py-4 flex items-center gap-4">
+              <div className="h-3 w-48 bg-muted rounded animate-pulse" />
+              <div className="h-3 w-24 bg-muted rounded animate-pulse ml-auto" />
+            </div>
+          ))}
+        </div>
       ) : segments.length === 0 ? (
         <div className="rounded-lg border border-border bg-card p-10 text-center">
           <Filter className="h-8 w-8 text-muted-foreground mx-auto mb-3" />

@@ -205,7 +205,15 @@ function WebhooksPage() {
 
       <div className="rounded-lg border border-border bg-card">
         {loading ? (
-          <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+          <div className="divide-y divide-border">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="px-5 py-4 flex items-center gap-4">
+                <div className="h-3 w-56 bg-muted rounded animate-pulse" />
+                <div className="h-5 w-14 bg-muted rounded-full animate-pulse ml-auto" />
+                <div className="h-3 w-20 bg-muted rounded animate-pulse" />
+              </div>
+            ))}
+          </div>
         ) : hooks.length === 0 ? (
           <div className="p-10 text-center text-sm text-muted-foreground">
             No webhooks configured yet.

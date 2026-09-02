@@ -271,7 +271,15 @@ function LeadsPage() {
       </div>
 
       {loading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
+        <div className="rounded-lg border border-border bg-card divide-y divide-border overflow-hidden">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="px-5 py-3 flex items-center gap-4">
+              <div className="h-3 w-36 bg-muted rounded animate-pulse" />
+              <div className="h-3 w-24 bg-muted rounded animate-pulse" />
+              <div className="h-5 w-16 bg-muted rounded-full animate-pulse ml-auto" />
+            </div>
+          ))}
+        </div>
       ) : leads.length === 0 ? (
         <div className="rounded-lg border border-border bg-card p-10 text-center">
           <Users className="h-8 w-8 text-muted-foreground mx-auto mb-3" />

@@ -311,7 +311,15 @@ function ContactsPage() {
           <p className="text-sm text-muted-foreground">Create a mailing list first, then manage subscribers here.</p>
         </div>
       ) : loading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
+        <div className="rounded-lg border border-border bg-card divide-y divide-border overflow-hidden">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="px-5 py-3 flex items-center gap-4">
+              <div className="h-3 w-40 bg-muted rounded animate-pulse" />
+              <div className="h-3 w-28 bg-muted rounded animate-pulse" />
+              <div className="h-3 w-20 bg-muted rounded animate-pulse ml-auto" />
+            </div>
+          ))}
+        </div>
       ) : contacts.length === 0 ? (
         <div className="rounded-lg border border-border bg-card p-10 text-center">
           <Users className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
