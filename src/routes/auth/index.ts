@@ -7,6 +7,7 @@ import { Errors } from '../../plugins/errorHandler.js';
 import { sendEmail, welcomeEmail, loginAlertEmail } from '../../lib/email.js';
 import { hashApiKey } from '../../lib/crypto.js';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
+import { logAudit } from '../../lib/audit.js';
 
 let _workos: WorkOS | null = null;
 
@@ -202,11 +203,22 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         orgRole,
       });
 
+      void logAudit(workosOrgId ?? null, 'user.signed_in', {
+        id: user.id,
+        email: user.email,
+        ip: (request.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ?? request.ip,
+      }, [{ type: 'user', id: user.id, name: user.email }], apiKey.id);
+
       const separator = redirectTarget.includes('?') ? '&' : '?';
       return reply.redirect(`${redirectTarget}${separator}token=${encodeURIComponent(token)}`, 302);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       fastify.log.error({ err, msg }, 'SSO callback failed');
+      void logAudit(null, 'user.sign_in_failed', {
+        id: 'unknown',
+        email: 'unknown',
+        ip: (request.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ?? request.ip,
+      }, [{ type: 'auth', id: 'sso_callback', name: msg.slice(0, 100) }]);
       const errParam = encodeURIComponent(msg.slice(0, 120));
       return reply.redirect(`${config.DASHBOARD_URL}/login?error=sso_failed&detail=${errParam}`, 302);
     }
