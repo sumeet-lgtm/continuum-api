@@ -119,7 +119,7 @@ async function buildApp(): Promise<FastifyInstance> {
 
   // ─── CORS ─────────────────────────────────────────────────────────────────
   await app.register(cors, {
-    origin: isDev ? true : process.env['ALLOWED_ORIGINS']?.split(',') ?? false,
+    origin: isDev ? true : (config.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) ?? false),
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Request-ID'],
     exposedHeaders: [

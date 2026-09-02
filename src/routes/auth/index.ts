@@ -267,6 +267,69 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     });
   });
 
+  // ─── PATCH /auth/profile ────────────────────────────────────────────────────
+  fastify.patch('/auth/profile', async (request: FastifyRequest, reply: FastifyReply) => {
+    const authHeader = request.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) throw Errors.unauthorized('Missing session token');
+    let payload: { userId: string };
+    try { payload = await verifySession(authHeader.slice(7)); }
+    catch { throw Errors.unauthorized('Session expired — please sign in again'); }
+
+    const body = request.body as Record<string, unknown>;
+    const firstName = typeof body.firstName === 'string' ? body.firstName.trim().slice(0, 100) || null : undefined;
+    const lastName  = typeof body.lastName  === 'string' ? body.lastName.trim().slice(0, 100)  || null : undefined;
+
+    const update: Record<string, unknown> = {};
+    if (firstName !== undefined) update.firstName = firstName;
+    if (lastName  !== undefined) update.lastName  = lastName;
+
+    if (Object.keys(update).length === 0) {
+      return reply.status(400).send({ error: 'No valid fields to update' });
+    }
+
+    const user = await prisma.user.update({ where: { id: payload.userId }, data: update });
+    return reply.status(200).send({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName });
+  });
+
+  // ─── DELETE /auth/account ────────────────────────────────────────────────────
+  // Deletes the session-authenticated user's login identity (WorkOS + Prisma
+  // User row) in addition to revoking all their API keys. This is the
+  // session-auth counterpart to DELETE /v1/account (API-key-auth, data only).
+  fastify.delete('/auth/account', async (request: FastifyRequest, reply: FastifyReply) => {
+    const authHeader = request.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) throw Errors.unauthorized('Missing session token');
+    let payload: { userId: string; email: string };
+    try { payload = await verifySession(authHeader.slice(7)); }
+    catch { throw Errors.unauthorized('Session expired — please sign in again'); }
+
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId },
+      select: { id: true, email: true, workosId: true },
+    });
+    if (!user) throw Errors.notFound('User not found');
+
+    // Revoke all API keys first so running integrations fail fast
+    await prisma.apiKey.updateMany({
+      where: { ownerId: user.id },
+      data: { isActive: false, revokedAt: new Date() },
+    });
+
+    // Delete WorkOS identity (removes SSO connection, memberships, etc.)
+    if (user.workosId && config.WORKOS_API_KEY) {
+      try {
+        await getWorkOS().userManagement.deleteUser(user.workosId);
+      } catch (err) {
+        fastify.log.warn({ err, workosId: user.workosId }, 'WorkOS user deletion failed (proceeding with local delete)');
+      }
+    }
+
+    // Delete local user record (cascades to OrgMember via FK)
+    await prisma.user.delete({ where: { id: user.id } });
+
+    fastify.log.warn({ userId: user.id, email: user.email }, 'User account deleted via DELETE /auth/account');
+    return reply.status(200).send({ deleted: true });
+  });
+
   // ─── POST /auth/logout ──────────────────────────────────────────────────────
   fastify.post('/auth/logout', async (_request, reply) => {
     return reply.status(200).send({ ok: true });

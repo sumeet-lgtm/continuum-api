@@ -58,7 +58,7 @@ const baseEnvSchema = z.object({
 
   // Transactional email (Resend) — email is off when the key is unset
   RESEND_API_KEY: z.string().optional(),
-  SUPPORT_EMAIL: z.string().default('sumeet@continuumapi.com'),
+  SUPPORT_EMAIL: z.string().default('support@continuumapi.com'),
 
   // Send (Amazon SES) — /v1/send 503s until these are set; everything else
   // in Phase 6 (schema, quota, webhooks, suppression) works without them.
@@ -100,6 +100,11 @@ const baseEnvSchema = z.object({
 
   // Anthropic (for AI personalization)
   ANTHROPIC_API_KEY: z.string().optional(),
+
+  // CORS — comma-separated list of allowed origins for browser requests.
+  // Must be set in production; leaving it unset causes @fastify/cors to set
+  // origin:false which silently blocks every dashboard request.
+  ALLOWED_ORIGINS: z.string().optional(),
 
   // WorkOS (SSO / AuthKit)
   WORKOS_API_KEY: z.string().optional(),
@@ -186,6 +191,20 @@ const envSchema = baseEnvSchema.superRefine((val, ctx) => {
       code: z.ZodIssueCode.custom,
       path: ['API_KEY_SALT'],
       message: 'API_KEY_SALT must be set to a real value in production — the dev default is not allowed',
+    });
+  }
+  if (!val.ALLOWED_ORIGINS) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['ALLOWED_ORIGINS'],
+      message: 'ALLOWED_ORIGINS must be set in production — without it all browser (CORS) requests from the dashboard are rejected',
+    });
+  }
+  if (val.SMTP_HELO_DOMAIN === 'localhost') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SMTP_HELO_DOMAIN'],
+      message: 'SMTP_HELO_DOMAIN is set to "localhost" — most mail servers will reject EHLO localhost; set it to your verify subdomain (e.g. verify.continuumapi.com)',
     });
   }
 });
