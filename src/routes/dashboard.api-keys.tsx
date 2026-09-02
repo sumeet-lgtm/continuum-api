@@ -159,6 +159,62 @@ function IpAllowlistPanel({
   );
 }
 
+function UsageAlertToggle({
+  keyId,
+  enabled,
+  apiKeyRaw,
+}: {
+  keyId: string;
+  enabled: boolean;
+  apiKeyRaw: string;
+}) {
+  const [on, setOn] = useState(enabled);
+  const [saving, setSaving] = useState(false);
+
+  const toggle = async () => {
+    const next = !on;
+    setSaving(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/api-keys/${keyId}/usage-alerts`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKeyRaw },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!res.ok) throw new Error("Failed to update");
+      setOn(next);
+      toast.success(next ? "Usage alerts enabled" : "Usage alerts disabled");
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={toggle}
+      disabled={saving}
+      className="flex items-center justify-between w-full rounded-md border border-border px-3 py-2 text-xs text-muted-foreground hover:bg-muted/30 transition-colors"
+    >
+      <span className="flex items-center gap-1.5">
+        <ShieldCheck className="h-3 w-3" />
+        Email alert at 80% quota
+      </span>
+      <span
+        className={`inline-flex h-4 w-7 items-center rounded-full transition-colors ${
+          on ? "bg-foreground" : "bg-muted-foreground/30"
+        }`}
+      >
+        <span
+          className={`h-3 w-3 rounded-full bg-background transition-transform mx-0.5 ${
+            on ? "translate-x-3" : "translate-x-0"
+          }`}
+        />
+      </span>
+    </button>
+  );
+}
+
 function ApiKeysPage() {
   const { apiKeys, primaryKey, refreshMe } = useAuth();
   const [creating, setCreating] = useState(false);
@@ -326,21 +382,37 @@ function ApiKeysPage() {
                 <div>
                   <label className="text-xs text-muted-foreground">Key</label>
                   <MaskedKey prefix={k.keyPrefix ?? "cnt_"} raw={k.keyRaw} />
-                  <p className="mt-1.5 text-xs text-muted-foreground">
-                    {(k.currentMonthUsage ?? 0).toLocaleString()} API calls this month
-                    {k.monthlyLimit ? ` / ${k.monthlyLimit.toLocaleString()} limit` : ""}
-                    {(k.currentMonthSendUsage ?? 0) > 0
-                      ? ` · ${k.currentMonthSendUsage.toLocaleString()} emails sent`
-                      : ""}
-                  </p>
+                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5">
+                    <p className="text-xs text-muted-foreground">
+                      {(k.currentMonthUsage ?? 0).toLocaleString()} verifications this month
+                      {k.monthlyLimit ? ` / ${k.monthlyLimit.toLocaleString()} limit` : ""}
+                    </p>
+                    {(k.currentMonthSendUsage ?? 0) > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        {(k.currentMonthSendUsage ?? 0).toLocaleString()} emails sent
+                      </p>
+                    )}
+                    {(k as { rateLimit?: number }).rateLimit && (
+                      <p className="text-xs text-muted-foreground">
+                        {(k as { rateLimit?: number }).rateLimit?.toLocaleString()} req/min rate limit
+                      </p>
+                    )}
+                  </div>
                 </div>
                 {primaryKey?.keyRaw && (
-                  <IpAllowlistPanel
-                    keyId={k.id}
-                    currentIps={(k as { allowedIps?: string[] }).allowedIps ?? []}
-                    apiKeyRaw={primaryKey.keyRaw}
-                    onUpdated={refreshMe}
-                  />
+                  <div className="flex flex-col gap-2">
+                    <IpAllowlistPanel
+                      keyId={k.id}
+                      currentIps={(k as { allowedIps?: string[] }).allowedIps ?? []}
+                      apiKeyRaw={primaryKey.keyRaw}
+                      onUpdated={refreshMe}
+                    />
+                    <UsageAlertToggle
+                      keyId={k.id}
+                      enabled={(k as { usageAlertEnabled?: boolean }).usageAlertEnabled !== false}
+                      apiKeyRaw={primaryKey.keyRaw}
+                    />
+                  </div>
                 )}
               </div>
             ))}

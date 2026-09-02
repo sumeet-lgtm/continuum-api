@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { API_BASE } from "@/lib/supabase";
 import { useApiKey } from "@/lib/use-api-key";
@@ -36,6 +36,9 @@ interface Delivery {
   statusCode: number | null;
   attempts: number | null;
   lastAttemptAt: string | null;
+  delivered: boolean;
+  failedPermanently: boolean;
+  nextRetryAt: string | null;
 }
 
 const EVENTS: { value: string; label: string; group: string }[] = [
@@ -271,19 +274,38 @@ function WebhooksPage() {
           ) : (
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-xs text-muted-foreground border-b border-border">
+                <tr className="text-left text-xs text-muted-foreground border-b border-border bg-muted/40">
                   <th className="px-5 py-2 font-medium">Event</th>
-                  <th className="px-5 py-2 font-medium">Status</th>
+                  <th className="px-5 py-2 font-medium">Result</th>
+                  <th className="px-5 py-2 font-medium">HTTP</th>
                   <th className="px-5 py-2 font-medium">Attempts</th>
-                  <th className="px-5 py-2 font-medium text-right">When</th>
+                  <th className="px-5 py-2 font-medium text-right">Last attempt</th>
                 </tr>
               </thead>
               <tbody>
                 {deliveries.map((d) => (
                   <tr key={d.id} className="border-b border-border last:border-0">
-                    <td className="px-5 py-2 text-xs font-mono">{d.event}</td>
-                    <td className="px-5 py-2 text-xs tabular-nums">{d.statusCode ?? "—"}</td>
-                    <td className="px-5 py-2 text-xs tabular-nums">{d.attempts ?? 1}</td>
+                    <td className="px-5 py-2 text-xs font-mono">{d.event.replace(/_/g, ".")}</td>
+                    <td className="px-5 py-2">
+                      {d.delivered ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-[oklch(0.55_0.16_145)]">
+                          <CheckCircle2 className="h-3 w-3" /> Delivered
+                        </span>
+                      ) : d.failedPermanently ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-[oklch(0.58_0.22_27)]">
+                          <XCircle className="h-3 w-3" /> Failed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-xs text-[oklch(0.65_0.16_75)]">
+                          <RefreshCw className="h-3 w-3" /> Retrying
+                          {d.nextRetryAt ? ` · ${new Date(d.nextRetryAt).toLocaleTimeString()}` : ""}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-5 py-2 text-xs tabular-nums text-muted-foreground">
+                      {d.statusCode ? `HTTP ${d.statusCode}` : "—"}
+                    </td>
+                    <td className="px-5 py-2 text-xs tabular-nums text-muted-foreground">{d.attempts ?? 1} attempt{(d.attempts ?? 1) !== 1 ? "s" : ""}</td>
                     <td className="px-5 py-2 text-xs text-muted-foreground text-right">
                       {d.lastAttemptAt ? new Date(d.lastAttemptAt).toLocaleString() : "—"}
                     </td>
@@ -294,6 +316,29 @@ function WebhooksPage() {
           )}
         </div>
       )}
+
+      <div className="rounded-lg border border-border bg-muted/30 p-5 space-y-3">
+        <h3 className="text-sm font-medium">Verifying webhook signatures</h3>
+        <p className="text-xs text-muted-foreground">
+          Every webhook delivery includes a <code className="bg-muted rounded px-1">X-Continuum-Signature</code> header
+          containing an HMAC-SHA256 of the raw request body using your webhook's secret. Verify it to ensure events are from Continuum.
+        </p>
+        <code className="block bg-muted rounded-md p-3 text-xs font-mono whitespace-pre overflow-x-auto">
+{`// Node.js example
+const crypto = require('crypto');
+
+function verifySignature(rawBody, secret, signatureHeader) {
+  const expected = 'sha256=' + crypto
+    .createHmac('sha256', secret)
+    .update(rawBody)
+    .digest('hex');
+  return crypto.timingSafeEqual(
+    Buffer.from(expected),
+    Buffer.from(signatureHeader)
+  );
+}`}
+        </code>
+      </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
