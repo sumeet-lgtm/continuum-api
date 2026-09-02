@@ -7,6 +7,7 @@ import { startCampaignWorker } from './workers/campaignWorker.js';
 import { startSequenceWorker, scheduleSequenceTicks } from './workers/sequenceWorker.js';
 import { startWarmupWorker, scheduleWarmupTicks } from './workers/warmupWorker.js';
 import { startImapWorker, scheduleImapTicks } from './workers/imapWorker.js';
+import { startDailyChecksWorker, scheduleDailyChecks, QUEUE_DAILY } from './workers/scheduledChecks.js';
 import { QUEUE_SEQUENCE, QUEUE_WARMUP, QUEUE_IMAP, closeQueues, redisConnection } from './lib/queue.js';
 import { Queue } from 'bullmq';
 import { disconnectPrisma } from './lib/prisma.js';
@@ -40,6 +41,11 @@ async function main(): Promise<void> {
     await scheduleImapTicks(imapQueue);
     logger.info('IMAP polling worker started');
   }
+
+  // Daily scheduled checks: key expiry warnings + auto-revoke expired keys
+  closable.push(startDailyChecksWorker());
+  const dailyQueue = new Queue(QUEUE_DAILY, { connection: redisConnection });
+  await scheduleDailyChecks(dailyQueue);
 
   logger.info('All workers started');
 
