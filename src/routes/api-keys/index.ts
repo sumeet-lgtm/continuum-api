@@ -31,7 +31,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
           restrictedDomainId: true, plan: true, isActive: true, revokedAt: true,
           createdAt: true, lastUsedAt: true, allowedIps: true, rateLimit: true,
           currentMonthUsage: true, monthlyLimit: true, currentMonthSendUsage: true,
-          usageAlertEnabled: true,
+          usageAlertEnabled: true, expiresAt: true,
         },
       });
 
@@ -160,6 +160,45 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       await prisma.apiKey.update({ where: { id }, data: { usageAlertEnabled: body.enabled } });
 
       return reply.status(200).send({ id, usageAlertEnabled: body.enabled });
+    },
+  );
+
+  // PATCH /v1/api-keys/:id/expiry — set or clear expiry date on a key
+  fastify.patch(
+    '/api-keys/:id/expiry',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const parentKey = request.apiKey;
+      const body = request.body as { expiresAt?: unknown };
+
+      // expiresAt must be an ISO string or null to clear
+      let expiresAt: Date | null = null;
+      if (body?.expiresAt !== null && body?.expiresAt !== undefined) {
+        const parsed = new Date(body.expiresAt as string);
+        if (isNaN(parsed.getTime())) {
+          throw Errors.validationFailed([{ field: 'expiresAt', message: 'Must be a valid ISO date string or null' }]);
+        }
+        if (parsed <= new Date()) {
+          throw Errors.validationFailed([{ field: 'expiresAt', message: 'Expiry must be in the future' }]);
+        }
+        expiresAt = parsed;
+      }
+
+      const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
+      const target = await prisma.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } });
+      if (!target) throw Errors.notFound('API key not found.');
+      if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
+        throw Errors.forbidden('Not authorized to manage this key.');
+      }
+
+      await prisma.apiKey.update({ where: { id }, data: { expiresAt } });
+
+      return reply.status(200).send({
+        id,
+        expiresAt: expiresAt?.toISOString() ?? null,
+        message: expiresAt ? `Key will expire at ${expiresAt.toISOString()}` : 'Expiry cleared — key never expires.',
+      });
     },
   );
 

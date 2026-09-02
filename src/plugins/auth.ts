@@ -37,6 +37,7 @@ interface ApiKeyRecord {
   usageAlertSentAt: Date | null;
   extraVerificationCredits: number;
   extraSendCredits: number;
+  expiresAt: Date | null;
 }
 
 export interface OrgSessionUser {
@@ -121,7 +122,10 @@ async function resolveApiKey(request: FastifyRequest): Promise<void> {
   if (!apiKey) throw Errors.unauthorized('Invalid API key.');
   if (!apiKey.isActive) throw Errors.unauthorized('API key has been revoked.');
   if (apiKey.revokedAt && apiKey.revokedAt <= new Date()) {
-    throw Errors.unauthorized('API key has expired.');
+    throw Errors.unauthorized('API key has been revoked.');
+  }
+  if (apiKey.expiresAt && apiKey.expiresAt <= new Date()) {
+    throw Errors.unauthorized('API key has expired. Create a new key to continue.');
   }
 
   setCachedKey(hash, apiKey);

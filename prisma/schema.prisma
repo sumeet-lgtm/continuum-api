@@ -130,6 +130,9 @@ model ApiKey {
   usageAlertEnabled  Boolean   @default(true)  @map("usage_alert_enabled")
   usageAlertSentAt   DateTime? @map("usage_alert_sent_at")
 
+  // Key expiry: auto-revoke at this UTC datetime (null = never expires)
+  expiresAt          DateTime? @map("expires_at")
+
   verifications  Verification[]
   bulkJobs       BulkJob[]
   monitors       Monitor[]
