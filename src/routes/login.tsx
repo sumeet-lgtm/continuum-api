@@ -146,7 +146,7 @@ export function AuthGate({ mode }: { mode: "signin" | "signup" }) {
         </p>
         <p className="mt-2 text-center text-xs text-muted-foreground">
           Need SSO for your whole team?{" "}
-          <a href="mailto:sumeet@continuumapi.com" className="font-medium hover:underline">Talk to us</a>
+          <a href="mailto:support@continuumapi.com" className="font-medium hover:underline">Talk to us</a>
         </p>
       </div>
     </div>
