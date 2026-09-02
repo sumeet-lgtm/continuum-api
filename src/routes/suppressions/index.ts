@@ -10,6 +10,11 @@ const addSchema = z.object({
   reason: z.enum(['manual']).default('manual'),
 });
 
+const bulkSchema = z.object({
+  emails: z.array(z.string()).min(1).max(5000),
+  reason: z.enum(['manual']).default('manual'),
+});
+
 export async function suppressionRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /v1/suppressions
   //
@@ -82,6 +87,42 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       }
 
       return reply.status(200).send(csv);
+    },
+  );
+
+  // POST /v1/suppressions/bulk — import up to 5000 emails at once
+  fastify.post(
+    '/suppressions/bulk',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const parsed = bulkSchema.safeParse(request.body);
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+      const { emails } = parsed.data;
+      const apiKeyId = request.apiKey.id;
+      const normalized = [...new Set(emails.map(e => e.trim().toLowerCase()).filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)))];
+      const invalid = emails.length - normalized.length;
+
+      const existing = await prisma.suppression.findMany({
+        where: { email: { in: normalized } },
+        select: { email: true },
+      });
+      const existingSet = new Set(existing.map(e => e.email));
+      const newEmails = normalized.filter(e => !existingSet.has(e));
+
+      if (newEmails.length > 0) {
+        await prisma.suppression.createMany({
+          data: newEmails.map(email => ({ email, reason: 'manual', apiKeyId })),
+          skipDuplicates: true,
+        });
+      }
+
+      return reply.status(200).send({
+        added: newEmails.length,
+        skipped: existingSet.size,
+        invalid,
+        total: normalized.length,
+      });
     },
   );
 
