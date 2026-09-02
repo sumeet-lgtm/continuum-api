@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Copy, Check, Eye, EyeOff, Plus, Trash2, KeyRound, ShieldCheck, Shield, Globe, ChevronDown, ChevronUp, X } from "lucide-react";
+import { Copy, Check, Eye, EyeOff, Plus, Trash2, KeyRound, ShieldCheck, Shield, Globe, ChevronDown, ChevronUp, X, Pencil } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -304,6 +304,76 @@ function UsageAlertToggle({
   );
 }
 
+function InlineRename({
+  keyId,
+  currentLabel,
+  apiKeyRaw,
+  onRenamed,
+}: {
+  keyId: string;
+  currentLabel: string;
+  apiKeyRaw: string;
+  onRenamed: (label: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(currentLabel);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!value.trim() || value.trim() === currentLabel) { setEditing(false); return; }
+    setSaving(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/api-keys/${keyId}/label`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKeyRaw },
+        body: JSON.stringify({ label: value.trim() }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message ?? "Failed");
+      }
+      onRenamed(value.trim());
+      setEditing(false);
+      toast.success("Key renamed");
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <Input
+          className="h-6 text-sm py-0 px-2 w-44"
+          value={value}
+          autoFocus
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") { setValue(currentLabel); setEditing(false); } }}
+        />
+        <Button size="sm" className="h-6 text-xs px-2" onClick={save} disabled={saving || !value.trim()}>
+          {saving ? "…" : "Save"}
+        </Button>
+        <Button size="sm" variant="ghost" className="h-6 px-1" onClick={() => { setValue(currentLabel); setEditing(false); }}>
+          <X className="h-3 w-3" />
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      className="group flex items-center gap-1 text-sm font-medium hover:text-muted-foreground transition-colors"
+      onClick={() => setEditing(true)}
+      title="Rename key"
+    >
+      {currentLabel}
+      <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-60 transition-opacity" />
+    </button>
+  );
+}
+
 function ApiKeysPage() {
   const { apiKeys, primaryKey, refreshMe } = useAuth();
   const [creating, setCreating] = useState(false);
@@ -311,6 +381,7 @@ function ApiKeysPage() {
   const [saving, setSaving] = useState(false);
   const [newKey, setNewKey] = useState<NewKey | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [keyLabels, setKeyLabels] = useState<Record<string, string>>({});
 
   const create = async () => {
     if (!primaryKey?.keyRaw || !form.name.trim()) return;
@@ -444,7 +515,16 @@ function ApiKeysPage() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-medium">{k.name ?? k.label ?? "Default key"}</p>
+                      {primaryKey?.keyRaw ? (
+                        <InlineRename
+                          keyId={k.id}
+                          currentLabel={keyLabels[k.id] ?? k.label ?? k.name ?? "Default key"}
+                          apiKeyRaw={primaryKey.keyRaw}
+                          onRenamed={(label) => setKeyLabels((prev) => ({ ...prev, [k.id]: label }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-medium">{k.name ?? k.label ?? "Default key"}</p>
+                      )}
                       <StatusBadge status="active" />
                       <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                         <Shield className="h-3 w-3" />

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Users, Trash2, Search, Upload, FileText, Loader2, X } from "lucide-react";
+import { Plus, Users, Trash2, Search, Upload, FileText, Loader2, X, Download } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/contacts")({
   head: () => ({ meta: [{ title: "Contacts — Continuum API" }] }),
@@ -56,6 +56,7 @@ function ContactsPage() {
   const [importPreview, setImportPreview] = useState<Record<string, string>[] | null>(null);
   const [importFile, setImportFile] = useState("");
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -170,6 +171,27 @@ function ContactsPage() {
     }
   };
 
+  const exportContacts = async () => {
+    if (!primaryKey?.keyRaw || !selectedList) return;
+    setExporting(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/lists/${selectedList}/contacts/export`, {
+        headers: { "X-API-Key": primaryKey.keyRaw },
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const date = new Date().toISOString().slice(0, 10);
+      const listName = lists.find((l) => l.id === selectedList)?.name ?? "contacts";
+      a.href = url;
+      a.download = `${listName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)}-${date}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: unknown) { toast.error((e as Error).message); }
+    finally { setExporting(false); }
+  };
+
   const currentList = lists.find((l) => l.id === selectedList);
 
   return (
@@ -182,6 +204,9 @@ function ContactsPage() {
         {selectedList && (
           <div className="flex gap-2">
             <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFileSelect} />
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={exportContacts} disabled={exporting || contacts.length === 0}>
+              <Download className="h-4 w-4" /> {exporting ? "Exporting…" : "Export CSV"}
+            </Button>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => fileRef.current?.click()}>
               <Upload className="h-4 w-4" /> Import CSV
             </Button>
