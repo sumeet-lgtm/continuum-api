@@ -35,6 +35,7 @@ import {
   Wrench,
   Plug,
   TrendingUp,
+  BookOpen,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Wordmark } from "@/components/Logo";
@@ -57,6 +58,7 @@ type NavItem = {
 const NAV: NavItem[] = [
   { to: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { to: "/dashboard/api-keys", label: "API Keys", icon: KeyRound },
+  { to: "/dashboard/api-reference", label: "API Reference", icon: BookOpen },
   {
     to: "/dashboard/transactional",
     label: "Transactional",
