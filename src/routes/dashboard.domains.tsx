@@ -42,9 +42,9 @@ interface HealthData {
 }
 
 function StatusIcon({ status }: { status: string }) {
-  if (status === "verified") return <CheckCircle2 className="h-4 w-4 text-green-500" />;
-  if (status === "failed") return <XCircle className="h-4 w-4 text-red-500" />;
-  return <Clock className="h-4 w-4 text-yellow-500" />;
+  if (status === "verified") return <CheckCircle2 className="h-4 w-4 text-[oklch(0.55_0.16_145)]" />;
+  if (status === "failed") return <XCircle className="h-4 w-4 text-[oklch(0.58_0.22_27)]" />;
+  return <Clock className="h-4 w-4 text-[oklch(0.65_0.16_75)]" />;
 }
 
 function DomainsPage() {
@@ -160,11 +160,10 @@ function DomainsPage() {
               <>
                 {/* Score */}
                 <div className="flex items-center gap-4">
-                  <div className={`h-16 w-16 rounded-full flex items-center justify-center text-xl font-bold border-4 ${
-                    healthData.score >= 80 ? "border-green-500 text-green-600" :
-                    healthData.score >= 50 ? "border-yellow-500 text-yellow-600" :
-                    "border-red-500 text-red-600"
-                  }`}>
+                  <div className="h-16 w-16 rounded-full flex items-center justify-center text-xl font-bold border-4" style={{
+                    borderColor: healthData.score >= 80 ? "oklch(0.55 0.16 145)" : healthData.score >= 50 ? "oklch(0.78 0.16 75)" : "oklch(0.58 0.22 27)",
+                    color: healthData.score >= 80 ? "oklch(0.55 0.16 145)" : healthData.score >= 50 ? "oklch(0.78 0.16 75)" : "oklch(0.58 0.22 27)",
+                  }}>
                     {healthData.score}
                   </div>
                   <div>
@@ -185,8 +184,8 @@ function DomainsPage() {
                   ].map(({ label, valid, detail }) => (
                     <div key={label} className="flex items-start gap-3">
                       {valid
-                        ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0 mt-0.5" />
-                        : <XCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />}
+                        ? <CheckCircle2 className="h-4 w-4 text-[oklch(0.55_0.16_145)] shrink-0 mt-0.5" />
+                        : <XCircle className="h-4 w-4 text-[oklch(0.58_0.22_27)] shrink-0 mt-0.5" />}
                       <div className="min-w-0">
                         <p className="text-sm font-medium">{label}</p>
                         <p className="text-xs text-muted-foreground truncate">{detail}</p>
@@ -204,9 +203,9 @@ function DomainsPage() {
 
       {/* DNS records panel shown after successful domain add */}
       {newDnsRecords && (
-        <div className="rounded-lg border border-green-200 dark:border-green-900 bg-green-50 dark:bg-green-950/30 p-6 space-y-4 max-w-3xl">
+        <div className="rounded-lg border border-border bg-muted/60 p-6 space-y-4 max-w-3xl">
           <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+            <div className="flex items-center gap-2 text-[oklch(0.55_0.16_145)]">
               <CheckCircle2 className="h-4 w-4 shrink-0" />
               <p className="text-sm font-medium">Domain added — add these DNS records to your registrar to verify</p>
             </div>
@@ -225,14 +224,14 @@ function DomainsPage() {
                   <span className="text-xs text-muted-foreground">Name</span>
                   <code className="text-xs font-mono truncate">{rec.name}</code>
                   <button onClick={() => copyDns(`${key}-name`, rec.name)} className="text-muted-foreground hover:text-foreground shrink-0">
-                    {copiedKey === `${key}-name` ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copiedKey === `${key}-name` ? <Check className="h-3.5 w-3.5 text-[oklch(0.55_0.16_145)]" /> : <Copy className="h-3.5 w-3.5" />}
                   </button>
                 </div>
                 <div className="grid grid-cols-[auto,1fr,auto] gap-2 items-start">
                   <span className="text-xs text-muted-foreground mt-0.5">Value</span>
                   <code className="text-xs font-mono break-all leading-relaxed">{rec.value}</code>
                   <button onClick={() => copyDns(`${key}-value`, rec.value)} className="text-muted-foreground hover:text-foreground shrink-0 mt-0.5">
-                    {copiedKey === `${key}-value` ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copiedKey === `${key}-value` ? <Check className="h-3.5 w-3.5 text-[oklch(0.55_0.16_145)]" /> : <Copy className="h-3.5 w-3.5" />}
                   </button>
                 </div>
               </div>

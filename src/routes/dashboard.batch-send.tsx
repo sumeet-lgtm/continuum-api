@@ -178,8 +178,8 @@ function BatchSendPage() {
                           <td className="px-3 py-1.5">
                             <div className="flex items-center gap-1">
                               {r.status === "sent" || r.status === "delivered"
-                                ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                                : <XCircle className="h-3.5 w-3.5 text-red-500" />}
+                                ? <CheckCircle2 className="h-3.5 w-3.5 text-[oklch(0.55_0.16_145)]" />
+                                : <XCircle className="h-3.5 w-3.5 text-[oklch(0.58_0.22_27)]" />}
                               <StatusBadge status={r.status} />
                             </div>
                           </td>

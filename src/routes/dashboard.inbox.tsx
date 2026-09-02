@@ -27,12 +27,12 @@ interface ClassifyResult {
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  interested: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  not_interested: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  interested: "bg-muted text-[oklch(0.55_0.16_145)]",
+  not_interested: "bg-muted text-[oklch(0.58_0.22_27)]",
   out_of_office: "bg-muted text-muted-foreground",
   question: "bg-muted text-muted-foreground",
-  unsubscribe: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-  bounced: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  unsubscribe: "bg-muted text-[oklch(0.58_0.22_27)]",
+  bounced: "bg-muted text-[oklch(0.58_0.22_27)]",
 };
 
 function InboxPage() {

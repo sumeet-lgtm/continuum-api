@@ -187,7 +187,7 @@ function Overview() {
           <span className="text-sm tabular-nums text-muted-foreground">{verifUsed.toLocaleString()} / {verifLimit.toLocaleString()}</span>
         </div>
         <div className="h-2 rounded-full bg-muted overflow-hidden">
-          <div className={`h-full transition-all ${pct >= 100 ? "bg-red-500" : pct >= 80 ? "bg-yellow-500" : "bg-foreground"}`} style={{ width: `${pct}%` }} />
+          <div className={`h-full transition-all ${pct >= 100 ? "bg-[oklch(0.58_0.22_27)]" : pct >= 80 ? "bg-[oklch(0.78_0.16_75)]" : "bg-foreground"}`} style={{ width: `${pct}%` }} />
         </div>
         {usage?.verifications.resetsAt && (
           <p className="mt-2 text-xs text-muted-foreground">

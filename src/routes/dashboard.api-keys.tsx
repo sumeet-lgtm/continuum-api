@@ -44,7 +44,7 @@ function MaskedKey({ prefix, raw }: { prefix: string; raw: string | null }) {
         </Button>
       )}
       <Button variant="outline" size="sm" onClick={onCopy}>
-        {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+        {copied ? <Check className="h-3.5 w-3.5 text-[oklch(0.55_0.16_145)]" /> : <Copy className="h-3.5 w-3.5" />}
         <span className="ml-1.5">{copied ? "Copied" : "Copy"}</span>
       </Button>
     </div>
@@ -161,8 +161,8 @@ function ApiKeysPage() {
       )}
 
       {newKey && (
-        <div className="rounded-lg border border-green-200 dark:border-green-900 bg-green-50 dark:bg-green-950/30 p-5 space-y-3 max-w-2xl">
-          <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+        <div className="rounded-lg border border-border bg-muted/60 p-5 space-y-3 max-w-2xl">
+          <div className="flex items-center gap-2 text-[oklch(0.55_0.16_145)]">
             <ShieldCheck className="h-4 w-4" />
             <p className="text-sm font-medium">Key created — copy it now. You won't be able to see it again.</p>
           </div>

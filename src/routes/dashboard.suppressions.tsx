@@ -171,7 +171,7 @@ function SuppressionsPage() {
                   <td className="px-5 py-3 font-mono text-xs">{s.email}</td>
                   <td className="px-5 py-3">
                     <span className={`text-xs rounded-full px-2 py-0.5 font-medium ${
-                      s.reason === "hard_bounce" || s.reason === "soft_bounce" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
+                      s.reason === "hard_bounce" || s.reason === "soft_bounce" ? "bg-muted text-[oklch(0.58_0.22_27)]" :
                       s.reason === "complaint" ? "bg-muted text-muted-foreground" :
                       "bg-muted text-muted-foreground"
                     }`}>

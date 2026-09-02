@@ -300,7 +300,7 @@ function UsageBar({ label, used, limit }: { label: string; used: number; limit: 
   const pct = limit > 0 ? Math.max(0, Math.min(100, (used / limit) * 100)) : 0;
   const atLimit = used >= limit && limit > 0;
   const warn = !atLimit && pct >= 80;
-  const barColor = atLimit ? "bg-red-500" : warn ? "bg-yellow-500" : "bg-foreground";
+  const barColor = atLimit ? "bg-[oklch(0.58_0.22_27)]" : warn ? "bg-[oklch(0.78_0.16_75)]" : "bg-foreground";
   return (
     <div>
       <div className="flex justify-between text-xs text-muted-foreground mb-1">
