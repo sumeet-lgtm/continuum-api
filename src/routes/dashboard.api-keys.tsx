@@ -159,6 +159,95 @@ function IpAllowlistPanel({
   );
 }
 
+function ExpiryPanel({
+  keyId,
+  currentExpiry,
+  apiKeyRaw,
+  onUpdated,
+}: {
+  keyId: string;
+  currentExpiry: string | null | undefined;
+  apiKeyRaw: string;
+  onUpdated: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(
+    currentExpiry ? new Date(currentExpiry).toISOString().slice(0, 16) : ""
+  );
+  const [saving, setSaving] = useState(false);
+
+  const save = async (clear = false) => {
+    setSaving(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/api-keys/${keyId}/expiry`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKeyRaw },
+        body: JSON.stringify({ expiresAt: clear ? null : new Date(value).toISOString() }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message ?? "Failed");
+      }
+      toast.success(clear ? "Expiry cleared" : "Expiry set");
+      onUpdated();
+      setOpen(false);
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const expLabel = currentExpiry
+    ? new Date(currentExpiry) <= new Date()
+      ? "Expired"
+      : `Expires ${new Date(currentExpiry).toLocaleDateString()}`
+    : "Never expires";
+
+  return (
+    <div className="border border-border rounded-md">
+      <button
+        className="w-full flex items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:bg-muted/30 rounded-md transition-colors"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="flex items-center gap-1.5">
+          <Shield className="h-3 w-3" />
+          Key expiry · {expLabel}
+        </span>
+        {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 space-y-3 border-t border-border pt-3">
+          <p className="text-xs text-muted-foreground">
+            Set an expiry date to automatically prevent this key from being used after the specified time.
+          </p>
+          <Input
+            type="datetime-local"
+            className="h-7 text-xs"
+            value={value}
+            min={new Date().toISOString().slice(0, 16)}
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <Button size="sm" className="h-7 text-xs" onClick={() => save()} disabled={saving || !value}>
+              {saving ? "Saving…" : "Set expiry"}
+            </Button>
+            {currentExpiry && (
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => save(true)} disabled={saving}>
+                Clear
+              </Button>
+            )}
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function UsageAlertToggle({
   keyId,
   enabled,
@@ -404,6 +493,12 @@ function ApiKeysPage() {
                     <IpAllowlistPanel
                       keyId={k.id}
                       currentIps={(k as { allowedIps?: string[] }).allowedIps ?? []}
+                      apiKeyRaw={primaryKey.keyRaw}
+                      onUpdated={refreshMe}
+                    />
+                    <ExpiryPanel
+                      keyId={k.id}
+                      currentExpiry={(k as { expiresAt?: string | null }).expiresAt}
                       apiKeyRaw={primaryKey.keyRaw}
                       onUpdated={refreshMe}
                     />
