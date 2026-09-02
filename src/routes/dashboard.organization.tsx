@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export const Route = createFileRoute("/dashboard/organization")({
   head: () => ({ meta: [{ title: "Organization — Continuum API" }] }),
@@ -124,7 +125,20 @@ function OrganizationPage() {
     }
   };
 
-  if (loading) return <div className="text-sm text-muted-foreground">Loading…</div>;
+  if (loading) return (
+    <div className="space-y-6 max-w-2xl">
+      <header><Skeleton className="h-8 w-36 mb-2" /><Skeleton className="h-4 w-64" /></header>
+      {[...Array(3)].map((_, i) => (
+        <div key={i} className="rounded-lg border border-border bg-card">
+          <div className="px-5 py-3 border-b border-border"><Skeleton className="h-4 w-32" /></div>
+          <div className="p-5 space-y-3">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-3/4" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 
   if (!org?.configured) {
     return (
