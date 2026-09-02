@@ -74,7 +74,7 @@ function Overview() {
       <div className="rounded-lg border border-border bg-card p-6">
         <p className="text-sm text-muted-foreground">
           Your API key is being set up. Contact{" "}
-          <a href="mailto:sumeet@continuumapi.com" className="underline">sumeet@continuumapi.com</a>.
+          <a href="mailto:support@continuumapi.com" className="underline">support@continuumapi.com</a>.
         </p>
       </div>
     );

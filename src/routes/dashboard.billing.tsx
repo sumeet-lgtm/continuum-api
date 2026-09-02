@@ -166,6 +166,14 @@ function BillingPage() {
               {currentPlan}
             </span>
           </div>
+          {currentPlan !== "free" && (
+            <a
+              href="mailto:support@continuumapi.com?subject=Cancel%20or%20change%20my%20plan"
+              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              Cancel or change plan
+            </a>
+          )}
         </div>
         {usage && (
           <div className="mt-4 space-y-3">

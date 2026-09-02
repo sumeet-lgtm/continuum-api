@@ -11,6 +11,8 @@ export interface ContinuumUser {
   email: string;
   firstName: string | null;
   lastName: string | null;
+  orgId?: string;
+  orgRole?: string;
 }
 
 export interface ContinuumApiKey {
@@ -63,7 +65,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     try {
       const me = await api.get<MeResponse>("/auth/me");
-      setUser(me.user);
+      const jwtClaims = (window as unknown as Record<string, unknown>).__continuumJwtClaims as
+        { orgId?: string; orgRole?: string } | undefined;
+      setUser({ ...me.user, ...(jwtClaims ?? {}) });
       setApiKeys(me.apiKeys);
       setPrimaryKeyId(me.primaryKeyId);
     } catch {
@@ -82,6 +86,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const token = params.get("token");
       if (token) {
         setToken(token);
+        // Decode JWT payload (no signature verify needed — server validates on every request)
+        try {
+          const payloadB64 = token.split(".")[1];
+          if (payloadB64) {
+            const decoded = JSON.parse(atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/")));
+            if (decoded.orgId || decoded.orgRole) {
+              // Stored in state after loadMe populates user; stash for merge
+              (window as unknown as Record<string, unknown>).__continuumJwtClaims = {
+                orgId: decoded.orgId,
+                orgRole: decoded.orgRole,
+              };
+            }
+          }
+        } catch { /* non-fatal */ }
         params.delete("token");
         const qs = params.toString();
         window.history.replaceState(null, "", window.location.pathname + (qs ? `?${qs}` : ""));

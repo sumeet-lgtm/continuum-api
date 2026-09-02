@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
+import { toast } from "sonner";
 import { API_BASE } from "@/lib/supabase";
 import { useApiKey } from "@/lib/use-api-key";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -168,18 +169,12 @@ function BulkPage() {
     if (!apiKey?.keyRaw) return;
     if (file.size > MAX_UPLOAD_BYTES) {
       const mb = (file.size / (1024 * 1024)).toFixed(1);
-      alert(
-        `File is too large (${mb} MB). Maximum allowed size is 50 MB. Please split the CSV into smaller batches.`,
-      );
+      toast.error(`File too large (${mb} MB) — maximum is 50 MB. Split the CSV into smaller batches.`);
       if (fileRef.current) fileRef.current.value = "";
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      const ok = window.confirm("Large file — processing may take 1-2 hours.");
-      if (!ok) {
-        if (fileRef.current) fileRef.current.value = "";
-        return;
-      }
+      toast.info("Large file detected — processing may take 1-2 hours.");
     }
     setUploading(true);
     setUploadProgress(0);
@@ -212,7 +207,7 @@ function BulkPage() {
         xhr.send(fd);
       });
       if (status < 200 || status >= 300) {
-        alert(`Upload failed (${status})`);
+        toast.error(`Upload failed (${status})`);
       } else {
         try {
           const parsed = JSON.parse(responseText);
@@ -223,9 +218,9 @@ function BulkPage() {
       await load();
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") {
-        alert("Upload timed out after 60 seconds. Try a smaller file or split it into batches.");
+        toast.error("Upload timed out after 60 seconds — try a smaller file or split it into batches.");
       } else {
-        alert(e instanceof Error ? e.message : "Upload failed");
+        toast.error(e instanceof Error ? e.message : "Upload failed");
       }
     } finally {
       setUploading(false);
@@ -256,7 +251,7 @@ function BulkPage() {
           { headers: { Authorization: `Bearer ${apiKey.keyRaw}` } },
         );
         if (!res.ok) {
-          alert(`Download failed (${res.status})`);
+          toast.error(`Download failed (${res.status})`);
           return;
         }
         const data = await res.json();
@@ -312,7 +307,7 @@ function BulkPage() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Download failed");
+      toast.error(e instanceof Error ? e.message : "Download failed");
     } finally {
       setDownloading(false);
     }

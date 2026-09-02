@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -53,7 +54,7 @@ function OrganizationPage() {
   const [portalWorking, setPortalWorking] = useState(false);
   const [mfaToggling, setMfaToggling] = useState(false);
 
-  const isAdmin = true; // TODO: derive from JWT orgRole once available in auth-context
+  const isAdmin = user?.orgRole === "admin";
 
   useEffect(() => {
     async function load() {
@@ -81,7 +82,7 @@ function OrganizationPage() {
       const { link } = await api.post<{ link: string }>("/org/portal");
       window.open(link, "_blank", "noopener");
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to open portal");
+      toast.error(e instanceof Error ? e.message : "Failed to open portal");
     } finally {
       setPortalWorking(false);
     }

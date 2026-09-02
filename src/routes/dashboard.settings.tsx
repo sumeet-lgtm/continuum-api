@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { useProfile } from "@/lib/use-profile";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,15 +35,27 @@ function SettingsPage() {
 
   const save = async () => {
     setSaving(true);
-    await new Promise((r) => setTimeout(r, 500));
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
+    try {
+      const [first, ...rest] = fullName.trim().split(" ");
+      await api.patch("/auth/profile", {
+        firstName: first || null,
+        lastName: rest.join(" ") || null,
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    } catch {
+      // non-fatal — user sees no change
+    } finally {
+      setSaving(false);
+    }
   };
 
   const deleteAccount = async () => {
     if (!user) return;
-    await signOut();
+    try {
+      await api.del("/auth/account");
+    } catch { /* best-effort */ }
+    signOut();
     navigate({ to: "/login" });
   };
 
