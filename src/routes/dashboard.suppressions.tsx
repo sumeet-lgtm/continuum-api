@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, ShieldOff, Trash2, Search } from "lucide-react";
+import { Plus, ShieldOff, Trash2, Search, Download } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/suppressions")({
   head: () => ({ meta: [{ title: "Suppressions — Continuum API" }] }),
@@ -41,6 +41,7 @@ function SuppressionsPage() {
   const [adding, setAdding] = useState(false);
   const [email, setEmail] = useState("");
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState("");
   const [reason, setReason] = useState("manual");
 
@@ -70,6 +71,26 @@ function SuppressionsPage() {
     finally { setSaving(false); }
   };
 
+  const exportCsv = async () => {
+    if (!primaryKey?.keyRaw) return;
+    setExporting(true);
+    try {
+      const res = await fetch("https://api.continuumapi.com/v1/suppressions/export", {
+        headers: { "X-API-Key": primaryKey.keyRaw },
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const date = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `suppressions-${date}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: unknown) { toast.error((e as Error).message); }
+    finally { setExporting(false); }
+  };
+
   const remove = async (email: string) => {
     if (!primaryKey?.keyRaw) return;
     try {
@@ -90,9 +111,14 @@ function SuppressionsPage() {
           <h1 className="text-2xl font-display font-medium tracking-tight">Suppressions</h1>
           <p className="text-sm text-muted-foreground">Emails blocked from receiving any messages — bounces, complaints, and manual blocks.</p>
         </header>
-        <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}>
-          <Plus className="h-4 w-4" /> Add Suppression
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={exportCsv} disabled={exporting || total === 0}>
+            <Download className="h-4 w-4" /> {exporting ? "Exporting…" : "Export CSV"}
+          </Button>
+          <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}>
+            <Plus className="h-4 w-4" /> Add Suppression
+          </Button>
+        </div>
       </div>
 
       {adding && (
