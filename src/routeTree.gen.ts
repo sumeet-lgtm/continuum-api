@@ -53,6 +53,7 @@ import { Route as DashboardTransactionalRouteImport } from './routes/dashboard.t
 import { Route as DashboardUsageRouteImport } from './routes/dashboard.usage'
 import { Route as DashboardVerifyRouteImport } from './routes/dashboard.verify'
 import { Route as DashboardWebhooksRouteImport } from './routes/dashboard.webhooks'
+import { Route as DashboardWidgetRouteImport } from './routes/dashboard.widget'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -274,6 +275,11 @@ const DashboardWebhooksRoute = DashboardWebhooksRouteImport.update({
   path: '/webhooks',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardWidgetRoute = DashboardWidgetRouteImport.update({
+  id: '/widget',
+  path: '/widget',
+  getParentRoute: () => DashboardRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -319,6 +325,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
+  '/dashboard/widget': typeof DashboardWidgetRoute
   '/dashboard/': typeof DashboardIndexRoute
 }
 export interface FileRoutesByTo {
@@ -364,6 +371,7 @@ export interface FileRoutesByTo {
   '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
+  '/dashboard/widget': typeof DashboardWidgetRoute
   '/dashboard': typeof DashboardIndexRoute
 }
 export interface FileRoutesById {
@@ -411,6 +419,7 @@ export interface FileRoutesById {
   '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
+  '/dashboard/widget': typeof DashboardWidgetRoute
   '/dashboard/': typeof DashboardIndexRoute
 }
 export interface FileRouteTypes {
@@ -459,6 +468,7 @@ export interface FileRouteTypes {
     | '/dashboard/usage'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
+    | '/dashboard/widget'
     | '/dashboard/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -504,6 +514,7 @@ export interface FileRouteTypes {
     | '/dashboard/usage'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
+    | '/dashboard/widget'
     | '/dashboard'
   id:
     | '__root__'
@@ -550,6 +561,7 @@ export interface FileRouteTypes {
     | '/dashboard/usage'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
+    | '/dashboard/widget'
     | '/dashboard/'
   fileRoutesById: FileRoutesById
 }
@@ -874,6 +886,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardWebhooksRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/widget': {
+      id: '/dashboard/widget'
+      path: '/widget'
+      fullPath: '/dashboard/widget'
+      preLoaderRoute: typeof DashboardWidgetRouteImport
+      parentRoute: typeof DashboardRoute
+    }
   }
 }
 
@@ -913,6 +932,7 @@ interface DashboardRouteChildren {
   DashboardUsageRoute: typeof DashboardUsageRoute
   DashboardVerifyRoute: typeof DashboardVerifyRoute
   DashboardWebhooksRoute: typeof DashboardWebhooksRoute
+  DashboardWidgetRoute: typeof DashboardWidgetRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
 }
 
@@ -952,6 +972,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardUsageRoute: DashboardUsageRoute,
   DashboardVerifyRoute: DashboardVerifyRoute,
   DashboardWebhooksRoute: DashboardWebhooksRoute,
+  DashboardWidgetRoute: DashboardWidgetRoute,
   DashboardIndexRoute: DashboardIndexRoute,
 }
 
