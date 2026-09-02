@@ -367,7 +367,7 @@ const SECTIONS: Section[] = [
 
 const METHOD_STYLES: Record<Method, string> = {
   GET:    "bg-[oklch(0.96_0.04_145)] text-[oklch(0.35_0.15_145)] border-[oklch(0.82_0.12_145)]",
-  POST:   "bg-[oklch(0.95_0.04_220)] text-[oklch(0.35_0.18_220)] border-[oklch(0.82_0.14_220)]",
+  POST:   "bg-[oklch(0.14_0_0)] text-[oklch(0.98_0_0)] border-[oklch(0.25_0_0)]",
   PATCH:  "bg-[oklch(0.97_0.04_75)] text-[oklch(0.50_0.16_75)] border-[oklch(0.88_0.12_75)]",
   DELETE: "bg-[oklch(0.97_0.04_27)] text-[oklch(0.42_0.18_27)] border-[oklch(0.85_0.12_27)]",
 };
