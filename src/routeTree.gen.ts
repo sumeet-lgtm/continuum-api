@@ -37,6 +37,7 @@ import { Route as DashboardInboxTestRouteImport } from './routes/dashboard.inbox
 import { Route as DashboardIpRouteImport } from './routes/dashboard.ip'
 import { Route as DashboardLeadsRouteImport } from './routes/dashboard.leads'
 import { Route as DashboardListsRouteImport } from './routes/dashboard.lists'
+import { Route as DashboardLogsRouteImport } from './routes/dashboard.logs'
 import { Route as DashboardMailboxesRouteImport } from './routes/dashboard.mailboxes'
 import { Route as DashboardMessagesRouteImport } from './routes/dashboard.messages'
 import { Route as DashboardMigrateRouteImport } from './routes/dashboard.migrate'
@@ -195,6 +196,11 @@ const DashboardListsRoute = DashboardListsRouteImport.update({
   path: '/lists',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardLogsRoute = DashboardLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardMailboxesRoute = DashboardMailboxesRouteImport.update({
   id: '/mailboxes',
   path: '/mailboxes',
@@ -309,6 +315,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/ip': typeof DashboardIpRoute
   '/dashboard/leads': typeof DashboardLeadsRoute
   '/dashboard/lists': typeof DashboardListsRoute
+  '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/mailboxes': typeof DashboardMailboxesRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
   '/dashboard/migrate': typeof DashboardMigrateRoute
@@ -355,6 +362,7 @@ export interface FileRoutesByTo {
   '/dashboard/ip': typeof DashboardIpRoute
   '/dashboard/leads': typeof DashboardLeadsRoute
   '/dashboard/lists': typeof DashboardListsRoute
+  '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/mailboxes': typeof DashboardMailboxesRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
   '/dashboard/migrate': typeof DashboardMigrateRoute
@@ -403,6 +411,7 @@ export interface FileRoutesById {
   '/dashboard/ip': typeof DashboardIpRoute
   '/dashboard/leads': typeof DashboardLeadsRoute
   '/dashboard/lists': typeof DashboardListsRoute
+  '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/mailboxes': typeof DashboardMailboxesRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
   '/dashboard/migrate': typeof DashboardMigrateRoute
@@ -452,6 +461,7 @@ export interface FileRouteTypes {
     | '/dashboard/ip'
     | '/dashboard/leads'
     | '/dashboard/lists'
+    | '/dashboard/logs'
     | '/dashboard/mailboxes'
     | '/dashboard/messages'
     | '/dashboard/migrate'
@@ -498,6 +508,7 @@ export interface FileRouteTypes {
     | '/dashboard/ip'
     | '/dashboard/leads'
     | '/dashboard/lists'
+    | '/dashboard/logs'
     | '/dashboard/mailboxes'
     | '/dashboard/messages'
     | '/dashboard/migrate'
@@ -545,6 +556,7 @@ export interface FileRouteTypes {
     | '/dashboard/ip'
     | '/dashboard/leads'
     | '/dashboard/lists'
+    | '/dashboard/logs'
     | '/dashboard/mailboxes'
     | '/dashboard/messages'
     | '/dashboard/migrate'
@@ -774,6 +786,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardListsRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/logs': {
+      id: '/dashboard/logs'
+      path: '/logs'
+      fullPath: '/dashboard/logs'
+      preLoaderRoute: typeof DashboardLogsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/mailboxes': {
       id: '/dashboard/mailboxes'
       path: '/mailboxes'
@@ -916,6 +935,7 @@ interface DashboardRouteChildren {
   DashboardIpRoute: typeof DashboardIpRoute
   DashboardLeadsRoute: typeof DashboardLeadsRoute
   DashboardListsRoute: typeof DashboardListsRoute
+  DashboardLogsRoute: typeof DashboardLogsRoute
   DashboardMailboxesRoute: typeof DashboardMailboxesRoute
   DashboardMessagesRoute: typeof DashboardMessagesRoute
   DashboardMigrateRoute: typeof DashboardMigrateRoute
@@ -956,6 +976,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardIpRoute: DashboardIpRoute,
   DashboardLeadsRoute: DashboardLeadsRoute,
   DashboardListsRoute: DashboardListsRoute,
+  DashboardLogsRoute: DashboardLogsRoute,
   DashboardMailboxesRoute: DashboardMailboxesRoute,
   DashboardMessagesRoute: DashboardMessagesRoute,
   DashboardMigrateRoute: DashboardMigrateRoute,

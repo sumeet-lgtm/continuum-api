@@ -32,6 +32,7 @@ import {
   ArrowRightLeft,
   Building2,
   ShieldCheck,
+  Terminal,
   Wrench,
   Plug,
   TrendingUp,
@@ -216,6 +217,7 @@ type NavItem = {
 const NAV: NavItem[] = [
   { to: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { to: "/dashboard/api-keys", label: "API Keys", icon: KeyRound },
+  { to: "/dashboard/logs", label: "API Logs", icon: Terminal },
   { to: "/dashboard/api-reference", label: "API Reference", icon: BookOpen },
   {
     to: "/dashboard/transactional",
