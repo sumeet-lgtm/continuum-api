@@ -206,7 +206,41 @@ export async function orgRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.send({ link, organizationId: orgId });
   });
 
+  // ── GET /org/audit-logs/events ────────────────────────────────────────────
+  // Local DB table — works for every user regardless of WorkOS/org config.
+  // Scoped to org when session has orgId, otherwise scoped to the actor's userId.
+  fastify.get<{ Querystring: { limit?: string; before?: string } }>(
+    '/org/audit-logs/events',
+    { preHandler: [requireOrgSession] },
+    async (request, reply) => {
+      const { orgId, userId } = request.sessionUser!;
+      const limit = Math.min(100, Math.max(1, parseInt(request.query.limit ?? '50', 10)));
+      const before = request.query.before ? new Date(request.query.before) : undefined;
+
+      const where = {
+        ...(orgId ? { orgId } : { actorId: userId }),
+        ...(before ? { createdAt: { lt: before } } : {}),
+      };
+
+      const [rows, total] = await Promise.all([
+        prisma.auditLog.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: limit + 1,
+        }),
+        prisma.auditLog.count({ where: orgId ? { orgId } : { actorId: userId } }),
+      ]);
+
+      const hasMore = rows.length > limit;
+      if (hasMore) rows.pop();
+      const nextBefore = hasMore && rows.length > 0 ? rows[rows.length - 1]!.createdAt.toISOString() : null;
+
+      return reply.send({ data: rows, total, hasMore, nextBefore });
+    },
+  );
+
   // ── GET /org/audit-logs ───────────────────────────────────────────────────
+  // WorkOS export — requires org admin + WorkOS Audit Logs integration.
   fastify.get('/org/audit-logs', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { orgId } = request.sessionUser!;
     if (!orgId) throw Errors.forbidden('Not part of an organization');
