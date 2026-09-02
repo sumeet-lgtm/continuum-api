@@ -374,6 +374,86 @@ function InlineRename({
   );
 }
 
+function RateLimitPanel({
+  keyId,
+  currentRateLimit,
+  apiKeyRaw,
+  onUpdated,
+}: {
+  keyId: string;
+  currentRateLimit: number | undefined;
+  apiKeyRaw: string;
+  onUpdated: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(String(currentRateLimit ?? 60));
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    const n = parseInt(value, 10);
+    if (!n || n < 1 || n > 10000) { return; }
+    setSaving(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/api-keys/${keyId}/rate-limit`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKeyRaw },
+        body: JSON.stringify({ rateLimit: n }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message ?? "Failed");
+      }
+      toast.success(`Rate limit updated to ${n} req/min`);
+      onUpdated();
+      setOpen(false);
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="border border-border rounded-md">
+      <button
+        className="w-full flex items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:bg-muted/30 rounded-md transition-colors"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span>Rate limit · {currentRateLimit ?? 60} req/min</span>
+        {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 space-y-3 border-t border-border pt-3">
+          <p className="text-xs text-muted-foreground">
+            Maximum API requests per minute from this key. Default is plan-level; override here for this key only.
+          </p>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              min={1}
+              max={10000}
+              className="h-7 text-xs w-28"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") save(); }}
+            />
+            <span className="text-xs text-muted-foreground">req/min</span>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" className="h-7 text-xs" onClick={save} disabled={saving}>
+              {saving ? "Saving…" : "Update"}
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ApiKeysPage() {
   const { apiKeys, primaryKey, refreshMe } = useAuth();
   const [creating, setCreating] = useState(false);
@@ -561,15 +641,16 @@ function ApiKeysPage() {
                         {(k.currentMonthSendUsage ?? 0).toLocaleString()} emails sent
                       </p>
                     )}
-                    {(k as { rateLimit?: number }).rateLimit && (
-                      <p className="text-xs text-muted-foreground">
-                        {(k as { rateLimit?: number }).rateLimit?.toLocaleString()} req/min rate limit
-                      </p>
-                    )}
                   </div>
                 </div>
                 {primaryKey?.keyRaw && (
                   <div className="flex flex-col gap-2">
+                    <RateLimitPanel
+                      keyId={k.id}
+                      currentRateLimit={(k as { rateLimit?: number }).rateLimit}
+                      apiKeyRaw={primaryKey.keyRaw}
+                      onUpdated={refreshMe}
+                    />
                     <IpAllowlistPanel
                       keyId={k.id}
                       currentIps={(k as { allowedIps?: string[] }).allowedIps ?? []}
