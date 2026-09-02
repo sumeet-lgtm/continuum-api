@@ -13,6 +13,19 @@ export const Route = createFileRoute("/dashboard/organization")({
   component: OrganizationPage,
 });
 
+type OrgApiKey = {
+  id: string;
+  keyPrefix: string;
+  name: string | null;
+  label: string | null;
+  permission: string;
+  plan: string;
+  isActive: boolean;
+  revokedAt: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+};
+
 type OrgInfo = {
   orgId: string | null;
   name: string | null;
@@ -45,6 +58,7 @@ function OrganizationPage() {
   const [org, setOrg] = useState<OrgInfo | null>(null);
   const [members, setMembers] = useState<OrgMember[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
+  const [orgApiKeys, setOrgApiKeys] = useState<OrgApiKey[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [inviteEmail, setInviteEmail] = useState("");
@@ -60,14 +74,16 @@ function OrganizationPage() {
   useEffect(() => {
     async function load() {
       try {
-        const [orgData, membersData, invitesData] = await Promise.all([
+        const [orgData, membersData, invitesData, keysData] = await Promise.all([
           api.get<OrgInfo>("/org"),
           api.get<{ data: OrgMember[] }>("/org/members"),
           api.get<{ data: Invitation[] }>("/org/invitations").catch(() => ({ data: [] })),
+          api.get<{ data: OrgApiKey[]; total: number }>("/org/api-keys").catch(() => ({ data: [], total: 0 })),
         ]);
         setOrg(orgData);
         setMembers(membersData.data);
         setInvitations(invitesData.data);
+        setOrgApiKeys(keysData.data);
       } catch {
         // not part of an org — show setup state
       } finally {
@@ -112,6 +128,17 @@ function OrganizationPage() {
   const removeMember = async (membershipId: string) => {
     await api.del(`/org/members/${membershipId}`);
     setMembers((prev) => prev.filter((m) => m.membershipId !== membershipId));
+  };
+
+  const revokeOrgKey = async (keyId: string) => {
+    if (!confirm("Revoke this API key? Any requests using it will fail immediately.")) return;
+    try {
+      await api.del(`/org/api-keys/${keyId}`);
+      setOrgApiKeys((prev) => prev.map((k) => k.id === keyId ? { ...k, isActive: false, revokedAt: new Date().toISOString() } : k));
+      toast.success("API key revoked");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to revoke key");
+    }
   };
 
   const toggleMfa = async () => {
@@ -284,6 +311,45 @@ function OrganizationPage() {
             >
               {mfaToggling ? "Updating…" : org.mfaRequired ? "MFA enforced" : "Enable MFA"}
             </Button>
+          </div>
+        </Section>
+      )}
+
+      {isAdmin && orgApiKeys.length > 0 && (
+        <Section title="Team API Keys">
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground mb-3">
+              All active API keys across your organization. Revoke any key that is no longer needed.
+            </p>
+            <div className="divide-y divide-border rounded-md border border-border overflow-hidden">
+              {orgApiKeys.map((k) => (
+                <div key={k.id} className="flex items-center justify-between px-4 py-3 bg-background">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <code className="text-xs font-mono text-muted-foreground">{k.keyPrefix}…</code>
+                      {k.name || k.label ? (
+                        <span className="text-sm font-medium">{k.label ?? k.name}</span>
+                      ) : null}
+                      <span className={`text-[10px] rounded-full px-1.5 py-0.5 font-medium ${
+                        k.isActive && !k.revokedAt ? "bg-[oklch(0.96_0.04_145)] text-[oklch(0.35_0.15_145)]" : "bg-muted text-muted-foreground line-through"
+                      }`}>
+                        {k.isActive && !k.revokedAt ? "active" : "revoked"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {k.permission === "full_access" ? "Full access" : "Sending only"}
+                      {" · "}Created {new Date(k.createdAt).toLocaleDateString()}
+                      {k.lastUsedAt ? ` · Last used ${new Date(k.lastUsedAt).toLocaleDateString()}` : ""}
+                    </p>
+                  </div>
+                  {k.isActive && !k.revokedAt && (
+                    <Button variant="outline" size="sm" onClick={() => revokeOrgKey(k.id)} className="text-destructive border-destructive/30 hover:bg-destructive/5 shrink-0">
+                      Revoke
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </Section>
       )}
