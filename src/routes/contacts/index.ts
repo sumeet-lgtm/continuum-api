@@ -136,6 +136,51 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.status(200).send({ data: memberships, page, limit });
   });
 
+  // GET /v1/lists/:id/contacts/export — download all contacts as CSV
+  fastify.get('/lists/:id/contacts/export', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id: listId } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const q = request.query as { status?: string };
+
+    const list = await prisma.mailingList.findFirst({ where: { id: listId, apiKeyId } });
+    if (!list) throw Errors.notFound('List not found.');
+
+    const date = new Date().toISOString().slice(0, 10);
+    const safeName = (list.name ?? 'contacts').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+    reply.header('Content-Type', 'text/csv; charset=utf-8');
+    reply.header('Content-Disposition', `attachment; filename="${safeName}-${date}.csv"`);
+
+    let offset = 0;
+    const batchSize = 1000;
+    const where = {
+      listId,
+      ...(q.status ? { status: q.status } : {}),
+    };
+
+    let csv = 'email,first_name,last_name,status,subscribed_at,unsubscribed_at\n';
+
+    while (true) {
+      const batch = await prisma.contactListMembership.findMany({
+        where,
+        orderBy: { subscribedAt: 'desc' },
+        skip: offset,
+        take: batchSize,
+        include: { contact: { select: { email: true, firstName: true, lastName: true } } },
+      });
+      if (batch.length === 0) break;
+      for (const m of batch) {
+        const email = m.contact.email.includes(',') ? `"${m.contact.email}"` : m.contact.email;
+        const first = (m.contact.firstName ?? '').replace(/"/g, '""');
+        const last = (m.contact.lastName ?? '').replace(/"/g, '""');
+        csv += `${email},"${first}","${last}",${m.status},${m.subscribedAt?.toISOString() ?? ''},${m.unsubscribedAt?.toISOString() ?? ''}\n`;
+      }
+      offset += batch.length;
+      if (batch.length < batchSize) break;
+    }
+
+    return reply.status(200).send(csv);
+  });
+
   // GET /v1/lists/:id/contacts/:email
   fastify.get('/lists/:id/contacts/:email', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id: listId, email: rawEmail } = request.params as { id: string; email: string };
