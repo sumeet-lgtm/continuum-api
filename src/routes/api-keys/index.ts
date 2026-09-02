@@ -126,6 +126,37 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  // PATCH /v1/api-keys/:id/rate-limit — override rate limit for a key
+  fastify.patch(
+    '/api-keys/:id/rate-limit',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const parentKey = request.apiKey;
+
+      if (parentKey.permission !== 'full_access') {
+        throw Errors.forbidden('Only full_access keys can adjust rate limits.');
+      }
+
+      const body = request.body as { rateLimit?: unknown };
+      const rateLimit = Number(body?.rateLimit);
+      if (!Number.isInteger(rateLimit) || rateLimit < 1 || rateLimit > 10_000) {
+        throw Errors.validationFailed([{ field: 'rateLimit', message: 'Must be an integer between 1 and 10,000' }]);
+      }
+
+      const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
+      const target = await prisma.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } });
+      if (!target) throw Errors.notFound('API key not found.');
+      if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
+        throw Errors.forbidden('Not authorized to adjust this key.');
+      }
+
+      await prisma.apiKey.update({ where: { id }, data: { rateLimit } });
+
+      return reply.status(200).send({ id, rateLimit, message: `Rate limit set to ${rateLimit} req/min.` });
+    },
+  );
+
   // PATCH /v1/api-keys/:id/ip-allowlist — set/clear IP allowlist for a key
   fastify.patch(
     '/api-keys/:id/ip-allowlist',
