@@ -23,6 +23,7 @@ import { Route as DashboardAnalyticsRouteImport } from './routes/dashboard.analy
 import { Route as DashboardApiKeysRouteImport } from './routes/dashboard.api-keys'
 import { Route as DashboardApiReferenceRouteImport } from './routes/dashboard.api-reference'
 import { Route as DashboardAuditLogsRouteImport } from './routes/dashboard.audit-logs'
+import { Route as DashboardPrivacyRouteImport } from './routes/dashboard.privacy'
 import { Route as DashboardAutomationsRouteImport } from './routes/dashboard.automations'
 import { Route as DashboardBatchSendRouteImport } from './routes/dashboard.batch-send'
 import { Route as DashboardBillingRouteImport } from './routes/dashboard.billing'
@@ -124,6 +125,11 @@ const DashboardApiReferenceRoute = DashboardApiReferenceRouteImport.update({
 const DashboardAuditLogsRoute = DashboardAuditLogsRouteImport.update({
   id: '/audit-logs',
   path: '/audit-logs',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardPrivacyRoute = DashboardPrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardAutomationsRoute = DashboardAutomationsRouteImport.update({
@@ -301,6 +307,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/api-keys': typeof DashboardApiKeysRoute
   '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
+  '/dashboard/privacy': typeof DashboardPrivacyRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
@@ -348,6 +355,7 @@ export interface FileRoutesByTo {
   '/dashboard/api-keys': typeof DashboardApiKeysRoute
   '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
+  '/dashboard/privacy': typeof DashboardPrivacyRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
@@ -397,6 +405,7 @@ export interface FileRoutesById {
   '/dashboard/api-keys': typeof DashboardApiKeysRoute
   '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
+  '/dashboard/privacy': typeof DashboardPrivacyRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
@@ -447,6 +456,7 @@ export interface FileRouteTypes {
     | '/dashboard/api-keys'
     | '/dashboard/api-reference'
     | '/dashboard/audit-logs'
+    | '/dashboard/privacy'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
     | '/dashboard/billing'
@@ -494,6 +504,7 @@ export interface FileRouteTypes {
     | '/dashboard/api-keys'
     | '/dashboard/api-reference'
     | '/dashboard/audit-logs'
+    | '/dashboard/privacy'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
     | '/dashboard/billing'
@@ -542,6 +553,7 @@ export interface FileRouteTypes {
     | '/dashboard/api-keys'
     | '/dashboard/api-reference'
     | '/dashboard/audit-logs'
+    | '/dashboard/privacy'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
     | '/dashboard/billing'
@@ -686,6 +698,13 @@ declare module '@tanstack/react-router' {
       path: '/audit-logs'
       fullPath: '/dashboard/audit-logs'
       preLoaderRoute: typeof DashboardAuditLogsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/privacy': {
+      id: '/dashboard/privacy'
+      path: '/privacy'
+      fullPath: '/dashboard/privacy'
+      preLoaderRoute: typeof DashboardPrivacyRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/automations': {
@@ -921,6 +940,7 @@ interface DashboardRouteChildren {
   DashboardApiKeysRoute: typeof DashboardApiKeysRoute
   DashboardApiReferenceRoute: typeof DashboardApiReferenceRoute
   DashboardAuditLogsRoute: typeof DashboardAuditLogsRoute
+  DashboardPrivacyRoute: typeof DashboardPrivacyRoute
   DashboardAutomationsRoute: typeof DashboardAutomationsRoute
   DashboardBatchSendRoute: typeof DashboardBatchSendRoute
   DashboardBillingRoute: typeof DashboardBillingRoute
@@ -962,6 +982,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardApiKeysRoute: DashboardApiKeysRoute,
   DashboardApiReferenceRoute: DashboardApiReferenceRoute,
   DashboardAuditLogsRoute: DashboardAuditLogsRoute,
+  DashboardPrivacyRoute: DashboardPrivacyRoute,
   DashboardAutomationsRoute: DashboardAutomationsRoute,
   DashboardBatchSendRoute: DashboardBatchSendRoute,
   DashboardBillingRoute: DashboardBillingRoute,

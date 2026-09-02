@@ -32,6 +32,7 @@ import {
   ArrowRightLeft,
   Building2,
   ShieldCheck,
+  Shield,
   Terminal,
   Wrench,
   Plug,
@@ -276,6 +277,7 @@ const NAV: NavItem[] = [
     children: [
       { to: "/dashboard/organization", label: "Organization", icon: Building2, exact: true },
       { to: "/dashboard/audit-logs", label: "Audit Logs", icon: ShieldCheck },
+      { to: "/dashboard/privacy", label: "Data Privacy", icon: Shield },
     ],
   },
   { to: "/dashboard/usage", label: "Usage & Limits", icon: Zap },
