@@ -175,6 +175,74 @@ export async function billingRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  // ── POST /v1/billing/credits/checkout ────────────────────────────────────────
+  // One-time purchase of a verification credit pack. Returns a Dodo checkout URL.
+  // Credits are non-expiring and stack on top of the monthly plan quota.
+  fastify.post(
+    '/billing/credits/checkout',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      let parsedBody: unknown;
+      try {
+        parsedBody = JSON.parse((request.body as string) ?? '');
+      } catch {
+        throw Errors.validationFailed({ body: 'Body must be valid JSON' });
+      }
+      const packSchema = z.object({ pack: z.enum(['5k', '25k', '100k']) });
+      const parsed = packSchema.safeParse(parsedBody);
+      if (!parsed.success) {
+        throw Errors.validationFailed({ pack: 'pack must be one of: 5k, 25k, 100k' });
+      }
+
+      const CREDIT_PACK_PRODUCTS: Record<string, string | undefined> = {
+        '5k':   config.DODO_PRODUCT_CREDITS_5K,
+        '25k':  config.DODO_PRODUCT_CREDITS_25K,
+        '100k': config.DODO_PRODUCT_CREDITS_100K,
+      };
+      const CREDIT_PACK_SIZE: Record<string, number> = { '5k': 5_000, '25k': 25_000, '100k': 100_000 };
+
+      if (!config.DODO_PAYMENTS_API_KEY) throw Errors.serviceUnavailable('Billing');
+      const productId = CREDIT_PACK_PRODUCTS[parsed.data.pack];
+      if (!productId) throw Errors.serviceUnavailable(`Credit pack ${parsed.data.pack}`);
+
+      const owner = request.apiKey.ownerId
+        ? await prisma.user.findUnique({ where: { id: request.apiKey.ownerId }, select: { email: true } })
+        : null;
+      const customerEmail = owner?.email ?? undefined;
+
+      const res = await fetch('https://live.dodopayments.com/checkouts', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.DODO_PAYMENTS_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          product_cart: [{ product_id: productId, quantity: 1 }],
+          ...(customerEmail?.includes('@')
+            ? { customer: { email: customerEmail, name: customerEmail.split('@')[0] } }
+            : {}),
+          return_url: `${config.DASHBOARD_URL}/dashboard/billing?credits_added=${parsed.data.pack}`,
+          metadata: {
+            api_key_id: request.apiKey.id,
+            user_id:    request.apiKey.userId ?? '',
+            credit_pack: parsed.data.pack,
+            credit_amount: String(CREDIT_PACK_SIZE[parsed.data.pack]),
+          },
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      const data = await res.json() as { checkout_url?: string; url?: string; payment_link?: string };
+      if (!res.ok) {
+        logger.error({ status: res.status, data }, 'Dodo credit pack checkout failed');
+        throw Errors.serviceUnavailable('Billing');
+      }
+      const url = data.checkout_url ?? data.url ?? data.payment_link;
+      if (!url) throw Errors.serviceUnavailable('Billing');
+      return reply.send({ url });
+    },
+  );
+
   // ── POST /v1/billing/webhook ────────────────────────────────────────────────
   // Signature IS the auth — no API key preHandler. Fails closed in production.
   fastify.post(
@@ -227,7 +295,11 @@ export async function billingRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       try {
-        if (UPGRADE_EVENTS.has(eventType)) {
+        const metadata = event.data?.metadata ?? event.metadata ?? {};
+        const isCreditPack = UPGRADE_EVENTS.has(eventType) && metadata['credit_pack'] && metadata['credit_amount'];
+        if (isCreditPack) {
+          await applyCreditPack(event);
+        } else if (UPGRADE_EVENTS.has(eventType)) {
           await applyPlanChange(event, eventType);
         } else if (DOWNGRADE_EVENTS.has(eventType)) {
           await applyDowngrade(event, eventType);
@@ -347,4 +419,59 @@ async function updateKeys(
     }
   }
   return 0;
+}
+
+// ─── Credit pack application ──────────────────────────────────────────────────
+
+async function applyCreditPack(event: DodoEvent): Promise<void> {
+  const metadata = event.data?.metadata ?? event.metadata ?? {};
+  const { apiKeyId, userId, email } = eventIdentity(event);
+  const amount = parseInt(metadata['credit_amount'] ?? '0', 10);
+  const pack   = metadata['credit_pack'] ?? 'unknown';
+
+  if (!amount || amount <= 0) {
+    logger.error({ metadata }, 'Credit pack webhook: invalid credit_amount');
+    return;
+  }
+
+  let updated = 0;
+  if (apiKeyId) {
+    const r = await prisma.apiKey.updateMany({
+      where: { id: apiKeyId },
+      data:  { extraVerificationCredits: { increment: amount } },
+    });
+    updated = r.count;
+  }
+  if (updated === 0 && userId) {
+    const r = await prisma.apiKey.updateMany({
+      where: { userId },
+      data:  { extraVerificationCredits: { increment: amount } },
+    });
+    updated = r.count;
+  }
+  if (updated === 0 && email) {
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (user) {
+      const r = await prisma.apiKey.updateMany({
+        where: { ownerId: user.id },
+        data:  { extraVerificationCredits: { increment: amount } },
+      });
+      updated = r.count;
+    }
+  }
+
+  if (updated === 0) {
+    logger.error({ apiKeyId, userId, email, amount }, 'Credit pack MATCHED NO API KEY — reconcile manually');
+    return;
+  }
+
+  logger.info({ pack, amount, updated, apiKeyId, userId }, 'Credit pack applied');
+
+  if (email) {
+    void sendEmail(
+      email,
+      `Your ${amount.toLocaleString()} verification credits have been added`,
+      `<p>Your credit pack has been applied to your account — ${amount.toLocaleString()} verification credits are now available and never expire.</p>`,
+    );
+  }
 }

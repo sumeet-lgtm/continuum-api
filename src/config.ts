@@ -54,6 +54,10 @@ const baseEnvSchema = z.object({
   DODO_PRODUCT_STARTER: z.string().optional(),
   DODO_PRODUCT_GROWTH: z.string().optional(),
   DODO_PRODUCT_SCALE: z.string().optional(),
+  // One-time verification credit pack products
+  DODO_PRODUCT_CREDITS_5K:  z.string().optional(), // 5,000 verifications  @ $19
+  DODO_PRODUCT_CREDITS_25K: z.string().optional(), // 25,000 verifications @ $79
+  DODO_PRODUCT_CREDITS_100K: z.string().optional(), // 100,000 verifications @ $249
   DASHBOARD_URL: z.string().url().default('https://app.continuumapi.com'),
 
   // Transactional email (Resend) — email is off when the key is unset

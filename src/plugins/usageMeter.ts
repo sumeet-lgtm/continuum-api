@@ -91,8 +91,10 @@ export async function requireMonthlyQuota(
       key.usageResetAt = nextReset;
     }
 
-    // Get plan limit
-    const limit = getPlanLimit(key.plan, key.monthlyLimit);
+    // Get plan limit + any purchased top-up credits (non-expiring)
+    const baseLimit = getPlanLimit(key.plan, key.monthlyLimit);
+    const extraCredits = (key as { extraVerificationCredits?: number }).extraVerificationCredits ?? 0;
+    const limit = baseLimit + extraCredits;
 
     // Check if over limit
     if (key.currentMonthUsage >= limit) {

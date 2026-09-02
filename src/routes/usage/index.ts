@@ -14,11 +14,16 @@ export async function usageRoutes(fastify: FastifyInstance): Promise<void> {
 
       const monitorCount = await prisma.monitor.count({ where: { apiKeyId, isActive: true } });
 
+      const extraVerificationCredits = (key as { extraVerificationCredits?: number }).extraVerificationCredits ?? 0;
+      const baseLimit = getPlanLimit(key.plan);
+
       return reply.status(200).send({
         plan: key.plan,
         verifications: {
           used: key.currentMonthUsage,
-          limit: getPlanLimit(key.plan),
+          limit: baseLimit + extraVerificationCredits,
+          base_limit: baseLimit,
+          extra_credits: extraVerificationCredits,
           resets_at: key.usageResetAt,
         },
         sends: {

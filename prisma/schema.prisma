@@ -113,6 +113,10 @@ model ApiKey {
   currentMonthSendUsage Int @default(0)   // sends used this month — separate counter from verification usage
   sendUsageResetAt DateTime @default(dbgenerated("date_trunc('month', now() + interval '1 month')"))
 
+  // Pay-per-use credit packs (non-expiring top-ups on top of monthly quota)
+  extraVerificationCredits Int @default(0) @map("extra_verification_credits")
+  extraSendCredits         Int @default(0) @map("extra_send_credits")
+
   // Self-service key management
   name               String?   // human label for this key
   permission         String    @default("full_access") // full_access | sending_access
