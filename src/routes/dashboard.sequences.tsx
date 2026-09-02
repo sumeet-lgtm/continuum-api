@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/sequences")({
@@ -461,7 +462,23 @@ function SequencesPage() {
       )}
 
       {loading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
+        <div className="space-y-3">
+          {[...Array(3)].map((_, i) => (
+            <div key={i} className="rounded-lg border border-border bg-card p-5">
+              <div className="flex items-center gap-3">
+                <Skeleton className="h-4 w-4 rounded-full" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-4 w-48" />
+                  <Skeleton className="h-3 w-32" />
+                </div>
+                <div className="flex gap-4">
+                  <Skeleton className="h-8 w-12" />
+                  <Skeleton className="h-8 w-12" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       ) : sequences.length === 0 ? (
         <div className="rounded-lg border border-border bg-card p-10 text-center">
           <GitBranch className="h-8 w-8 text-muted-foreground mx-auto mb-3" />

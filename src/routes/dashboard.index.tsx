@@ -1,11 +1,61 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { useEffect, useState, useRef } from "react";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Area, AreaChart } from "recharts";
 import { Sparkles, KeyRound, Mail, Activity, CheckCircle2, Circle, ArrowRight, Send, GitBranch } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+
+function useAnimatedNumber(target: number, duration = 700) {
+  const [value, setValue] = useState(0);
+  const animRef = useRef<number | null>(null);
+  const prevTarget = useRef(0);
+  useEffect(() => {
+    const from = prevTarget.current;
+    prevTarget.current = target;
+    if (animRef.current) cancelAnimationFrame(animRef.current);
+    const start = performance.now();
+    function tick(now: number) {
+      const t = Math.min(1, (now - start) / duration);
+      const ease = 1 - Math.pow(1 - t, 3);
+      setValue(Math.round(from + (target - from) * ease));
+      if (t < 1) animRef.current = requestAnimationFrame(tick);
+    }
+    animRef.current = requestAnimationFrame(tick);
+    return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
+  }, [target, duration]);
+  return value;
+}
+
+function SkeletonOverview() {
+  return (
+    <div className="space-y-6">
+      <header>
+        <Skeleton className="h-8 w-32 mb-2" />
+        <Skeleton className="h-4 w-56" />
+      </header>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[...Array(4)].map((_, i) => (
+          <div key={i} className="rounded-lg border border-border bg-card p-4 space-y-2">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-9 w-16" />
+          </div>
+        ))}
+      </div>
+      <div className="rounded-lg border border-border bg-card p-5 space-y-3">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-2 w-full" />
+        <Skeleton className="h-3 w-40" />
+      </div>
+      <div className="rounded-lg border border-border bg-card p-5 space-y-3">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-48 w-full" />
+      </div>
+    </div>
+  );
+}
 
 export const Route = createFileRoute("/dashboard/")({
   component: Overview,
@@ -67,7 +117,7 @@ function Overview() {
     })();
   }, [primaryKey]);
 
-  if (authLoading || loading) return <div className="text-sm text-muted-foreground">Loading…</div>;
+  if (authLoading || loading) return <SkeletonOverview />;
 
   if (!primaryKey) {
     return (
@@ -125,10 +175,10 @@ function Overview() {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Verifications used" value={verifUsed.toLocaleString()} />
-        <StatCard label="Verif limit" value={verifLimit.toLocaleString()} />
-        <StatCard label="Emails sent" value={sendUsed.toLocaleString()} />
-        <StatCard label="Send limit" value={sendLimit.toLocaleString()} />
+        <StatCard label="Verifications used" value={verifUsed} pct={verifLimit > 0 ? (verifUsed / verifLimit) * 100 : 0} />
+        <StatCard label="Verif monthly limit" value={verifLimit} />
+        <StatCard label="Emails sent" value={sendUsed} pct={sendLimit > 0 ? (sendUsed / sendLimit) * 100 : 0} />
+        <StatCard label="Send monthly limit" value={sendLimit} />
       </div>
 
       <div className="rounded-lg border border-border bg-card p-5">
@@ -153,13 +203,22 @@ function Overview() {
             <div className="h-full flex items-center justify-center text-sm text-muted-foreground">No data yet</div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 5, right: 8, left: -20, bottom: 0 }}>
+              <AreaChart data={chartData} margin={{ top: 5, right: 8, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="activityFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--foreground)" stopOpacity={0.1} />
+                    <stop offset="100%" stopColor="var(--foreground)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} tickFormatter={(d) => d.slice(5)} />
-                <YAxis tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} allowDecimals={false} />
-                <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }} />
-                <Line type="monotone" dataKey="count" stroke="var(--foreground)" strokeWidth={2} dot={false} />
-              </LineChart>
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} tickFormatter={(d) => d.slice(5)} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} allowDecimals={false} axisLine={false} tickLine={false} />
+                <Tooltip
+                  contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }}
+                  cursor={{ stroke: "var(--border)", strokeWidth: 1 }}
+                />
+                <Area type="monotone" dataKey="count" stroke="var(--foreground)" strokeWidth={2} fill="url(#activityFill)" dot={false} />
+              </AreaChart>
             </ResponsiveContainer>
           )}
         </div>
@@ -198,11 +257,22 @@ function Overview() {
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
+function StatCard({ label, value, pct }: { label: string; value: number; pct?: number }) {
+  const displayed = useAnimatedNumber(value);
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-3xl font-display font-medium tabular-nums tracking-tight">{value}</div>
+      <div className="mt-1 text-3xl font-display font-medium tabular-nums tracking-tight">
+        {displayed.toLocaleString()}
+      </div>
+      {pct !== undefined && (
+        <div className="mt-2 h-1 rounded-full bg-muted overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all duration-700 ${pct >= 100 ? "bg-[oklch(0.58_0.22_27)]" : pct >= 80 ? "bg-[oklch(0.65_0.16_75)]" : "bg-foreground"}`}
+            style={{ width: `${Math.min(100, pct)}%` }}
+          />
+        </div>
+      )}
     </div>
   );
 }

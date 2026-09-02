@@ -1,11 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { CheckCircle2, XCircle, MinusCircle } from "lucide-react";
 import { API_BASE } from "@/lib/supabase";
 import { useApiKey } from "@/lib/use-api-key";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export const Route = createFileRoute("/dashboard/verify")({
   head: () => ({ meta: [{ title: "Email Verify — Continuum API" }] }),
@@ -25,6 +26,61 @@ interface HistoryItem {
   status: string;
   score: number | undefined;
   at: string;
+}
+
+function ScoreRing({ score, status }: { score: number; status?: string }) {
+  const r = 46;
+  const circ = 2 * Math.PI * r;
+  const [animated, setAnimated] = useState(0);
+  const prev = useRef(0);
+
+  useEffect(() => {
+    prev.current = 0;
+    setAnimated(0);
+    const start = performance.now();
+    const duration = 900;
+    const target = score;
+    function tick(now: number) {
+      const t = Math.min(1, (now - start) / duration);
+      const ease = 1 - Math.pow(1 - t, 3);
+      setAnimated(Math.round(ease * target));
+      if (t < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }, [score]);
+
+  const fill = circ * (animated / 100);
+  const strokeColor =
+    status === "valid" ? "oklch(0.55 0.16 145)" :
+    status === "risky" ? "oklch(0.65 0.16 75)" :
+    status === "invalid" ? "oklch(0.58 0.22 27)" :
+    "oklch(0.145 0 0)";
+
+  return (
+    <svg width={108} height={108} viewBox="0 0 108 108" className="shrink-0">
+      <circle cx={54} cy={54} r={r} fill="none" stroke="var(--muted)" strokeWidth={8} />
+      <circle
+        cx={54} cy={54} r={r} fill="none"
+        stroke={strokeColor} strokeWidth={8}
+        strokeDasharray={`${fill} ${circ - fill}`}
+        strokeLinecap="round"
+        transform="rotate(-90 54 54)"
+        style={{ transition: "stroke-dasharray 0.05s linear" }}
+      />
+      <text
+        x={54} y={48} textAnchor="middle" dominantBaseline="middle"
+        style={{ fill: strokeColor, fontSize: 22, fontWeight: 700, fontFamily: "var(--font-mono)" }}
+      >
+        {animated}
+      </text>
+      <text
+        x={54} y={66} textAnchor="middle" dominantBaseline="middle"
+        style={{ fill: "var(--muted-foreground)", fontSize: 10, fontFamily: "var(--font-mono)" }}
+      >
+        / 100
+      </text>
+    </svg>
+  );
 }
 
 function VerifyPage() {
@@ -149,23 +205,21 @@ function VerifyPage() {
       {result && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="rounded-lg border border-border bg-card p-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium">Result</h2>
-              <StatusBadge status={result.status ?? "unknown"} />
-            </div>
-            <div className="mt-4">
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>Score</span>
-                <span className="tabular-nums">{result.score ?? 0} / 100</span>
-              </div>
-              <div className="mt-1 h-2 rounded-full bg-muted overflow-hidden">
-                <div
-                  className="h-full bg-foreground transition-all"
-                  style={{ width: `${Math.max(0, Math.min(100, result.score ?? 0))}%` }}
-                />
+            {/* Score ring header */}
+            <div className="flex items-center gap-5 mb-5 pb-5 border-b border-border">
+              <ScoreRing score={result.score ?? 0} status={result.status} />
+              <div>
+                <StatusBadge status={result.status ?? "unknown"} className="mb-2" />
+                <p className="text-base font-mono font-medium leading-tight">{result.email as string}</p>
+                {Boolean((result as Record<string, unknown>).domain) && (
+                  <p className="text-xs text-muted-foreground mt-1">{String((result as Record<string, unknown>).domain)}</p>
+                )}
+                {Boolean((result as Record<string, unknown>).subStatus) && (
+                  <p className="text-xs text-muted-foreground mt-1 font-mono">{String((result as Record<string, unknown>).subStatus)}</p>
+                )}
               </div>
             </div>
-            <div className="mt-5 space-y-4">
+            <div className="space-y-4">
               <div>
                 <h3 className="text-xs font-medium text-muted-foreground mb-2">Email Checks</h3>
                 <ul className="space-y-1.5">
