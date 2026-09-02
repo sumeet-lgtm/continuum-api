@@ -190,8 +190,26 @@ function WebhooksPage() {
     setActive(w);
     setDeliveries([]);
     const res = await fetch(`${API_BASE}/v1/webhooks/${w.id}/deliveries?limit=50`, { headers: { "X-API-Key": apiKey?.keyRaw ?? "" } });
-    const data = res.ok ? await res.json() : [];
-    setDeliveries((data ?? []) as Delivery[]);
+    const data = res.ok ? await res.json() : {};
+    setDeliveries(((data as { data?: Delivery[] }).data ?? data ?? []) as Delivery[]);
+  };
+
+  const retryDelivery = async (webhookId: string, deliveryId: string) => {
+    if (!apiKey?.keyRaw) return;
+    try {
+      const res = await fetch(`${API_BASE}/v1/webhooks/${webhookId}/deliveries/${deliveryId}/retry`, {
+        method: "POST",
+        headers: { "X-API-Key": apiKey.keyRaw },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message ?? "Retry failed");
+      }
+      toast.success("Retry enqueued");
+      if (active) await openDeliveries(active);
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    }
   };
 
   return (
@@ -280,6 +298,7 @@ function WebhooksPage() {
                   <th className="px-5 py-2 font-medium">HTTP</th>
                   <th className="px-5 py-2 font-medium">Attempts</th>
                   <th className="px-5 py-2 font-medium text-right">Last attempt</th>
+                  <th className="px-5 py-2 font-medium text-right"></th>
                 </tr>
               </thead>
               <tbody>
@@ -308,6 +327,16 @@ function WebhooksPage() {
                     <td className="px-5 py-2 text-xs tabular-nums text-muted-foreground">{d.attempts ?? 1} attempt{(d.attempts ?? 1) !== 1 ? "s" : ""}</td>
                     <td className="px-5 py-2 text-xs text-muted-foreground text-right">
                       {d.lastAttemptAt ? new Date(d.lastAttemptAt).toLocaleString() : "—"}
+                    </td>
+                    <td className="px-5 py-2 text-right">
+                      {(!d.delivered && (d.failedPermanently || d.attempts !== null)) && (
+                        <button
+                          onClick={() => retryDelivery(active!.id, d.id)}
+                          className="text-xs text-muted-foreground hover:text-foreground underline"
+                        >
+                          Retry
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
