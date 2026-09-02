@@ -117,6 +117,7 @@ const NAV: NavItem[] = [
       { to: "/dashboard/audit-logs", label: "Audit Logs", icon: ShieldCheck },
     ],
   },
+  { to: "/dashboard/usage", label: "Usage & Limits", icon: Zap },
   { to: "/dashboard/billing", label: "Billing", icon: CreditCard },
   { to: "/dashboard/settings", label: "Settings", icon: Settings },
 ];

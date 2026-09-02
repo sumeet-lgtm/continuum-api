@@ -21,6 +21,7 @@ import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as DashboardAiRouteImport } from './routes/dashboard.ai'
 import { Route as DashboardAnalyticsRouteImport } from './routes/dashboard.analytics'
 import { Route as DashboardApiKeysRouteImport } from './routes/dashboard.api-keys'
+import { Route as DashboardApiReferenceRouteImport } from './routes/dashboard.api-reference'
 import { Route as DashboardAuditLogsRouteImport } from './routes/dashboard.audit-logs'
 import { Route as DashboardAutomationsRouteImport } from './routes/dashboard.automations'
 import { Route as DashboardBatchSendRouteImport } from './routes/dashboard.batch-send'
@@ -37,8 +38,8 @@ import { Route as DashboardIpRouteImport } from './routes/dashboard.ip'
 import { Route as DashboardLeadsRouteImport } from './routes/dashboard.leads'
 import { Route as DashboardListsRouteImport } from './routes/dashboard.lists'
 import { Route as DashboardMailboxesRouteImport } from './routes/dashboard.mailboxes'
-import { Route as DashboardMigrateRouteImport } from './routes/dashboard.migrate'
 import { Route as DashboardMessagesRouteImport } from './routes/dashboard.messages'
+import { Route as DashboardMigrateRouteImport } from './routes/dashboard.migrate'
 import { Route as DashboardMonitoringRouteImport } from './routes/dashboard.monitoring'
 import { Route as DashboardOrganizationRouteImport } from './routes/dashboard.organization'
 import { Route as DashboardPhoneRouteImport } from './routes/dashboard.phone'
@@ -49,9 +50,9 @@ import { Route as DashboardSuppressionsRouteImport } from './routes/dashboard.su
 import { Route as DashboardTemplatesRouteImport } from './routes/dashboard.templates'
 import { Route as DashboardToolsRouteImport } from './routes/dashboard.tools'
 import { Route as DashboardTransactionalRouteImport } from './routes/dashboard.transactional'
+import { Route as DashboardUsageRouteImport } from './routes/dashboard.usage'
 import { Route as DashboardVerifyRouteImport } from './routes/dashboard.verify'
 import { Route as DashboardWebhooksRouteImport } from './routes/dashboard.webhooks'
-import { Route as DashboardApiReferenceRouteImport } from './routes/dashboard.api-reference'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -111,6 +112,11 @@ const DashboardAnalyticsRoute = DashboardAnalyticsRouteImport.update({
 const DashboardApiKeysRoute = DashboardApiKeysRouteImport.update({
   id: '/api-keys',
   path: '/api-keys',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardApiReferenceRoute = DashboardApiReferenceRouteImport.update({
+  id: '/api-reference',
+  path: '/api-reference',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardAuditLogsRoute = DashboardAuditLogsRouteImport.update({
@@ -253,6 +259,11 @@ const DashboardTransactionalRoute = DashboardTransactionalRouteImport.update({
   path: '/transactional',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardUsageRoute = DashboardUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardVerifyRoute = DashboardVerifyRouteImport.update({
   id: '/verify',
   path: '/verify',
@@ -261,11 +272,6 @@ const DashboardVerifyRoute = DashboardVerifyRouteImport.update({
 const DashboardWebhooksRoute = DashboardWebhooksRouteImport.update({
   id: '/webhooks',
   path: '/webhooks',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardApiReferenceRoute = DashboardApiReferenceRouteImport.update({
-  id: '/api-reference',
-  path: '/api-reference',
   getParentRoute: () => DashboardRoute,
 } as any)
 
@@ -281,6 +287,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/ai': typeof DashboardAiRoute
   '/dashboard/analytics': typeof DashboardAnalyticsRoute
   '/dashboard/api-keys': typeof DashboardApiKeysRoute
+  '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
@@ -309,9 +316,9 @@ export interface FileRoutesByFullPath {
   '/dashboard/templates': typeof DashboardTemplatesRoute
   '/dashboard/tools': typeof DashboardToolsRoute
   '/dashboard/transactional': typeof DashboardTransactionalRoute
+  '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
-  '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard/': typeof DashboardIndexRoute
 }
 export interface FileRoutesByTo {
@@ -325,6 +332,7 @@ export interface FileRoutesByTo {
   '/dashboard/ai': typeof DashboardAiRoute
   '/dashboard/analytics': typeof DashboardAnalyticsRoute
   '/dashboard/api-keys': typeof DashboardApiKeysRoute
+  '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
@@ -353,9 +361,9 @@ export interface FileRoutesByTo {
   '/dashboard/templates': typeof DashboardTemplatesRoute
   '/dashboard/tools': typeof DashboardToolsRoute
   '/dashboard/transactional': typeof DashboardTransactionalRoute
+  '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
-  '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard': typeof DashboardIndexRoute
 }
 export interface FileRoutesById {
@@ -371,6 +379,7 @@ export interface FileRoutesById {
   '/dashboard/ai': typeof DashboardAiRoute
   '/dashboard/analytics': typeof DashboardAnalyticsRoute
   '/dashboard/api-keys': typeof DashboardApiKeysRoute
+  '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard/audit-logs': typeof DashboardAuditLogsRoute
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
@@ -399,9 +408,9 @@ export interface FileRoutesById {
   '/dashboard/templates': typeof DashboardTemplatesRoute
   '/dashboard/tools': typeof DashboardToolsRoute
   '/dashboard/transactional': typeof DashboardTransactionalRoute
+  '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
-  '/dashboard/api-reference': typeof DashboardApiReferenceRoute
   '/dashboard/': typeof DashboardIndexRoute
 }
 export interface FileRouteTypes {
@@ -418,6 +427,7 @@ export interface FileRouteTypes {
     | '/dashboard/ai'
     | '/dashboard/analytics'
     | '/dashboard/api-keys'
+    | '/dashboard/api-reference'
     | '/dashboard/audit-logs'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
@@ -446,9 +456,9 @@ export interface FileRouteTypes {
     | '/dashboard/templates'
     | '/dashboard/tools'
     | '/dashboard/transactional'
+    | '/dashboard/usage'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
-    | '/dashboard/api-reference'
     | '/dashboard/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -462,6 +472,7 @@ export interface FileRouteTypes {
     | '/dashboard/ai'
     | '/dashboard/analytics'
     | '/dashboard/api-keys'
+    | '/dashboard/api-reference'
     | '/dashboard/audit-logs'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
@@ -490,9 +501,9 @@ export interface FileRouteTypes {
     | '/dashboard/templates'
     | '/dashboard/tools'
     | '/dashboard/transactional'
+    | '/dashboard/usage'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
-    | '/dashboard/api-reference'
     | '/dashboard'
   id:
     | '__root__'
@@ -507,6 +518,7 @@ export interface FileRouteTypes {
     | '/dashboard/ai'
     | '/dashboard/analytics'
     | '/dashboard/api-keys'
+    | '/dashboard/api-reference'
     | '/dashboard/audit-logs'
     | '/dashboard/automations'
     | '/dashboard/batch-send'
@@ -535,9 +547,9 @@ export interface FileRouteTypes {
     | '/dashboard/templates'
     | '/dashboard/tools'
     | '/dashboard/transactional'
+    | '/dashboard/usage'
     | '/dashboard/verify'
     | '/dashboard/webhooks'
-    | '/dashboard/api-reference'
     | '/dashboard/'
   fileRoutesById: FileRoutesById
 }
@@ -636,6 +648,13 @@ declare module '@tanstack/react-router' {
       path: '/api-keys'
       fullPath: '/dashboard/api-keys'
       preLoaderRoute: typeof DashboardApiKeysRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/api-reference': {
+      id: '/dashboard/api-reference'
+      path: '/api-reference'
+      fullPath: '/dashboard/api-reference'
+      preLoaderRoute: typeof DashboardApiReferenceRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/audit-logs': {
@@ -834,6 +853,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardTransactionalRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/usage': {
+      id: '/dashboard/usage'
+      path: '/usage'
+      fullPath: '/dashboard/usage'
+      preLoaderRoute: typeof DashboardUsageRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/verify': {
       id: '/dashboard/verify'
       path: '/verify'
@@ -848,21 +874,14 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardWebhooksRouteImport
       parentRoute: typeof DashboardRoute
     }
-    '/dashboard/api-reference': {
-      id: '/dashboard/api-reference'
-      path: '/api-reference'
-      fullPath: '/dashboard/api-reference'
-      preLoaderRoute: typeof DashboardApiReferenceRouteImport
-      parentRoute: typeof DashboardRoute
-    }
   }
 }
 
 interface DashboardRouteChildren {
   DashboardAiRoute: typeof DashboardAiRoute
   DashboardAnalyticsRoute: typeof DashboardAnalyticsRoute
-  DashboardDeliverabilityRoute: typeof DashboardDeliverabilityRoute
   DashboardApiKeysRoute: typeof DashboardApiKeysRoute
+  DashboardApiReferenceRoute: typeof DashboardApiReferenceRoute
   DashboardAuditLogsRoute: typeof DashboardAuditLogsRoute
   DashboardAutomationsRoute: typeof DashboardAutomationsRoute
   DashboardBatchSendRoute: typeof DashboardBatchSendRoute
@@ -871,6 +890,7 @@ interface DashboardRouteChildren {
   DashboardCampaignsRoute: typeof DashboardCampaignsRoute
   DashboardConnectorsRoute: typeof DashboardConnectorsRoute
   DashboardContactsRoute: typeof DashboardContactsRoute
+  DashboardDeliverabilityRoute: typeof DashboardDeliverabilityRoute
   DashboardDomainsRoute: typeof DashboardDomainsRoute
   DashboardInboxRoute: typeof DashboardInboxRoute
   DashboardInboxTestRoute: typeof DashboardInboxTestRoute
@@ -890,17 +910,17 @@ interface DashboardRouteChildren {
   DashboardTemplatesRoute: typeof DashboardTemplatesRoute
   DashboardToolsRoute: typeof DashboardToolsRoute
   DashboardTransactionalRoute: typeof DashboardTransactionalRoute
+  DashboardUsageRoute: typeof DashboardUsageRoute
   DashboardVerifyRoute: typeof DashboardVerifyRoute
   DashboardWebhooksRoute: typeof DashboardWebhooksRoute
-  DashboardApiReferenceRoute: typeof DashboardApiReferenceRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
 }
 
 const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardAiRoute: DashboardAiRoute,
   DashboardAnalyticsRoute: DashboardAnalyticsRoute,
-  DashboardDeliverabilityRoute: DashboardDeliverabilityRoute,
   DashboardApiKeysRoute: DashboardApiKeysRoute,
+  DashboardApiReferenceRoute: DashboardApiReferenceRoute,
   DashboardAuditLogsRoute: DashboardAuditLogsRoute,
   DashboardAutomationsRoute: DashboardAutomationsRoute,
   DashboardBatchSendRoute: DashboardBatchSendRoute,
@@ -909,6 +929,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardCampaignsRoute: DashboardCampaignsRoute,
   DashboardConnectorsRoute: DashboardConnectorsRoute,
   DashboardContactsRoute: DashboardContactsRoute,
+  DashboardDeliverabilityRoute: DashboardDeliverabilityRoute,
   DashboardDomainsRoute: DashboardDomainsRoute,
   DashboardInboxRoute: DashboardInboxRoute,
   DashboardInboxTestRoute: DashboardInboxTestRoute,
@@ -928,9 +949,9 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardTemplatesRoute: DashboardTemplatesRoute,
   DashboardToolsRoute: DashboardToolsRoute,
   DashboardTransactionalRoute: DashboardTransactionalRoute,
+  DashboardUsageRoute: DashboardUsageRoute,
   DashboardVerifyRoute: DashboardVerifyRoute,
   DashboardWebhooksRoute: DashboardWebhooksRoute,
-  DashboardApiReferenceRoute: DashboardApiReferenceRoute,
   DashboardIndexRoute: DashboardIndexRoute,
 }
 
