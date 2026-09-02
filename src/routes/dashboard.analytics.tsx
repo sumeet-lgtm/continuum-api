@@ -4,7 +4,8 @@ import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { StatusBadge } from "@/components/StatusBadge";
-import { BarChart3, TrendingUp, MousePointerClick, AlertCircle, GitBranch, Megaphone, Mail, ChevronDown, ChevronRight } from "lucide-react";
+import { BarChart3, TrendingUp, MousePointerClick, AlertCircle, GitBranch, Megaphone, Mail, ChevronDown, ChevronRight, Calendar } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export const Route = createFileRoute("/dashboard/analytics")({
@@ -32,6 +33,19 @@ interface DailyBreakdown { date: string; sent: number; replied: number; bounced:
 interface MailboxDetail extends MailboxStat { daily_breakdown: DailyBreakdown[]; }
 
 type Tab = "overview" | "campaigns" | "sequences" | "mailboxes";
+type Preset = "7d" | "30d" | "90d" | "custom";
+
+function presetLabel(p: Preset) {
+  return p === "7d" ? "Last 7 days" : p === "30d" ? "Last 30 days" : p === "90d" ? "Last 90 days" : "Custom";
+}
+
+function presetDateFrom(p: Preset): string {
+  const d = new Date();
+  if (p === "7d") d.setDate(d.getDate() - 7);
+  else if (p === "30d") d.setDate(d.getDate() - 30);
+  else if (p === "90d") d.setDate(d.getDate() - 90);
+  return d.toISOString().slice(0, 10);
+}
 
 function SkeletonAnalytics() {
   return (
@@ -66,6 +80,10 @@ function SkeletonAnalytics() {
 function AnalyticsPage() {
   const { primaryKey } = useAuth();
   const [tab, setTab] = useState<Tab>("overview");
+  const [preset, setPreset] = useState<Preset>("30d");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [showCustom, setShowCustom] = useState(false);
   const [stats, setStats] = useState<SendStats | null>(null);
   const [accuracy, setAccuracy] = useState<AccuracyStats | null>(null);
   const [timeline, setTimeline] = useState<TimelinePoint[]>([]);
@@ -78,21 +96,23 @@ function AnalyticsPage() {
   const [mailboxDetail, setMailboxDetail] = useState<MailboxDetail | null>(null);
   const [mailboxDetailLoading, setMailboxDetailLoading] = useState(false);
 
+  const effectiveDateFrom = preset === "custom" ? customFrom : presetDateFrom(preset);
+  const effectiveDateTo = preset === "custom" && customTo ? customTo : new Date().toISOString().slice(0, 10);
+
   useEffect(() => {
     if (!primaryKey?.keyRaw) return;
-    const thirtyAgo = new Date();
-    thirtyAgo.setDate(thirtyAgo.getDate() - 30);
-    const dateFrom = thirtyAgo.toISOString().slice(0, 10);
+    if (preset === "custom" && !customFrom) return;
+    setLoading(true);
+
+    const dateFrom = effectiveDateFrom;
+    const dateTo = effectiveDateTo;
 
     Promise.all([
-      api.withKey.get<SendStats>(`/v1/analytics/sends?date_from=${dateFrom}`, primaryKey.keyRaw),
-      api.withKey.get<{ data: TimelinePoint[] }>(`/v1/analytics/sends/timeline?date_from=${dateFrom}`, primaryKey.keyRaw),
+      api.withKey.get<SendStats>(`/v1/analytics/sends?date_from=${dateFrom}&date_to=${dateTo}`, primaryKey.keyRaw),
+      api.withKey.get<{ data: TimelinePoint[] }>(`/v1/analytics/sends/timeline?dateFrom=${dateFrom}&dateTo=${dateTo}`, primaryKey.keyRaw),
       api.withKey.get<{ data: CampaignStat[] }>("/v1/analytics/campaigns?limit=20", primaryKey.keyRaw),
       api.withKey.get<{ data: SequenceStat[] }>("/v1/analytics/sequences?limit=20", primaryKey.keyRaw),
-      // All-time, not the 30-day window the rest of the page uses — this
-      // stat is more meaningful with the largest sample it can get, and a
-      // low-volume account needs every real send it can get toward the
-      // minimum sample size before this shows a number at all.
+      // All-time, not the selected window — accuracy needs the largest sample possible.
       api.withKey.get<AccuracyStats>("/v1/analytics/verification-accuracy", primaryKey.keyRaw),
     ])
       .then(([s, t, c, sq, acc]) => {
@@ -104,7 +124,7 @@ function AnalyticsPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [primaryKey]);
+  }, [primaryKey, preset, customFrom, customTo]);
 
   const loadMailboxes = useCallback(() => {
     if (!primaryKey?.keyRaw) return;
@@ -136,10 +156,57 @@ function AnalyticsPage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-display font-medium tracking-tight">Analytics</h1>
-        <p className="text-sm text-muted-foreground">Performance across all sends — transactional, campaigns, and sequences.</p>
-      </header>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <header>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Analytics</h1>
+          <p className="text-sm text-muted-foreground">Performance across all sends — transactional, campaigns, and sequences.</p>
+        </header>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex rounded-md border border-border overflow-hidden text-xs">
+            {(["7d", "30d", "90d"] as Preset[]).map((p) => (
+              <button
+                key={p}
+                onClick={() => { setPreset(p); setShowCustom(false); }}
+                className={`px-3 py-1.5 transition-colors ${preset === p && !showCustom ? "bg-foreground text-background font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+              >
+                {presetLabel(p)}
+              </button>
+            ))}
+            <button
+              onClick={() => { setPreset("custom"); setShowCustom((v) => !v); }}
+              className={`flex items-center gap-1 px-3 py-1.5 transition-colors border-l border-border ${preset === "custom" ? "bg-foreground text-background font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+            >
+              <Calendar className="h-3 w-3" />
+              Custom
+            </button>
+          </div>
+          {showCustom && (
+            <div className="flex items-center gap-2 text-xs">
+              <input
+                type="date"
+                className="rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+                value={customFrom}
+                max={customTo || new Date().toISOString().slice(0, 10)}
+                onChange={(e) => setCustomFrom(e.target.value)}
+              />
+              <span className="text-muted-foreground">to</span>
+              <input
+                type="date"
+                className="rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+                value={customTo}
+                min={customFrom}
+                max={new Date().toISOString().slice(0, 10)}
+                onChange={(e) => setCustomTo(e.target.value)}
+              />
+              {customFrom && (
+                <Button size="sm" className="h-7 text-xs" onClick={() => { setShowCustom(false); }}>
+                  Apply
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border">
