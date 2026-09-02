@@ -36,6 +36,7 @@ import {
   Plug,
   TrendingUp,
   BookOpen,
+  Search,
   Bell,
   AlertCircle,
   AlertTriangle,
@@ -44,6 +45,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
+import { CommandPalette } from "@/components/CommandPalette";
 import { Wordmark } from "@/components/Logo";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
@@ -436,6 +438,15 @@ function DashboardLayout() {
       {/* Main */}
       <main className="md:ml-60 pb-20 md:pb-0">
         <div className="hidden md:flex items-center justify-end gap-2 border-b border-border bg-[var(--sidebar-bg)] px-6 py-2.5">
+          {/* Command palette trigger */}
+          <button
+            onClick={() => { const e = new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }); document.dispatchEvent(e); }}
+            className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+          >
+            <Search className="h-3.5 w-3.5" />
+            <span>Search…</span>
+            <kbd className="ml-2 hidden lg:inline text-[10px] border border-border rounded px-1">⌘K</kbd>
+          </button>
           {primaryKey?.keyRaw && <AlertsBell apiKey={primaryKey.keyRaw} />}
           <Link to="/dashboard/billing">
             <Button size="sm" className="gap-1.5">
@@ -449,6 +460,7 @@ function DashboardLayout() {
         </div>
       </main>
       <Toaster />
+      <CommandPalette />
     </div>
   );
 }
