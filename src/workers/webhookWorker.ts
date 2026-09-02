@@ -38,7 +38,54 @@ import { hmacSign as signWebhookPayload } from '../lib/crypto.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { initSentry, installCrashReporting } from '../lib/sentry.js';
+import { sendEmail } from '../lib/email.js';
 import type { WebhookDeliveryPayload } from '../types/webhook.js';
+
+const FAILURE_ALERT_THRESHOLD = 5;      // consecutive permanent failures before alerting
+const FAILURE_ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 h between repeated alerts
+
+async function sendWebhookFailureAlert(webhookId: string, webhookUrl: string, apiKeyId: string, consecutiveFailures: number): Promise<void> {
+  try {
+    const apiKey = await prisma.apiKey.findUnique({
+      where: { id: apiKeyId },
+      select: { ownerId: true, userId: true, label: true, name: true },
+    });
+    if (!apiKey) return;
+
+    const userId = apiKey.ownerId ?? apiKey.userId;
+    if (!userId) return;
+
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+    if (!user?.email) return;
+
+    await sendEmail({
+      to: user.email,
+      subject: `Webhook endpoint failing — ${consecutiveFailures} consecutive failures`,
+      html: `
+        <p>Hi,</p>
+        <p>Your webhook endpoint has failed to deliver ${consecutiveFailures} events in a row:</p>
+        <p><strong>Endpoint:</strong> <code>${webhookUrl}</code></p>
+        <p>Each failed delivery is automatically retried with exponential backoff, but if the endpoint remains unreachable, deliveries will eventually be marked as permanently failed.</p>
+        <p><strong>Next steps:</strong></p>
+        <ul>
+          <li>Check that <code>${webhookUrl}</code> is reachable and returning a 2xx status.</li>
+          <li>View recent delivery attempts in your <a href="${config.APP_URL ?? 'https://app.continuumapi.com'}/dashboard/webhooks">Webhooks dashboard</a>.</li>
+          <li>You can manually retry failed deliveries from the dashboard.</li>
+        </ul>
+        <p>This alert will not repeat for 24 hours unless the endpoint recovers and fails again.</p>
+      `,
+    });
+
+    await prisma.webhook.update({
+      where: { id: webhookId },
+      data: { failureAlertSentAt: new Date() },
+    });
+
+    logger.info({ webhookId, webhookUrl, consecutiveFailures }, 'Webhook failure alert sent');
+  } catch (err) {
+    logger.warn({ err, webhookId }, 'Failed to send webhook failure alert (non-fatal)');
+  }
+}
 
 if (process.env['NODE_ENV'] !== 'test') {
   initSentry('worker-webhook');
@@ -209,10 +256,12 @@ async function processWebhookDelivery(job: Job<WebhookDeliveryPayload>): Promise
     await prisma.webhook.update({
       where: { id: webhookId },
       data: {
-        lastPingAt:      requestedAt,
-        lastPingOk:      true,
-        totalDeliveries: { increment: 1 },
-        successCount:    { increment: 1 },
+        lastPingAt:         requestedAt,
+        lastPingOk:         true,
+        totalDeliveries:    { increment: 1 },
+        successCount:       { increment: 1 },
+        consecutiveFailures: 0,    // reset on any successful delivery
+        failureAlertSentAt:  null, // allow next failure streak to alert again
       },
     });
 
@@ -236,18 +285,39 @@ async function processWebhookDelivery(job: Job<WebhookDeliveryPayload>): Promise
     },
   });
 
-  await prisma.webhook.update({
+  const updatedWebhook = await prisma.webhook.update({
     where: { id: webhookId },
     data: {
-      lastPingAt:      requestedAt,
-      lastPingOk:      false,
-      totalDeliveries: { increment: exhausted ? 1 : 0 },
-      failureCount:    { increment: exhausted ? 1 : 0 },
+      lastPingAt:          requestedAt,
+      lastPingOk:          false,
+      totalDeliveries:     { increment: exhausted ? 1 : 0 },
+      failureCount:        { increment: exhausted ? 1 : 0 },
+      consecutiveFailures: { increment: exhausted ? 1 : 0 },
+    },
+    select: {
+      consecutiveFailures: true,
+      failureAlertSentAt:  true,
+      url:                 true,
+      apiKeyId:            true,
     },
   });
 
   if (exhausted) {
     log.warn({ attempts: newAttemptCount, maxAttempts: delivery.maxAttempts }, 'Webhook permanently failed — max attempts reached');
+
+    // Fire failure alert if consecutive failures hit threshold and cooldown has passed
+    if (updatedWebhook.consecutiveFailures >= FAILURE_ALERT_THRESHOLD) {
+      const cooldownOk = !updatedWebhook.failureAlertSentAt ||
+        Date.now() - updatedWebhook.failureAlertSentAt.getTime() >= FAILURE_ALERT_COOLDOWN_MS;
+      if (cooldownOk) {
+        void sendWebhookFailureAlert(
+          webhookId,
+          updatedWebhook.url,
+          updatedWebhook.apiKeyId,
+          updatedWebhook.consecutiveFailures,
+        );
+      }
+    }
     return;
   }
 

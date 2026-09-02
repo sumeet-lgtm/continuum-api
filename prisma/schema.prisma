@@ -343,9 +343,13 @@ model Webhook {
   lastPingAt      DateTime?
   lastPingOk      Boolean?
   // Aggregate delivery stats — updated on each attempt
-  totalDeliveries Int            @default(0)
-  successCount    Int            @default(0)
-  failureCount    Int            @default(0)
+  totalDeliveries      Int       @default(0)
+  successCount         Int       @default(0)
+  failureCount         Int       @default(0)
+  // Consecutive permanent failures since last success (resets to 0 on any success)
+  consecutiveFailures  Int       @default(0)  @map("consecutive_failures")
+  // When we last sent a failure-threshold alert — debounces repeated emails
+  failureAlertSentAt   DateTime? @map("failure_alert_sent_at")
 
   apiKey     ApiKey            @relation(fields: [apiKeyId], references: [id])
   deliveries WebhookDelivery[]
