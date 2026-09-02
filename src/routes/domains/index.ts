@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { SESv2Client, CreateEmailIdentityCommand, DeleteEmailIdentityCommand, GetEmailIdentityCommand } from '@aws-sdk/client-sesv2';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
+import { logAudit } from '../../lib/audit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { generateDkimKeyPair, dnsPublicKeyValue } from '../../lib/dkim.js';
@@ -84,6 +85,8 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
           void errMsg; // logged via healthcheck
         }
       }
+
+      void logAudit(null, 'sending_domain.added', { id: apiKeyId, email: 'api', ip: (request.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ?? request.ip }, [{ type: 'domain', id: domain.id, name: domain.name }], apiKeyId);
 
       return reply.status(201).send({
         ...domain,
@@ -191,6 +194,10 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
         },
         select: { id: true, name: true, status: true, spfStatus: true, dkimStatus: true, returnPathStatus: true, verifiedAt: true },
       });
+
+      if (allVerified && !domain.verifiedAt) {
+        void logAudit(null, 'sending_domain.verified', { id: apiKeyId, email: 'api', ip: (request.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ?? request.ip }, [{ type: 'domain', id: domain.id, name: domain.name }], apiKeyId);
+      }
 
       return reply.status(200).send({ ...updated, health });
     },
