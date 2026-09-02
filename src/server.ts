@@ -51,6 +51,7 @@ import { mcpRoutes } from './routes/mcp/index.js';
 import { connectorRoutes } from './routes/connectors/index.js';
 import { automationRoutes } from './routes/automations/index.js';
 import { toolRoutes } from './routes/tools/index.js';
+import { logsRoutes } from './routes/logs/index.js';
 import { authRoutes } from './routes/auth/index.js';
 import { calcomWebhookRoutes } from './routes/webhooks/calcom.js';
 import { workosWebhookRoutes } from './routes/webhooks/workos.js';
@@ -111,6 +112,26 @@ async function buildApp(): Promise<FastifyInstance> {
       },
       'Request complete',
     );
+
+    // Best-effort API request log — only for authenticated /v1/* calls.
+    // Fire-and-forget: never awaited, never throws to the caller.
+    const apiKey = (request as typeof request & { apiKey?: { id: string } }).apiKey;
+    if (apiKey?.id && request.url.startsWith('/v1/') && !request.url.startsWith('/v1/logs')) {
+      const path = request.url.split('?')[0] ?? request.url;
+      // Collapse dynamic segments: /v1/verify/:id → /v1/verify/*
+      const cleanPath = path.replace(/\/[a-z0-9_-]{20,}/gi, '/*');
+      prisma.apiRequestLog.create({
+        data: {
+          apiKeyId:   apiKey.id,
+          method:     request.method,
+          path:       cleanPath,
+          statusCode: reply.statusCode,
+          durationMs: Math.round(reply.elapsedTime),
+          sourceIp:   request.ip ?? null,
+          requestId:  request.id ?? null,
+        },
+      }).catch(() => { /* best-effort — discard on error */ });
+    }
   });
 
   // ─── Security headers ──────────────────────────────────────────────────────
@@ -181,6 +202,7 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(aiRoutes, { prefix: '/v1' });
   await app.register(automationRoutes, { prefix: '/v1' });
   await app.register(toolRoutes, { prefix: '/v1' });
+  await app.register(logsRoutes, { prefix: '/v1' });
   await app.register(connectorRoutes, { prefix: '/v1' });
   // MCP at root (no /v1 prefix — standard MCP endpoint is /mcp)
   await app.register(mcpRoutes);

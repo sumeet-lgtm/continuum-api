@@ -149,9 +149,34 @@ model ApiKey {
   leads          Lead[]
   inboxTests     InboxTest[]
   automations    Automation[]
+  requestLogs    ApiRequestLog[]
 
   @@index([orgId])
   @@map("api_keys")
+}
+
+// ─── API Request Logs ────────────────────────────────────────────────────────
+// Best-effort log of every authenticated API call — written fire-and-forget
+// in an onResponse hook. Primary use-case: developer debugging in the
+// dashboard ("why did this request fail?"). Retention is 30 days.
+
+model ApiRequestLog {
+  id         String   @id @default(cuid())
+  apiKeyId   String   @map("api_key_id")
+  method     String   // GET | POST | PATCH | DELETE
+  path       String   // cleaned path, e.g. /v1/send (no query string)
+  statusCode Int      @map("status_code")
+  durationMs Int      @map("duration_ms")
+  sourceIp   String?  @map("source_ip")
+  requestId  String?  @map("request_id")
+  errorCode  String?  @map("error_code")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@index([apiKeyId, createdAt(sort: Desc)])
+  @@index([createdAt])
+  @@map("api_request_logs")
 }
 
 // ─── Verification Results ────────────────────────────────────────────────────
