@@ -137,30 +137,29 @@ function ContactsPage() {
   const runImport = async () => {
     if (!primaryKey?.keyRaw || !selectedList || !importPreview?.length) return;
     setImporting(true);
-    let ok = 0;
-    let failed = 0;
-    // POST one at a time in batches of 50 (no bulk endpoint for contacts yet)
-    const BATCH = 50;
     try {
-      for (let i = 0; i < importPreview.length; i += BATCH) {
-        const chunk = importPreview.slice(i, i + BATCH);
-        await Promise.all(chunk.map(async (row) => {
-          try {
-            await fetch(`https://api.continuumapi.com/v1/lists/${selectedList}/contacts`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
-              body: JSON.stringify({
-                email: row.email,
-                first_name: row.first_name || row.firstname || row["first name"] || undefined,
-                last_name: row.last_name || row.lastname || row["last name"] || undefined,
-                silent: true,
-              }),
-            });
-            ok++;
-          } catch { failed++; }
-        }));
+      // Use the fast bulk import endpoint — handles up to 50k contacts in one request
+      const contacts = importPreview.map((row) => ({
+        email: (row.email ?? "").trim().toLowerCase(),
+        first_name: row.first_name || row.firstname || row["first name"] || undefined,
+        last_name: row.last_name || row.lastname || row["last name"] || undefined,
+      })).filter((c) => c.email.includes("@"));
+
+      const res = await fetch("https://api.continuumapi.com/v1/contacts/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
+        body: JSON.stringify({ list_id: selectedList, contacts }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message ?? `Import failed (${res.status})`);
       }
-      toast.success(`${ok} contacts imported${failed > 0 ? `, ${failed} skipped` : ""}`);
+
+      const data = await res.json() as { imported?: number; skipped?: number; suppressedSkipped?: number };
+      const imported = data.imported ?? contacts.length;
+      const skipped = (data.skipped ?? 0) + (data.suppressedSkipped ?? 0);
+      toast.success(`${imported.toLocaleString()} contacts imported${skipped > 0 ? `, ${skipped} skipped` : ""}`);
       setImportPreview(null);
       setImportFile("");
       loadContacts();
