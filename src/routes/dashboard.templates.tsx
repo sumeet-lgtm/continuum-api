@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Trash2, Edit2, FileText } from "lucide-react";
+import { Plus, Trash2, Edit2, FileText, Eye, X } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/templates")({
   head: () => ({ meta: [{ title: "Templates — Continuum API" }] }),
@@ -25,6 +25,7 @@ function TemplatesPage() {
   const [editTarget, setEditTarget] = useState<Template | null>(null);
   const [editForm, setEditForm] = useState({ name: "", subject: "", html: "" });
   const [editSaving, setEditSaving] = useState(false);
+  const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -193,6 +194,7 @@ function TemplatesPage() {
                   <td className="px-5 py-3 text-muted-foreground">{new Date(t.createdAt).toLocaleDateString()}</td>
                   <td className="px-5 py-3">
                     <div className="flex gap-1">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPreviewTemplate(t)} title="Preview"><Eye className="h-3.5 w-3.5" /></Button>
                       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(t)}><Edit2 className="h-3.5 w-3.5" /></Button>
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => del(t.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
                     </div>
@@ -201,6 +203,28 @@ function TemplatesPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {previewTemplate && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-card">
+            <div>
+              <p className="text-sm font-medium">{previewTemplate.name}</p>
+              <p className="text-xs text-muted-foreground">{previewTemplate.subject}</p>
+            </div>
+            <button onClick={() => setPreviewTemplate(null)} className="rounded p-1.5 hover:bg-muted transition-colors">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <iframe
+              srcDoc={previewTemplate.htmlBody ?? "<p style='font-family:sans-serif;color:#888;padding:2rem'>No HTML body set for this template.</p>"}
+              sandbox="allow-same-origin"
+              className="w-full h-full border-0 bg-white"
+              title={`Preview: ${previewTemplate.name}`}
+            />
+          </div>
         </div>
       )}
     </div>
