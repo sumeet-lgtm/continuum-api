@@ -31,8 +31,9 @@ interface WarmupConfig { enabled: boolean; targetPerDay: number; currentPerDay: 
 interface MailboxStat { id: string; username: string; type: string; status: string; sentToday: number; dailyLimit: number; warmupConfig: WarmupConfig | null; }
 interface DailyBreakdown { date: string; sent: number; replied: number; bounced: number; }
 interface MailboxDetail extends MailboxStat { daily_breakdown: DailyBreakdown[]; }
+interface DomainStat { domain_id: string; domain: string; domain_status: string; sent: number; delivered: number; bounced: number; complained: number; delivery_rate: number; bounce_rate: number; complaint_rate: number; }
 
-type Tab = "overview" | "campaigns" | "sequences" | "mailboxes";
+type Tab = "overview" | "campaigns" | "sequences" | "mailboxes" | "domains";
 type Preset = "7d" | "30d" | "90d" | "custom";
 
 function presetLabel(p: Preset) {
@@ -95,6 +96,8 @@ function AnalyticsPage() {
   const [expandedMailboxId, setExpandedMailboxId] = useState<string | null>(null);
   const [mailboxDetail, setMailboxDetail] = useState<MailboxDetail | null>(null);
   const [mailboxDetailLoading, setMailboxDetailLoading] = useState(false);
+  const [domains, setDomains] = useState<DomainStat[]>([]);
+  const [domainsLoading, setDomainsLoading] = useState(false);
 
   const effectiveDateFrom = preset === "custom" ? customFrom : presetDateFrom(preset);
   const effectiveDateTo = preset === "custom" && customTo ? customTo : new Date().toISOString().slice(0, 10);
@@ -151,6 +154,21 @@ function AnalyticsPage() {
   useEffect(() => {
     if (tab === "mailboxes" && mailboxes.length === 0) loadMailboxes();
   }, [tab, mailboxes.length, loadMailboxes]);
+
+  const loadDomains = useCallback(() => {
+    if (!primaryKey?.keyRaw) return;
+    setDomainsLoading(true);
+    const dateFrom = effectiveDateFrom;
+    const dateTo = effectiveDateTo;
+    api.withKey.get<{ data: DomainStat[] }>(`/v1/analytics/domains?date_from=${dateFrom}&date_to=${dateTo}`, primaryKey.keyRaw)
+      .then((r) => setDomains(r.data ?? []))
+      .catch(() => {})
+      .finally(() => setDomainsLoading(false));
+  }, [primaryKey, effectiveDateFrom, effectiveDateTo]);
+
+  useEffect(() => {
+    if (tab === "domains") loadDomains();
+  }, [tab, loadDomains]);
 
   const pct = (n: number) => `${n.toFixed(1)}%`;
 
@@ -210,7 +228,7 @@ function AnalyticsPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border">
-        {(["overview", "campaigns", "sequences", "mailboxes"] as Tab[]).map((t) => (
+        {(["overview", "campaigns", "sequences", "mailboxes", "domains"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -426,6 +444,56 @@ function AnalyticsPage() {
                 </div>
               );
             })}
+          </div>
+        </div>
+      ) : domainsLoading ? (
+        <SkeletonAnalytics />
+      ) : domains.length === 0 ? (
+        <div className="rounded-lg border border-border bg-card p-10 text-center">
+          <GitBranch className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
+          <p className="text-sm text-muted-foreground">No domain data yet. Add a verified sending domain and start sending to see per-domain stats here.</p>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border bg-card overflow-hidden">
+          <div className="px-5 py-3 border-b border-border flex items-center justify-between">
+            <h2 className="text-sm font-medium">Sending domain breakdown</h2>
+            <span className="text-xs text-muted-foreground">{domains.length} domain{domains.length !== 1 ? "s" : ""}</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[640px]">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground border-b border-border bg-muted/40">
+                  <th className="px-5 py-2.5 font-medium">Domain</th>
+                  <th className="px-5 py-2.5 font-medium text-right tabular-nums">Sent</th>
+                  <th className="px-5 py-2.5 font-medium text-right tabular-nums">Delivered</th>
+                  <th className="px-5 py-2.5 font-medium text-right tabular-nums">Delivery</th>
+                  <th className="px-5 py-2.5 font-medium text-right tabular-nums">Bounce</th>
+                  <th className="px-5 py-2.5 font-medium text-right tabular-nums">Complaint</th>
+                  <th className="px-5 py-2.5 font-medium text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {domains.map((d) => {
+                  const bounceRisk = d.bounce_rate >= 5 ? "text-[oklch(0.58_0.22_27)]" : d.bounce_rate >= 2 ? "text-[oklch(0.65_0.14_75)]" : undefined;
+                  const complaintRisk = d.complaint_rate >= 0.3 ? "text-[oklch(0.58_0.22_27)]" : d.complaint_rate >= 0.08 ? "text-[oklch(0.65_0.14_75)]" : undefined;
+                  return (
+                    <tr key={d.domain_id} className="border-b border-border last:border-0 hover:bg-muted/10">
+                      <td className="px-5 py-3">
+                        <span className="font-mono text-xs font-medium">{d.domain}</span>
+                      </td>
+                      <td className="px-5 py-3 text-right tabular-nums text-xs text-muted-foreground">{d.sent.toLocaleString()}</td>
+                      <td className="px-5 py-3 text-right tabular-nums text-xs text-muted-foreground">{d.delivered.toLocaleString()}</td>
+                      <td className="px-5 py-3 text-right tabular-nums text-xs text-[oklch(0.55_0.16_145)]">{d.delivery_rate.toFixed(1)}%</td>
+                      <td className={`px-5 py-3 text-right tabular-nums text-xs font-medium ${bounceRisk ?? "text-muted-foreground"}`}>{d.bounce_rate.toFixed(1)}%</td>
+                      <td className={`px-5 py-3 text-right tabular-nums text-xs font-medium ${complaintRisk ?? "text-muted-foreground"}`}>{d.complaint_rate.toFixed(3)}%</td>
+                      <td className="px-5 py-3 text-right">
+                        <StatusBadge status={d.domain_status} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
