@@ -19,9 +19,10 @@ interface Template { id: string; name: string; subject: string; }
 function TransactionalPage() {
   const { primaryKey } = useAuth();
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [form, setForm] = useState({
-    from: "",
-    to: "",
+  const [form, setForm] = useState(() => {
+    let defaultFrom = "";
+    try { defaultFrom = JSON.parse(localStorage.getItem("cnt_default_from") ?? '""') as string; } catch {}
+    return { from: defaultFrom, to: "",
     cc: "",
     bcc: "",
     reply_to: "",
@@ -31,6 +32,7 @@ function TransactionalPage() {
     template_id: "",
     scheduled_at: "",
     idempotency_key: "",
+    };
   });
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testMode, setTestMode] = useState(false);
