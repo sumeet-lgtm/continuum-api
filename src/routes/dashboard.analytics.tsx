@@ -367,7 +367,8 @@ function AnalyticsPage() {
             </table>
           </div>
         )
-      ) : mailboxesLoading ? (
+      ) : tab === "mailboxes" ? (
+        mailboxesLoading ? (
         <SkeletonAnalytics />
       ) : mailboxes.length === 0 ? (
         <div className="rounded-lg border border-border bg-card p-10 text-center">
@@ -446,7 +447,9 @@ function AnalyticsPage() {
             })}
           </div>
         </div>
-      ) : domainsLoading ? (
+      )
+      ) : tab === "domains" ? (
+        domainsLoading ? (
         <SkeletonAnalytics />
       ) : domains.length === 0 ? (
         <div className="rounded-lg border border-border bg-card p-10 text-center">
@@ -496,7 +499,9 @@ function AnalyticsPage() {
             </table>
           </div>
         </div>
-      )}
+      )
+      ) : null
+      }
     </div>
   );
 }
