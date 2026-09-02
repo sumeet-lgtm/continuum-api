@@ -6,7 +6,8 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ChevronDown, ChevronUp, FlaskConical, CheckCircle2 } from "lucide-react";
+import { ChevronDown, ChevronUp, FlaskConical, CheckCircle2, Eye, Monitor, Smartphone, Sun, Moon } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/dashboard/transactional")({
   head: () => ({ meta: [{ title: "Send Email — Continuum API" }] }),
@@ -33,6 +34,9 @@ function TransactionalPage() {
   });
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testMode, setTestMode] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewDark, setPreviewDark] = useState(false);
+  const [previewMobile, setPreviewMobile] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
 
@@ -126,13 +130,48 @@ function TransactionalPage() {
         )}
 
         <div className="space-y-1.5">
-          <Label>HTML Body</Label>
+          <div className="flex items-center justify-between">
+            <Label>HTML Body</Label>
+            {form.html && (
+              <button
+                type="button"
+                onClick={() => setShowPreview((v) => !v)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Eye className="h-3.5 w-3.5" />
+                {showPreview ? "Hide preview" : "Preview"}
+              </button>
+            )}
+          </div>
           <textarea
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[120px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             placeholder="<p>Hello {{first_name}},</p>"
             value={form.html}
             onChange={set("html")}
           />
+          {showPreview && form.html && (
+            <div className="rounded-lg border border-border overflow-hidden">
+              <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 border-b border-border">
+                <button onClick={() => setPreviewMobile((v) => !v)} className={cn("p-1 rounded transition-colors", previewMobile ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}>
+                  {previewMobile ? <Smartphone className="h-3.5 w-3.5" /> : <Monitor className="h-3.5 w-3.5" />}
+                </button>
+                <button onClick={() => setPreviewDark((v) => !v)} className={cn("p-1 rounded transition-colors", previewDark ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}>
+                  {previewDark ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
+                </button>
+                <span className="text-xs text-muted-foreground ml-auto">{previewMobile ? "375px" : "600px"} · {previewDark ? "Dark" : "Light"}</span>
+              </div>
+              <div className={cn("flex justify-center py-4", previewDark ? "bg-zinc-900" : "bg-zinc-50")}>
+                <iframe
+                  key={`${previewDark}-${previewMobile}`}
+                  srcDoc={previewDark ? `<html><head><meta name="color-scheme" content="dark"><style>body{margin:0;background:#18181b;color:#f4f4f5}</style></head><body>${form.html}</body></html>` : `<html><head><style>body{margin:0}</style></head><body>${form.html}</body></html>`}
+                  sandbox="allow-same-origin"
+                  className="rounded border-0"
+                  style={{ width: previewMobile ? 375 : 600, minHeight: 300, maxHeight: 600 }}
+                  title="Email preview"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="space-y-1.5">
