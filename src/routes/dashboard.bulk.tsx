@@ -352,7 +352,16 @@ function BulkPage() {
 
       <div className="rounded-lg border border-border bg-card">
         {loading ? (
-          <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+          <div className="p-6 space-y-3">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="flex items-center gap-4 py-2">
+                <div className="h-4 w-32 rounded bg-muted animate-pulse" />
+                <div className="h-5 w-16 rounded-full bg-muted animate-pulse" />
+                <div className="flex-1 h-1.5 rounded-full bg-muted animate-pulse" />
+                <div className="h-3 w-24 rounded bg-muted animate-pulse" />
+              </div>
+            ))}
+          </div>
         ) : jobs.length === 0 ? (
           <div className="p-10 text-center text-sm text-muted-foreground">
             No bulk jobs yet. Upload a CSV to get started.
@@ -433,16 +442,30 @@ function BulkPage() {
           </div>
           <div className="overflow-x-auto max-h-96">
             <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground border-b border-border bg-muted/30 sticky top-0">
+                  <th className="px-5 py-2 font-medium">Email</th>
+                  <th className="px-5 py-2 font-medium">Status</th>
+                  <th className="px-5 py-2 font-medium">Score</th>
+                  <th className="px-5 py-2 font-medium">Recommendation</th>
+                </tr>
+              </thead>
               <tbody>
-                {results.map((r) => (
-                  <tr key={r.id} className="border-b border-border last:border-0">
-                    <td className="px-5 py-2 font-mono text-xs">{r.email}</td>
-                    <td className="px-5 py-2"><StatusBadge status={r.status} /></td>
-                  </tr>
-                ))}
+                {results.map((r) => {
+                  const status = (r.status ?? "unknown").toLowerCase();
+                  const rec = RECOMMENDATION[status] ?? RECOMMENDATION.unknown;
+                  return (
+                    <tr key={r.id} className="border-b border-border last:border-0 hover:bg-muted/20">
+                      <td className="px-5 py-2.5 font-mono text-xs">{r.email}</td>
+                      <td className="px-5 py-2.5"><StatusBadge status={r.status} /></td>
+                      <td className="px-5 py-2.5 tabular-nums text-xs font-mono">{r.score ?? "—"}</td>
+                      <td className="px-5 py-2.5 text-xs text-muted-foreground">{rec}</td>
+                    </tr>
+                  );
+                })}
                 {results.length === 0 && (
                   <tr>
-                    <td className="px-5 py-6 text-sm text-muted-foreground">No results yet.</td>
+                    <td colSpan={4} className="px-5 py-6 text-sm text-muted-foreground">No results yet.</td>
                   </tr>
                 )}
               </tbody>
