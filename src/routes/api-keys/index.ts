@@ -298,6 +298,77 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  // POST /v1/api-keys/:id/rotate — atomically create a replacement key and revoke the old one
+  fastify.post(
+    '/api-keys/:id/rotate',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const parentKey = request.apiKey;
+
+      if (parentKey.permission !== 'full_access') {
+        throw Errors.forbidden('Only full_access keys can rotate API keys.');
+      }
+
+      const target = await prisma.apiKey.findUnique({
+        where: { id },
+        select: {
+          id: true, ownerId: true, userId: true, orgId: true, name: true, label: true,
+          permission: true, plan: true, rateLimit: true, monthlyLimit: true,
+          monthlySendLimit: true, restrictedDomainId: true, allowedIps: true,
+          isActive: true,
+        },
+      });
+      if (!target) throw Errors.notFound('API key not found.');
+      if (!target.isActive) throw Errors.forbidden('Cannot rotate a revoked key.');
+
+      const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
+      if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
+        throw Errors.forbidden('Not authorized to rotate this key.');
+      }
+
+      // Create the replacement key first (inherits all settings)
+      const rawKey    = `ctm_${randomBytes(24).toString('base64url')}`;
+      const keyHash   = hashApiKey(rawKey);
+      const keyPrefix = rawKey.slice(0, 12);
+      const label     = (target.label ?? target.name ?? 'Key').replace(/\s*\(rotated.*\)$/, '');
+
+      const newKey = await prisma.apiKey.create({
+        data: {
+          keyHash, keyPrefix, keyRaw: rawKey,
+          name:               label,
+          label:              label,
+          permission:         target.permission,
+          plan:               target.plan,
+          rateLimit:          target.rateLimit,
+          monthlyLimit:       target.monthlyLimit,
+          monthlySendLimit:   target.monthlySendLimit,
+          restrictedDomainId: target.restrictedDomainId,
+          allowedIps:         target.allowedIps,
+          ownerId:            target.ownerId,
+          userId:             target.userId,
+          orgId:              target.orgId,
+        },
+        select: { id: true, keyPrefix: true, name: true, permission: true, createdAt: true },
+      });
+
+      // Revoke the old key
+      await prisma.apiKey.update({
+        where: { id },
+        data:  { isActive: false, revokedAt: new Date() },
+      });
+
+      void logAudit(
+        null, 'api_key.rotated',
+        { id: parentKey.id, email: parentKey.label ?? parentKey.name ?? parentKey.keyPrefix, ip: request.ip },
+        [{ type: 'api_key', id, name: 'old' }, { type: 'api_key', id: newKey.id, name: 'new' }],
+        parentKey.id,
+      );
+
+      return reply.status(201).send({ ...newKey, key: rawKey, rotatedKeyId: id });
+    },
+  );
+
   // DELETE /v1/api-keys/:id — revoke a key
   fastify.delete(
     '/api-keys/:id',
