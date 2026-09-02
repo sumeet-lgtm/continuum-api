@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Check, Loader2, Phone } from "lucide-react";
+import { Check, Loader2, Phone, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { useApiKey } from "@/lib/use-api-key";
 import { api } from "@/lib/api";
@@ -14,6 +14,13 @@ export const Route = createFileRoute("/dashboard/billing")({
 });
 
 const ENTERPRISE_CALL_URL = "https://cal.com/sumeet-sutar-ecfqg3/continuum-api-email-infrastructure-consultation";
+
+type CreditPackId = "5k" | "25k" | "100k";
+const CREDIT_PACKS: { id: CreditPackId; label: string; credits: number; price: string }[] = [
+  { id: "5k",   label: "5,000 verifications",   credits: 5_000,   price: "$19" },
+  { id: "25k",  label: "25,000 verifications",  credits: 25_000,  price: "$79" },
+  { id: "100k", label: "100,000 verifications", credits: 100_000, price: "$249" },
+];
 
 type PlanId = "starter" | "growth" | "scale";
 interface PlanDef {
@@ -72,7 +79,7 @@ const PLANS: PlanDef[] = [
   },
 ];
 
-interface UsageDetail { used: number; limit: number; resets_at: string | null; }
+interface UsageDetail { used: number; limit: number; base_limit?: number; extra_credits?: number; resets_at: string | null; }
 interface Usage {
   plan: string | null;
   verifications: UsageDetail;
@@ -85,6 +92,7 @@ function BillingPage() {
   const [usage, setUsage] = useState<Usage | null>(null);
   const [usageLoading, setUsageLoading] = useState(true);
   const [checkoutLoading, setCheckoutLoading] = useState<PlanId | null>(null);
+  const [creditPackLoading, setCreditPackLoading] = useState<CreditPackId | null>(null);
 
   useEffect(() => {
     if (!apiKey?.keyRaw) {
@@ -114,7 +122,46 @@ function BillingPage() {
     return () => { cancelled = true; };
   }, [apiKey?.keyRaw, loading]);
 
+  // Show success toast when returning from a credit pack checkout
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const creditsAdded = params.get("credits_added");
+    if (creditsAdded) {
+      const pack = CREDIT_PACKS.find((p) => p.id === creditsAdded);
+      toast.success(pack ? `${pack.label} added to your account` : "Credits added to your account");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
   const currentPlan = (usage?.plan ?? "free").toLowerCase();
+
+  const buyCreditPack = async (pack: CreditPackId) => {
+    if (!apiKey?.keyRaw) {
+      toast.error("Your API key isn't ready yet. Please try again in a moment.");
+      return;
+    }
+    setCreditPackLoading(pack);
+    try {
+      const res = await fetch("https://api.continuumapi.com/v1/billing/credits/checkout", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey.keyRaw}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ pack }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+      if (!res.ok || !json.url) {
+        toast.error(json.error ?? "Could not start checkout. Please try again.");
+        setCreditPackLoading(null);
+        return;
+      }
+      window.location.href = json.url;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Network error");
+      setCreditPackLoading(null);
+    }
+  };
 
   const upgrade = async (plan: PlanId) => {
     if (!apiKey?.keyRaw) {
@@ -201,6 +248,45 @@ function BillingPage() {
             )}
           </div>
         )}
+      </div>
+
+      {/* Credit pack top-ups */}
+      <div className="rounded-lg border border-border bg-card p-5 space-y-4">
+        <div>
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            <Zap className="h-4 w-4" /> Verification Credits
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            One-time top-ups that stack on your monthly quota and never expire.
+            {usage?.verifications?.extra_credits ? (
+              <span className="ml-1 font-medium text-foreground">
+                {usage.verifications.extra_credits.toLocaleString()} credits currently active.
+              </span>
+            ) : null}
+          </p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {CREDIT_PACKS.map((pack) => {
+            const busy = creditPackLoading === pack.id;
+            return (
+              <div key={pack.id} className="rounded-lg border border-border bg-background p-4 flex flex-col gap-3">
+                <div>
+                  <div className="text-2xl font-display font-medium">{pack.price}</div>
+                  <div className="text-sm text-muted-foreground">{pack.label}</div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy || !apiKey?.keyRaw}
+                  onClick={() => buyCreditPack(pack.id)}
+                  className="mt-auto"
+                >
+                  {busy ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Redirecting…</> : "Buy Credits"}
+                </Button>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Plan grid */}
