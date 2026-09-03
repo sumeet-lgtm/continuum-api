@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target, Play } from "lucide-react";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target, Play, Trophy } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
@@ -84,6 +84,7 @@ function CampaignsPage() {
   const [recipientsLoading, setRecipientsLoading] = useState(false);
   const [recipientsSearch, setRecipientsSearch] = useState("");
   const [resumingCampaign, setResumingCampaign] = useState<string | null>(null);
+  const [pickingWinner, setPickingWinner] = useState<string | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -171,6 +172,19 @@ function CampaignsPage() {
     setRecipientsPage(1);
     setRecipientsSearch("");
     loadRecipients(c.id, 1, "");
+  };
+
+  const pickWinner = async (c: Campaign, variant: "a" | "b") => {
+    if (!primaryKey?.keyRaw) return;
+    const label = variant === "a" ? c.subject : c.subjectB;
+    if (!confirm(`Lock in variant ${variant.toUpperCase()} ("${label}") for all remaining pending recipients?`)) return;
+    setPickingWinner(c.id);
+    try {
+      const r = await api.withKey.post<{ winner: string; updated_recipients: number }>(`/v1/campaigns/${c.id}/pick-winner`, { variant }, primaryKey.keyRaw);
+      toast.success(`Variant ${variant.toUpperCase()} locked in — ${r.updated_recipients} pending recipients updated`);
+      load();
+    } catch { toast.error("Could not pick winner"); }
+    finally { setPickingWinner(null); }
   };
 
   const resumeCampaign = async (c: Campaign) => {
@@ -829,6 +843,11 @@ function CampaignsPage() {
                         {(c.status === "sending" || c.status === "paused_bounce") && (
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => openRecipients(c)}>
                             <Users className="h-3 w-3" /> Recipients
+                          </Button>
+                        )}
+                        {isAB && (c.status === "sending" || c.status === "paused_bounce") && (
+                          <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => pickWinner(c, aWins ? "a" : "b")} disabled={pickingWinner === c.id} title={`Pick ${aWins ? "A" : bWins ? "B" : "a"} as winner`}>
+                            <Trophy className="h-3 w-3" /> Pick Winner
                           </Button>
                         )}
                         {c.status === "paused_bounce" && (
