@@ -9,7 +9,7 @@ import { initSentry, installCrashReporting } from './lib/sentry.js';
 
 initSentry('api');
 installCrashReporting('api');
-import { disconnectPrisma } from './lib/prisma.js';
+import { prisma, disconnectPrisma } from './lib/prisma.js';
 import { closeQueues } from './lib/queue.js';
 import { authPlugin } from './plugins/auth.js';
 import { rateLimitPlugin } from './plugins/rateLimit.js';
@@ -35,6 +35,7 @@ import { accountRoutes } from './routes/account/index.js';
 import { domainRoutes } from './routes/domains/index.js';
 import { templateRoutes } from './routes/templates/index.js';
 import { unsubscribeRoutes } from './routes/unsubscribe/index.js';
+import { preferencesRoutes } from './routes/preferences/index.js';
 import { trackRoutes } from './routes/track/index.js';
 import { analyticsRoutes } from './routes/analytics/index.js';
 import { listRoutes } from './routes/lists/index.js';
@@ -219,6 +220,7 @@ async function buildApp(): Promise<FastifyInstance> {
   // Tracking + unsubscribe at root (no /v1 — links in emails go here)
   await app.register(trackRoutes);
   await app.register(unsubscribeRoutes, { prefix: '/v1' });
+  await app.register(preferencesRoutes, { prefix: '/v1' });
 
   // ─── Root info ────────────────────────────────────────────────────────────
   app.get('/', async (_request, reply) => {

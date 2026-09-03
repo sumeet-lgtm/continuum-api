@@ -373,9 +373,9 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
 
       // Fetch domain names for the IDs we have
       const domainIds = Array.from(byDomain.keys());
-      const domains = await prisma.domain.findMany({
+      const domains = await prisma.sendingDomain.findMany({
         where: { id: { in: domainIds } },
-        select: { id: true, domain: true, status: true },
+        select: { id: true, name: true, status: true },
       });
       const domainMap = new Map(domains.map((d) => [d.id, d]));
 
@@ -384,7 +384,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
           const dom = domainMap.get(id);
           return {
             domain_id:      id,
-            domain:         dom?.domain ?? id,
+            domain:         dom?.name ?? id,
             domain_status:  dom?.status ?? 'unknown',
             sent:           stats.sent,
             delivered:      stats.delivered,

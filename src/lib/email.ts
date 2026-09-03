@@ -25,10 +25,13 @@ function getSes(): SESv2Client | null {
 const FROM = `Continuum API <${config.SUPPORT_EMAIL ?? 'noreply@continuumapi.com'}>`;
 
 export async function sendEmail(
-  to: string,
-  subject: string,
-  html: string,
+  toOrOpts: string | { to: string; subject: string; html: string },
+  subjectArg?: string,
+  htmlArg?: string,
 ): Promise<boolean> {
+  const to      = typeof toOrOpts === 'string' ? toOrOpts           : toOrOpts.to;
+  const subject = typeof toOrOpts === 'string' ? (subjectArg ?? '') : toOrOpts.subject;
+  const html    = typeof toOrOpts === 'string' ? (htmlArg ?? '')    : toOrOpts.html;
   const ses = getSes();
   if (!ses) {
     logger.debug({ to, subject }, 'SES not configured — email skipped');

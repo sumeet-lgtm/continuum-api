@@ -25,8 +25,9 @@ export function verifyUnsubToken(token: string): { email: string; apiKeyId: stri
 }
 
 export function generateUnsubHtml(token: string): string {
-  const url = `https://api.continuumapi.com/v1/unsubscribe?token=${encodeURIComponent(token)}`;
+  const unsubUrl = `https://api.continuumapi.com/v1/unsubscribe?token=${encodeURIComponent(token)}`;
+  const prefUrl  = `https://api.continuumapi.com/v1/preferences?token=${encodeURIComponent(token)}`;
   return `<div style="text-align:center;margin-top:40px;font-family:sans-serif;font-size:12px;color:#888">
-<a href="${url}" style="color:#888">Unsubscribe</a>
+<a href="${prefUrl}" style="color:#888">Manage preferences</a> &nbsp;·&nbsp; <a href="${unsubUrl}" style="color:#888">Unsubscribe</a>
 </div>`;
 }
