@@ -10,14 +10,16 @@ export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
     '/messages',
     { preHandler: [requireAuth, requireRateLimit] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const q = request.query as { status?: string; to?: string; dateFrom?: string; dateTo?: string; page?: string; limit?: string };
+      const q = request.query as { status?: string; to?: string; subject?: string; tag?: string; dateFrom?: string; dateTo?: string; page?: string; limit?: string };
       const apiKeyId = request.apiKey.id;
       const page = Math.max(1, parseInt(q.page ?? '1', 10));
       const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
       const where: Record<string, unknown> = { apiKeyId };
       if (q.status) where['status'] = q.status;
-      if (q.to) where['to'] = q.to.toLowerCase();
+      if (q.to) where['to'] = { contains: q.to.toLowerCase(), mode: 'insensitive' };
+      if (q.subject) where['subject'] = { contains: q.subject, mode: 'insensitive' };
+      if (q.tag) where['tags'] = { has: q.tag };
       if (q.dateFrom || q.dateTo) {
         where['createdAt'] = {
           ...(q.dateFrom ? { gte: new Date(q.dateFrom) } : {}),
