@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2 } from "lucide-react";
+import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2, Edit2 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/sequences")({
   head: () => ({ meta: [{ title: "Sequences — Continuum API" }] }),
@@ -125,6 +125,11 @@ function SequencesPage() {
   const [editWindowFor, setEditWindowFor] = useState<string | null>(null); // seqId
   const [windowForm, setWindowForm] = useState({ sendDays: DEFAULT_DAYS as string[], sendStartHour: "8", sendEndHour: "17" });
   const [windowSaving, setWindowSaving] = useState(false);
+
+  // Step editing
+  const [editingStep, setEditingStep] = useState<{ seqId: string; stepId: string } | null>(null);
+  const [editStepForm, setEditStepForm] = useState({ delayDays: "1", delayHours: "0", subject: "", htmlBody: "", condition: "always" });
+  const [editStepSaving, setEditStepSaving] = useState(false);
 
   // Funnel analytics
   const [showFunnelFor, setShowFunnelFor] = useState<string | null>(null);
@@ -305,6 +310,29 @@ function SequencesPage() {
     } finally {
       setStepSaving(false);
     }
+  };
+
+  const openEditStep = (seqId: string, step: SequenceStep) => {
+    setEditingStep({ seqId, stepId: step.id });
+    setEditStepForm({ delayDays: String(step.delayDays), delayHours: String(step.delayHours ?? 0), subject: step.subject, htmlBody: step.htmlBody ?? "", condition: step.condition ?? "always" });
+  };
+
+  const saveEditStep = async () => {
+    if (!primaryKey?.keyRaw || !editingStep) return;
+    setEditStepSaving(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/sequences/${editingStep.seqId}/steps/${editingStep.stepId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
+        body: JSON.stringify({ delay_days: parseInt(editStepForm.delayDays) || 0, delay_hours: parseInt(editStepForm.delayHours) || 0, subject: editStepForm.subject, html_body: editStepForm.htmlBody, condition: editStepForm.condition }),
+      });
+      if (!res.ok) throw new Error("Failed");
+      const updated = await res.json();
+      setSteps((prev) => ({ ...prev, [editingStep.seqId]: (prev[editingStep.seqId] ?? []).map((s) => s.id === editingStep.stepId ? { ...s, ...updated } : s) }));
+      setEditingStep(null);
+      toast.success("Step updated");
+    } catch { toast.error("Could not update step"); }
+    finally { setEditStepSaving(false); }
   };
 
   const deleteStep = async (seqId: string, stepId: string) => {
@@ -753,6 +781,15 @@ function SequencesPage() {
                                   <Button
                                     variant="ghost"
                                     size="icon"
+                                    className="h-6 w-6 text-muted-foreground"
+                                    onClick={() => editingStep?.stepId === step.id ? setEditingStep(null) : openEditStep(seq.id, step)}
+                                    title="Edit step"
+                                  >
+                                    <Edit2 className="h-3 w-3" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
                                     className="h-6 w-6 text-destructive"
                                     onClick={() => deleteStep(seq.id, step.id)}
                                   >
@@ -760,6 +797,38 @@ function SequencesPage() {
                                   </Button>
                                 </div>
                               </div>
+
+                              {/* Inline step editor */}
+                              {editingStep?.stepId === step.id && (
+                                <div className="border border-border rounded-md p-3 space-y-2 bg-muted/20 text-xs">
+                                  <div className="flex gap-2">
+                                    <div className="flex-1">
+                                      <label className="text-muted-foreground block mb-1">Delay (days)</label>
+                                      <Input className="h-7 text-xs" value={editStepForm.delayDays} onChange={(e) => setEditStepForm((f) => ({ ...f, delayDays: e.target.value }))} type="number" min="0" />
+                                    </div>
+                                    <div className="flex-1">
+                                      <label className="text-muted-foreground block mb-1">Condition</label>
+                                      <select className="w-full h-7 rounded-md border border-input bg-background px-2 text-xs" value={editStepForm.condition} onChange={(e) => setEditStepForm((f) => ({ ...f, condition: e.target.value }))}>
+                                        {["always","if_not_opened","if_opened","if_not_clicked","if_not_replied"].map((c) => (
+                                          <option key={c} value={c}>{c.replace(/_/g, " ")}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <label className="text-muted-foreground block mb-1">Subject</label>
+                                    <Input className="h-7 text-xs" value={editStepForm.subject} onChange={(e) => setEditStepForm((f) => ({ ...f, subject: e.target.value }))} />
+                                  </div>
+                                  <div>
+                                    <label className="text-muted-foreground block mb-1">HTML body</label>
+                                    <textarea className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono h-28 resize-y" value={editStepForm.htmlBody} onChange={(e) => setEditStepForm((f) => ({ ...f, htmlBody: e.target.value }))} />
+                                  </div>
+                                  <div className="flex gap-2 justify-end">
+                                    <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => setEditingStep(null)}>Cancel</Button>
+                                    <Button size="sm" className="h-6 text-xs" onClick={saveEditStep} disabled={editStepSaving}>{editStepSaving ? "Saving…" : "Save"}</Button>
+                                  </div>
+                                </div>
+                              )}
 
                               {/* Existing variants */}
                               {isLoadingVariants && <p className="text-xs text-muted-foreground">Loading variants…</p>}
