@@ -400,4 +400,80 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(200).send({ data });
     },
   );
+
+  // GET /v1/analytics/send-time — best day/hour to send campaigns based on historical open patterns
+  fastify.get(
+    '/analytics/send-time',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const apiKeyId = request.apiKey.id;
+      const q = request.query as { days?: string };
+      const lookbackDays = Math.min(180, Math.max(7, parseInt(q.days ?? '90', 10)));
+      const since = new Date(Date.now() - lookbackDays * 86_400_000);
+
+      // Pull all opens for sends from this key in the lookback window
+      const opens = await prisma.trackingEvent.findMany({
+        where: {
+          type: 'open',
+          occurredAt: { gte: since },
+          sendMessage: { apiKeyId },
+        },
+        select: { occurredAt: true },
+      });
+
+      if (opens.length < 10) {
+        return reply.send({
+          enough_data: false,
+          message: `Only ${opens.length} opens in the last ${lookbackDays} days. Need at least 10 for a reliable recommendation.`,
+          sample_size: opens.length,
+        });
+      }
+
+      // Aggregate by (dayOfWeek × hour)
+      type Bucket = { opens: number; dayOfWeek: number; hour: number };
+      const buckets: Record<string, Bucket> = {};
+      for (const { occurredAt } of opens) {
+        const d = occurredAt.getUTCDay();   // 0=Sun…6=Sat
+        const h = occurredAt.getUTCHours(); // 0-23
+        const key = `${d}_${h}`;
+        if (!buckets[key]) buckets[key] = { opens: 0, dayOfWeek: d, hour: h };
+        buckets[key]!.opens++;
+      }
+
+      const sorted = Object.values(buckets).sort((a, b) => b.opens - a.opens);
+      const best = sorted[0]!;
+      const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+      // Hour-of-day distribution (aggregated across all days)
+      const hourDist: Record<number, number> = {};
+      for (let h = 0; h < 24; h++) hourDist[h] = 0;
+      for (const b of Object.values(buckets)) hourDist[b.hour] = (hourDist[b.hour] ?? 0) + b.opens;
+
+      // Day-of-week distribution (aggregated across all hours)
+      const dayDist: Record<number, number> = {};
+      for (let d = 0; d < 7; d++) dayDist[d] = 0;
+      for (const b of Object.values(buckets)) dayDist[b.dayOfWeek] = (dayDist[b.dayOfWeek] ?? 0) + b.opens;
+
+      return reply.send({
+        enough_data: true,
+        sample_size: opens.length,
+        lookback_days: lookbackDays,
+        recommendation: {
+          day_of_week: best.dayOfWeek,
+          day_name: DAYS[best.dayOfWeek],
+          hour_utc: best.hour,
+          opens_in_slot: best.opens,
+          label: `${DAYS[best.dayOfWeek]} at ${best.hour.toString().padStart(2,'0')}:00 UTC`,
+        },
+        top_5_slots: sorted.slice(0, 5).map(b => ({
+          day_name: DAYS[b.dayOfWeek],
+          hour_utc: b.hour,
+          opens: b.opens,
+          label: `${DAYS[b.dayOfWeek]} ${b.hour.toString().padStart(2,'0')}:00 UTC`,
+        })),
+        by_hour_utc: Array.from({ length: 24 }, (_, h) => ({ hour: h, opens: hourDist[h] ?? 0 })),
+        by_day_of_week: Array.from({ length: 7 }, (_, d) => ({ day: d, day_name: DAYS[d], opens: dayDist[d] ?? 0 })),
+      });
+    },
+  );
 }
