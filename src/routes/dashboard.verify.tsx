@@ -21,6 +21,50 @@ interface VerifyResponse {
   [k: string]: unknown;
 }
 
+function getVerifyInsight(
+  status: string | undefined,
+  subStatus: string | undefined,
+  checks: Record<string, boolean | null | undefined>,
+): { headline: string; detail: string } {
+  const isCatchAll = checks.isCatchAll === true;
+  const isFree = checks.freeEmail === true;
+  const isDisposable = checks.isDisposable === true;
+  const isRole = checks.isRoleAccount === true;
+  const isGreylisted = checks.greylisted === true;
+  const isBlacklisted = checks.blacklisted === true;
+
+  if (status === "valid") {
+    if (isRole) return { headline: "Deliverable", detail: "Shared team inbox — replies may come from a generic alias, not a person." };
+    if (isFree) return { headline: "Deliverable", detail: "Personal email (Gmail, Yahoo, etc.) — not a work address." };
+    return { headline: "Deliverable", detail: "Mailbox confirmed — safe to send." };
+  }
+
+  if (status === "invalid") {
+    if (subStatus === "mailbox_not_found") return { headline: "Mailbox doesn't exist", detail: "Address not found — person may have left the company or the address was never valid." };
+    if (subStatus === "no_mx" || subStatus === "invalid_domain") return { headline: "Domain has no mail server", detail: "This domain can't receive email at all." };
+    if (subStatus === "syntax_error" || subStatus === "invalid_syntax") return { headline: "Invalid email format", detail: "Not a properly formatted email address." };
+    return { headline: "Not deliverable", detail: "This address cannot receive email — skip it." };
+  }
+
+  if (status === "risky") {
+    if (isDisposable) return { headline: "Throwaway address", detail: "Temporary email service — mailbox may stop working soon. Don't add to a sequence." };
+    if (isGreylisted) return { headline: "Temporarily blocked", detail: "Mail server deferred our check. The address may be valid — retry in 30 minutes for a definitive result." };
+    if (isCatchAll && !isFree) return { headline: "Unconfirmable — corporate domain", detail: "Company server accepts all addresses without checking if the individual mailbox exists. Person may have left — send at your own risk." };
+    if (isCatchAll) return { headline: "Unconfirmable", detail: "Domain accepts all email addresses. Can't confirm whether this specific mailbox exists." };
+    if (isRole) return { headline: "Shared team inbox", detail: "Address like info@, support@, or sales@ — not a personal address. Reply tracking won't work reliably." };
+    if (isBlacklisted) return { headline: "Domain blacklisted", detail: "This domain appears on email blocklists — deliverability will be very low." };
+    if (subStatus === "smtp_error") return { headline: "Mail server error", detail: "Couldn't connect to the mail server to confirm the mailbox. May be a temporary outage." };
+    return { headline: "Uncertain", detail: "Passed some checks but not all. Send with caution and monitor bounce rate." };
+  }
+
+  if (status === "unknown") {
+    if (isGreylisted) return { headline: "Temporarily blocked", detail: "Mail server asked us to retry later. Result is inconclusive — retry in ~30 minutes." };
+    return { headline: "Couldn't verify", detail: "Server didn't respond or blocked our check. Treat as unverified before sending." };
+  }
+
+  return { headline: "Unknown", detail: "Verification result unavailable." };
+}
+
 interface VerifRow {
   id: string;
   email: string;
@@ -165,22 +209,22 @@ function VerifyPage() {
 
   type CheckDef = { key: string; label: string; badIfTrue?: boolean; warnIfTrue?: boolean };
   const EMAIL_CHECKS: CheckDef[] = [
-    { key: "syntaxValid", label: "Syntax valid" },
-    { key: "mxFound", label: "MX record found" },
-    { key: "isDisposable", label: "Disposable domain", badIfTrue: true },
-    { key: "isRoleAccount", label: "Role account", warnIfTrue: true },
-    { key: "smtpChecked", label: "SMTP checked" },
-    { key: "smtpReachable", label: "Mailbox reachable" },
-    { key: "isCatchAll", label: "Catch-all domain" },
-    { key: "greylisted", label: "Greylisted" },
-    { key: "freeEmail", label: "Free email provider", warnIfTrue: true },
+    { key: "syntaxValid", label: "Valid email format" },
+    { key: "mxFound", label: "Domain can receive email (MX record)" },
+    { key: "isDisposable", label: "Throwaway / disposable address", badIfTrue: true },
+    { key: "isRoleAccount", label: "Shared inbox (info@, support@, etc.)", warnIfTrue: true },
+    { key: "smtpChecked", label: "Mail server responded to our check" },
+    { key: "smtpReachable", label: "Mailbox confirmed reachable" },
+    { key: "isCatchAll", label: "Accepts all addresses (can't confirm individual mailbox)" },
+    { key: "greylisted", label: "Temporarily blocked by mail server" },
+    { key: "freeEmail", label: "Free email provider (Gmail, Yahoo, etc.)", warnIfTrue: true },
   ];
   const DOMAIN_CHECKS: CheckDef[] = [
-    { key: "spfValid", label: "SPF record valid" },
-    { key: "dmarcValid", label: "DMARC policy found" },
-    { key: "dkimFound", label: "DKIM configured" },
-    { key: "blacklisted", label: "Domain blacklisted", badIfTrue: true },
-    { key: "isLookalike", label: "Look-alike / typosquat domain", badIfTrue: true },
+    { key: "spfValid", label: "SPF record configured" },
+    { key: "dmarcValid", label: "DMARC policy in place" },
+    { key: "dkimFound", label: "DKIM signing enabled" },
+    { key: "blacklisted", label: "On email blacklists", badIfTrue: true },
+    { key: "isLookalike", label: "Lookalike / typosquat domain (impersonation risk)", badIfTrue: true },
   ];
 
   const renderCheck = (def: CheckDef) => {
@@ -248,11 +292,17 @@ function VerifyPage() {
                 <StatusBadge status={result.status ?? "unknown"} className="mb-2" />
                 <p className="text-base font-mono font-medium leading-tight">{result.email as string}</p>
                 {Boolean((result as Record<string, unknown>).domain) && (
-                  <p className="text-xs text-muted-foreground mt-1">{String((result as Record<string, unknown>).domain)}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{String((result as Record<string, unknown>).domain)}</p>
                 )}
-                {Boolean((result as Record<string, unknown>).subStatus) && (
-                  <p className="text-xs text-muted-foreground mt-1 font-mono">{String((result as Record<string, unknown>).subStatus)}</p>
-                )}
+                {(() => {
+                  const insight = getVerifyInsight(result.status, String((result as Record<string, unknown>).subStatus ?? ""), checks);
+                  return (
+                    <div className="mt-2">
+                      <p className="text-sm font-medium">{insight.headline}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed max-w-[220px]">{insight.detail}</p>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
             <div className="space-y-4">
@@ -362,9 +412,9 @@ function VerifyPage() {
                       <td className="px-5 py-2.5 tabular-nums text-xs">{v.score ?? "—"}</td>
                       <td className="px-5 py-2.5">
                         <div className="flex gap-1 flex-wrap">
-                          {v.flags.disposable && <span className="text-[10px] rounded-full bg-[oklch(0.96_0.04_27)] text-[oklch(0.42_0.18_27)] px-1.5 py-0.5 border border-[oklch(0.85_0.12_27)]">disposable</span>}
-                          {v.flags.roleAccount && <span className="text-[10px] rounded-full bg-muted text-muted-foreground px-1.5 py-0.5 border border-border">role</span>}
-                          {v.flags.catchAll && <span className="text-[10px] rounded-full bg-muted text-muted-foreground px-1.5 py-0.5 border border-border">catch-all</span>}
+                          {v.flags.disposable && <span title="Throwaway / temporary address" className="text-[10px] rounded-full bg-[oklch(0.96_0.04_27)] text-[oklch(0.42_0.18_27)] px-1.5 py-0.5 border border-[oklch(0.85_0.12_27)]">throwaway</span>}
+                          {v.flags.roleAccount && <span title="Shared team inbox — not a personal address" className="text-[10px] rounded-full bg-muted text-muted-foreground px-1.5 py-0.5 border border-border">team inbox</span>}
+                          {v.flags.catchAll && <span title="Domain accepts all addresses — individual mailbox unconfirmable" className="text-[10px] rounded-full bg-muted text-muted-foreground px-1.5 py-0.5 border border-border">unconfirmable</span>}
                         </div>
                       </td>
                       <td className="px-5 py-2.5 text-xs text-muted-foreground tabular-nums whitespace-nowrap">
