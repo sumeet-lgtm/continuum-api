@@ -60,7 +60,7 @@ function CampaignsPage() {
   const [domains, setDomains] = useState<SendingDomain[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", subjectB: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
+  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", subjectB: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "", sendRatePerHour: "" });
   const [saving, setSaving] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [testTarget, setTestTarget] = useState<string | null>(null);
@@ -105,7 +105,7 @@ function CampaignsPage() {
 
   useEffect(() => { load(); }, [primaryKey]);
 
-  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", subjectB: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
+  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", subjectB: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "", sendRatePerHour: "" });
 
   const openHealth = async (c: Campaign) => {
     if (!primaryKey?.keyRaw) return;
@@ -178,6 +178,7 @@ function CampaignsPage() {
         domain_id: form.domainId || undefined,
       };
       if (!asDraft && form.scheduledAt) payload.scheduled_at = new Date(form.scheduledAt).toISOString();
+      if (form.sendRatePerHour) payload.send_rate_per_hour = parseInt(form.sendRatePerHour, 10);
       const campaign = await api.withKey.post<{ id: string }>("/v1/campaigns", payload, primaryKey.keyRaw);
       if (!asDraft && !form.scheduledAt) {
         await api.withKey.post(`/v1/campaigns/${campaign.id}/send`, {}, primaryKey.keyRaw);
@@ -216,6 +217,7 @@ function CampaignsPage() {
         track_opens: form.trackOpens,
         track_clicks: form.trackClicks,
         ...(form.scheduledAt ? { scheduled_at: new Date(form.scheduledAt).toISOString() } : {}),
+        ...(form.sendRatePerHour ? { send_rate_per_hour: parseInt(form.sendRatePerHour, 10) } : {}),
       }, primaryKey.keyRaw);
       toast.success("Campaign updated");
       setEditingCampaign(null);
@@ -454,6 +456,24 @@ function CampaignsPage() {
               onChange={(e) => setForm((f) => ({ ...f, scheduledAt: e.target.value }))}
               className="w-64"
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="flex items-center gap-1.5">Send rate limit <span className="text-muted-foreground font-normal">(optional — emails per hour for warm-up)</span></Label>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min="10"
+                max="50000"
+                placeholder="Unlimited"
+                value={form.sendRatePerHour}
+                onChange={(e) => setForm((f) => ({ ...f, sendRatePerHour: e.target.value }))}
+                className="w-40"
+              />
+              <span className="text-xs text-muted-foreground">emails/hr</span>
+            </div>
+            {form.sendRatePerHour && parseInt(form.sendRatePerHour, 10) > 0 && (
+              <p className="text-xs text-muted-foreground">At this rate, a 50-recipient chunk sends every {Math.round((50 / parseInt(form.sendRatePerHour, 10)) * 60)} min.</p>
+            )}
           </div>
           <div className="flex gap-2 flex-wrap">
             {editingCampaign ? (
@@ -722,7 +742,7 @@ function CampaignsPage() {
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => {
                             setEditingCampaign(c);
                             setCreating(false);
-                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, subjectB: c.subjectB ?? "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: c.trackOpens, trackClicks: c.trackClicks, scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
+                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, subjectB: c.subjectB ?? "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: c.trackOpens, trackClicks: c.trackClicks, scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "", sendRatePerHour: (c as Campaign & { sendRatePerHour?: number | null }).sendRatePerHour ? String((c as Campaign & { sendRatePerHour?: number | null }).sendRatePerHour) : "" });
                           }}>
                             <Edit2 className="h-3 w-3" /> Edit
                           </Button>
