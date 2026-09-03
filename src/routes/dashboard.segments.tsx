@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Filter, Trash2, X, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Filter, Trash2, X, ChevronDown, ChevronRight, Edit2, Users } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/segments")({
   head: () => ({ meta: [{ title: "Segments — Continuum API" }] }),
@@ -81,6 +81,12 @@ function SegmentsPage() {
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", listId: "", rules: [emptyRule()] });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", rules: [emptyRule()] });
+  const [editSaving, setEditSaving] = useState(false);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [previewContacts, setPreviewContacts] = useState<Array<{ email: string; firstName: string | null; lastName: string | null }>>([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -151,6 +157,55 @@ function SegmentsPage() {
       setSegments((s) => s.filter((x) => x.id !== id));
       toast.success("Segment deleted");
     } catch (e: unknown) { toast.error((e as Error).message); }
+  };
+
+  const openEdit = (seg: Segment) => {
+    setEditingId(seg.id);
+    setEditForm({ name: seg.name, rules: seg.filterRules.length > 0 ? seg.filterRules : [emptyRule()] });
+  };
+
+  const setEditRule = (i: number, patch: Partial<FilterRule>) => {
+    setEditForm((f) => {
+      const rules = f.rules.map((r, idx) => idx === i ? { ...r, ...patch } : r);
+      if (patch.field) {
+        const ops = getOperators(patch.field);
+        if (!ops.find((o) => o.value === rules[i]!.operator)) rules[i]!.operator = ops[0]!.value;
+      }
+      return { ...f, rules };
+    });
+  };
+
+  const saveEdit = async (id: string) => {
+    if (!primaryKey?.keyRaw) return;
+    setEditSaving(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/segments/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
+        body: JSON.stringify({ name: editForm.name.trim(), filter_rules: editForm.rules }),
+      });
+      if (!res.ok) throw new Error(`Failed (${res.status})`);
+      const updated = await res.json();
+      setSegments((s) => s.map((x) => x.id === id ? { ...x, name: updated.name, filterRules: updated.filterRules } : x));
+      setEditingId(null);
+      toast.success("Segment updated");
+    } catch (e: unknown) { toast.error((e as Error).message); }
+    finally { setEditSaving(false); }
+  };
+
+  const loadPreview = async (id: string) => {
+    if (!primaryKey?.keyRaw) return;
+    setPreviewId(id);
+    setPreviewContacts([]);
+    setPreviewLoading(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/segments/${id}/contacts`, {
+        headers: { "X-API-Key": primaryKey.keyRaw! },
+      });
+      const data = await res.json().catch(() => ({ data: [] }));
+      setPreviewContacts((data as { data: typeof previewContacts }).data ?? []);
+    } catch { toast.error("Could not load members"); }
+    finally { setPreviewLoading(false); }
   };
 
   return (
@@ -277,12 +332,20 @@ function SegmentsPage() {
                     </p>
                   </div>
                 </button>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive shrink-0" onClick={() => del(seg.id)}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1 text-muted-foreground" onClick={() => previewId === seg.id ? setPreviewId(null) : loadPreview(seg.id)}>
+                    <Users className="h-3 w-3" /> Members
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1 text-muted-foreground" onClick={() => editingId === seg.id ? setEditingId(null) : openEdit(seg)}>
+                    <Edit2 className="h-3 w-3" /> Edit
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive shrink-0" onClick={() => del(seg.id)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </div>
 
-              {expandedId === seg.id && (
+              {expandedId === seg.id && editingId !== seg.id && (
                 <div className="border-t border-border bg-muted/20 px-5 py-4 space-y-2">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Filter Rules (all must match)</p>
                   {seg.filterRules.map((rule, i) => (
@@ -292,6 +355,59 @@ function SegmentsPage() {
                       <span className="font-medium">"{rule.value}"</span>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Inline edit form */}
+              {editingId === seg.id && (
+                <div className="border-t border-border bg-muted/20 px-5 py-4 space-y-3">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Edit Segment</p>
+                  <input className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm" value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} placeholder="Segment name" />
+                  <div className="space-y-2">
+                    {editForm.rules.map((rule, i) => {
+                      const ops = getOperators(rule.field);
+                      return (
+                        <div key={i} className="flex items-center gap-2 flex-wrap">
+                          <select className="h-8 rounded-md border border-input bg-background px-2 text-xs flex-1 min-w-[100px]" value={rule.field} onChange={(e) => setEditRule(i, { field: e.target.value })}>
+                            {FIELDS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                          </select>
+                          <select className="h-8 rounded-md border border-input bg-background px-2 text-xs" value={rule.operator} onChange={(e) => setEditRule(i, { operator: e.target.value })}>
+                            {ops.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                          </select>
+                          <input className="h-8 rounded-md border border-input bg-background px-2 text-xs flex-1 min-w-[80px]" value={rule.value} onChange={(e) => setEditRule(i, { value: e.target.value })} placeholder="Value" />
+                          {editForm.rules.length > 1 && <button className="text-destructive text-xs hover:underline" onClick={() => setEditForm((f) => ({ ...f, rules: f.rules.filter((_, idx) => idx !== i) }))}>✕</button>}
+                        </div>
+                      );
+                    })}
+                    <button className="text-xs text-muted-foreground hover:underline" onClick={() => setEditForm((f) => ({ ...f, rules: [...f.rules, emptyRule()] }))}>+ Add rule</button>
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setEditingId(null)}>Cancel</Button>
+                    <Button size="sm" className="h-7 text-xs" onClick={() => saveEdit(seg.id)} disabled={editSaving}>{editSaving ? "Saving…" : "Save"}</Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Member preview */}
+              {previewId === seg.id && (
+                <div className="border-t border-border bg-muted/20 px-5 py-4">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                    Matching members{!previewLoading && ` (${previewContacts.length}${previewContacts.length >= 200 ? "+" : ""})`}
+                  </p>
+                  {previewLoading ? (
+                    <p className="text-xs text-muted-foreground">Loading…</p>
+                  ) : previewContacts.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No contacts match this segment yet.</p>
+                  ) : (
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {previewContacts.map((c) => (
+                        <div key={c.email} className="flex items-center gap-2 text-xs">
+                          <span className="font-mono text-muted-foreground">{c.email}</span>
+                          {(c.firstName || c.lastName) && <span className="text-muted-foreground">— {[c.firstName, c.lastName].filter(Boolean).join(" ")}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
