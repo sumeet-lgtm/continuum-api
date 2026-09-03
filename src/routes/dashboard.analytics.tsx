@@ -4,7 +4,7 @@ import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { StatusBadge } from "@/components/StatusBadge";
-import { BarChart3, TrendingUp, MousePointerClick, AlertCircle, GitBranch, Megaphone, Mail, ChevronDown, ChevronRight, Calendar, ShieldCheck } from "lucide-react";
+import { BarChart3, TrendingUp, MousePointerClick, AlertCircle, GitBranch, Megaphone, Mail, ChevronDown, ChevronRight, Calendar, ShieldCheck, TrendingDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -32,6 +32,8 @@ interface MailboxStat { id: string; username: string; type: string; status: stri
 interface DailyBreakdown { date: string; sent: number; replied: number; bounced: number; }
 interface MailboxDetail extends MailboxStat { daily_breakdown: DailyBreakdown[]; }
 interface DomainStat { domain_id: string; domain: string; domain_status: string; sent: number; delivered: number; bounced: number; complained: number; delivery_rate: number; bounce_rate: number; complaint_rate: number; }
+interface FunnelStep { step_id: string; step_order: number; subject: string; delay_days: number; sent: number; opens: number; clicks: number; unsubscribes: number; bounces: number; open_rate: number; click_rate: number; unsubscribe_rate: number; bounce_rate: number; }
+interface SequenceFunnel { sequence_id: string; name: string; steps: FunnelStep[]; }
 
 type Tab = "overview" | "campaigns" | "sequences" | "mailboxes" | "domains" | "send-time";
 type Preset = "7d" | "30d" | "90d" | "custom";
@@ -100,6 +102,9 @@ function AnalyticsPage() {
   const [domainsLoading, setDomainsLoading] = useState(false);
   const [sendTime, setSendTime] = useState<{ enough_data: boolean; sample_size: number; recommendation?: { day_name: string; hour_utc: number; opens_in_slot: number; label: string }; top_5_slots?: Array<{ day_name: string; hour_utc: number; opens: number; label: string }>; by_hour_utc?: Array<{ hour: number; opens: number }>; by_day_of_week?: Array<{ day: number; day_name: string; opens: number }> } | null>(null);
   const [sendTimeLoading, setSendTimeLoading] = useState(false);
+  const [funnelSequenceId, setFunnelSequenceId] = useState<string | null>(null);
+  const [funnel, setFunnel] = useState<SequenceFunnel | null>(null);
+  const [funnelLoading, setFunnelLoading] = useState(false);
 
   const effectiveDateFrom = preset === "custom" ? customFrom : presetDateFrom(preset);
   const effectiveDateTo = preset === "custom" && customTo ? customTo : new Date().toISOString().slice(0, 10);
@@ -180,6 +185,18 @@ function AnalyticsPage() {
       .catch(() => setSendTime({ enough_data: false, sample_size: 0 }))
       .finally(() => setSendTimeLoading(false));
   }, [tab, primaryKey, sendTime]);
+
+  const loadFunnel = useCallback((seqId: string) => {
+    if (!primaryKey?.keyRaw) return;
+    if (funnelSequenceId === seqId) { setFunnelSequenceId(null); setFunnel(null); return; }
+    setFunnelSequenceId(seqId);
+    setFunnel(null);
+    setFunnelLoading(true);
+    api.withKey.get<SequenceFunnel>(`/v1/analytics/sequences/${seqId}/funnel`, primaryKey.keyRaw)
+      .then((r) => setFunnel(r))
+      .catch(() => setFunnel(null))
+      .finally(() => setFunnelLoading(false));
+  }, [primaryKey, funnelSequenceId]);
 
   const pct = (n: number) => `${n.toFixed(1)}%`;
 
@@ -357,22 +374,74 @@ function AnalyticsPage() {
                   <th className="px-5 py-3 font-medium">Replied</th>
                   <th className="px-5 py-3 font-medium">Reply rate</th>
                   <th className="px-5 py-3 font-medium">Completion</th>
+                  <th className="px-5 py-3 font-medium w-24"></th>
                 </tr>
               </thead>
               <tbody>
                 {sequences.map((s) => (
-                  <tr key={s.id} className="border-b border-border last:border-0 hover:bg-muted/20">
-                    <td className="px-5 py-3">
-                      <div className="font-medium truncate max-w-[180px]">{s.name}</div>
-                      <StatusBadge status={s.status} />
-                    </td>
-                    <td className="px-5 py-3 tabular-nums font-semibold">{s.total_enrolled.toLocaleString()}</td>
-                    <td className="px-5 py-3 tabular-nums">{s.active.toLocaleString()}</td>
-                    <td className="px-5 py-3 tabular-nums">{s.completed.toLocaleString()}</td>
-                    <td className="px-5 py-3 tabular-nums">{s.replied.toLocaleString()}</td>
-                    <td className="px-5 py-3 tabular-nums font-medium text-[oklch(0.55_0.16_145)]">{pct(s.reply_rate)}</td>
-                    <td className="px-5 py-3 tabular-nums">{pct(s.completion_rate)}</td>
-                  </tr>
+                  <>
+                    <tr key={s.id} className="border-b border-border last:border-0 hover:bg-muted/20">
+                      <td className="px-5 py-3">
+                        <div className="font-medium truncate max-w-[180px]">{s.name}</div>
+                        <StatusBadge status={s.status} />
+                      </td>
+                      <td className="px-5 py-3 tabular-nums font-semibold">{s.total_enrolled.toLocaleString()}</td>
+                      <td className="px-5 py-3 tabular-nums">{s.active.toLocaleString()}</td>
+                      <td className="px-5 py-3 tabular-nums">{s.completed.toLocaleString()}</td>
+                      <td className="px-5 py-3 tabular-nums">{s.replied.toLocaleString()}</td>
+                      <td className="px-5 py-3 tabular-nums font-medium text-[oklch(0.55_0.16_145)]">{pct(s.reply_rate)}</td>
+                      <td className="px-5 py-3 tabular-nums">{pct(s.completion_rate)}</td>
+                      <td className="px-5 py-3">
+                        <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => loadFunnel(s.id)}>
+                          <TrendingDown className="h-3 w-3" />
+                          {funnelSequenceId === s.id ? "Hide" : "Funnel"}
+                        </Button>
+                      </td>
+                    </tr>
+                    {funnelSequenceId === s.id && (
+                      <tr key={`funnel-${s.id}`} className="border-b border-border bg-muted/10">
+                        <td colSpan={8} className="px-5 py-4">
+                          {funnelLoading ? (
+                            <div className="text-xs text-muted-foreground">Loading funnel…</div>
+                          ) : !funnel || funnel.steps.length === 0 ? (
+                            <div className="text-xs text-muted-foreground">No step data yet — funnel data appears once sends have been tracked per step.</div>
+                          ) : (
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium text-muted-foreground mb-3">Step-by-step funnel — drops show where contacts disengage</p>
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="text-left text-muted-foreground">
+                                      <th className="pr-4 py-1 font-medium">#</th>
+                                      <th className="pr-4 py-1 font-medium">Subject</th>
+                                      <th className="pr-4 py-1 font-medium tabular-nums">Sent</th>
+                                      <th className="pr-4 py-1 font-medium tabular-nums">Open %</th>
+                                      <th className="pr-4 py-1 font-medium tabular-nums">Click %</th>
+                                      <th className="pr-4 py-1 font-medium tabular-nums">Unsub %</th>
+                                      <th className="pr-4 py-1 font-medium tabular-nums">Bounce %</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {funnel.steps.map((step) => (
+                                      <tr key={step.step_id} className="border-t border-border/50">
+                                        <td className="pr-4 py-1.5 text-muted-foreground">{step.step_order + 1}</td>
+                                        <td className="pr-4 py-1.5 max-w-[200px] truncate">{step.subject}</td>
+                                        <td className="pr-4 py-1.5 tabular-nums">{step.sent.toLocaleString()}</td>
+                                        <td className="pr-4 py-1.5 tabular-nums font-medium text-[oklch(0.55_0.16_145)]">{step.open_rate}%</td>
+                                        <td className="pr-4 py-1.5 tabular-nums">{step.click_rate}%</td>
+                                        <td className={`pr-4 py-1.5 tabular-nums ${step.unsubscribe_rate > 0.5 ? "text-[oklch(0.58_0.22_27)]" : ""}`}>{step.unsubscribe_rate}%</td>
+                                        <td className={`pr-4 py-1.5 tabular-nums ${step.bounce_rate > 2 ? "text-[oklch(0.58_0.22_27)]" : ""}`}>{step.bounce_rate}%</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 ))}
               </tbody>
             </table>
