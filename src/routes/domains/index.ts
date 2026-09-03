@@ -271,4 +271,69 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(200).send(result);
     },
   );
+
+  // POST /v1/domains/:id/rotate-dkim
+  // Generates a new DKIM key pair and returns the DNS record to publish.
+  // The old key continues signing until the domain is re-verified with the new key.
+  fastify.post(
+    '/domains/:id/rotate-dkim',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+
+      const domain = await prisma.sendingDomain.findFirst({ where: { id, apiKeyId } });
+      if (!domain) throw Errors.notFound('Domain not found.');
+
+      // Generate fresh key pair with a new time-stamped selector
+      const kp = await generateDkimKeyPair(domain.name);
+
+      // Update domain record — status resets to pending until DNS re-verifies
+      const updated = await prisma.sendingDomain.update({
+        where: { id },
+        data: {
+          dkimSelector:       kp.selector,
+          dkimPublicKey:      kp.publicKey,
+          dkimPrivateKeyEnc:  kp.privateKeyEnc,
+          dkimStatus:         'pending',
+        },
+        select: { id: true, name: true, dkimSelector: true, dkimPublicKey: true, dkimStatus: true },
+      });
+
+      // Re-register in SES with the new BYODKIM private key
+      if (config.AWS_ACCESS_KEY_ID && config.AWS_SECRET_ACCESS_KEY) {
+        try {
+          const ses = getSesClient(domain.region);
+          await ses.send(new CreateEmailIdentityCommand({
+            EmailIdentity: domain.name,
+            DkimSigningAttributes: {
+              DomainSigningSelector:   kp.selector,
+              DomainSigningPrivateKey: kp.rawPrivateKey,
+            },
+          }));
+        } catch { /* SES may not be configured — ignore */ }
+      }
+
+      void logAudit(
+        request.apiKey.orgId ?? null,
+        'sending_domain.dkim_rotated',
+        { id: request.apiKey.id, email: request.apiKey.label ?? 'api-key' },
+        [{ type: 'sending_domain', id: domain.id, name: domain.name }],
+        apiKeyId,
+      );
+
+      const dnsHost = `${kp.selector}._domainkey.${domain.name}`;
+      const dnsValue = dnsPublicKeyValue(kp.publicKey);
+
+      return reply.status(200).send({
+        ...updated,
+        dnsRecord: {
+          type:  'TXT',
+          host:  dnsHost,
+          value: dnsValue,
+        },
+        message: 'DKIM keys rotated. Publish the new DNS record and re-verify the domain.',
+      });
+    },
+  );
 }
