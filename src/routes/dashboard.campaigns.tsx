@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle } from "lucide-react";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
@@ -338,6 +338,33 @@ function CampaignsPage() {
                 <span className="font-semibold tabular-nums text-base">{confirmCampaign.totalRecipients.toLocaleString()}</span>
               </div>
             </div>
+            {/* Pre-flight checklist */}
+            {(() => {
+              const checks: Array<{ label: string; pass: boolean; warn?: boolean }> = [
+                { label: "Recipients > 0", pass: confirmCampaign.totalRecipients > 0 },
+                { label: "Subject line set", pass: Boolean(confirmCampaign.subject) },
+                { label: "Subject ≤ 60 chars", pass: confirmCampaign.subject.length <= 60, warn: true },
+                { label: "From address set", pass: Boolean(confirmCampaign.fromEmail) },
+              ];
+              const anyFail = checks.some((c) => !c.pass && !c.warn);
+              const anyWarn = checks.some((c) => !c.pass && c.warn);
+              if (anyFail || anyWarn) return (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Pre-flight</p>
+                  <div className="space-y-1">
+                    {checks.map((c) => (
+                      <div key={c.label} className={`flex items-center gap-2 text-xs ${c.pass ? "text-[oklch(0.45_0.13_145)]" : c.warn ? "text-[oklch(0.55_0.14_75)]" : "text-[oklch(0.52_0.2_27)]"}`}>
+                        {c.pass
+                          ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                          : <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
+                        {c.label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+              return null;
+            })()}
             {confirmCampaign.totalRecipients === 0 && (
               <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-700 dark:text-amber-400">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
