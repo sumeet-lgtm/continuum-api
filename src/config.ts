@@ -131,9 +131,9 @@ const baseEnvSchema = z.object({
   // WorkOS webhook secret (from WorkOS Dashboard → Webhooks → Endpoint → Secret)
   WORKOS_WEBHOOK_SECRET: z.string().optional(),
 
-  // Apify (lead finder — dataset import + people search)
+  // Lead finder (internal — do not expose provider branding in UI)
   APIFY_API_TOKEN: z.string().optional(),
-  APIFY_ACTOR_ID: z.string().optional(), // default: 'code_crafter~apollo-io-scraper'
+  APIFY_ACTOR_ID: z.string().optional(), // default: 'kVYdvNOefemtiDXO5'
   SESSION_SECRET: z
     .string()
     .min(32)

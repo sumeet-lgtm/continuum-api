@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
@@ -5,10 +6,12 @@ import { prisma } from '../../lib/prisma.js';
 import { AppError, Errors } from '../../plugins/errorHandler.js';
 import { config } from '../../config.js';
 import { Prisma } from '@prisma/client';
+import { bulkQueue } from '../../lib/queue.js';
+import { uploadToStorage } from '../../lib/supabase.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getApifyToken(): string {
+function getSearchToken(): string {
   const token = (config as Record<string, unknown>)['APIFY_API_TOKEN'] as string | undefined;
   if (!token) {
     throw new AppError(503, 'SERVICE_UNAVAILABLE', 'Lead Finder is not configured. Contact support.');
@@ -16,50 +19,36 @@ function getApifyToken(): string {
   return token;
 }
 
-function getActorId(): string {
+function getSearchActorId(): string {
   const actorId = (config as Record<string, unknown>)['APIFY_ACTOR_ID'] as string | undefined;
-  return actorId ?? 'code_crafter~apollo-io-scraper';
+  return actorId ?? 'kVYdvNOefemtiDXO5';
 }
 
-function buildApolloUrl(params: {
-  titles?: string[];
-  companies?: string[];
-  industries?: string[];
-  locations?: string[];
-  headcountMin?: number;
-  headcountMax?: number;
-  keywords?: string;
-}): string {
-  const parts: string[] = [
-    'https://app.apollo.io/#/people?sortByField=recommendations_score&sortAscending=false&page=1',
-  ];
+// Compute a "likely to respond" signal from Pipeline Labs fields.
+// High = likely responds to cold email; Low = hard to reach / unverified.
+function computeResponseSignal(row: Record<string, unknown>): 'high' | 'medium' | 'low' {
+  let score = 0;
+  const emailStatus = typeof row.emailStatus === 'string' ? row.emailStatus.toLowerCase() : '';
+  if (emailStatus === 'verified' || emailStatus === 'valid') score += 2;
+  else if (emailStatus === 'catch_all') score += 1;
 
-  for (const t of params.titles ?? []) {
-    parts.push(`&personTitles[]=${encodeURIComponent(t)}`);
-  }
-  for (const l of params.locations ?? []) {
-    parts.push(`&personLocations[]=${encodeURIComponent(l)}`);
-  }
-  for (const i of params.industries ?? []) {
-    parts.push(`&organizationIndustryTagIds[]=${encodeURIComponent(i)}`);
-  }
-  if (params.companies?.[0]) {
-    parts.push(`&q_organization_name=${encodeURIComponent(params.companies[0])}`);
-  }
-  if (params.headcountMin !== undefined || params.headcountMax !== undefined) {
-    const min = params.headcountMin ?? 1;
-    const max = params.headcountMax ?? 1000000;
-    parts.push(`&numEmployeesRanges[]=${min},${max}`);
-  }
-  if (params.keywords?.trim()) {
-    parts.push(`&q_keywords=${encodeURIComponent(params.keywords.trim())}`);
-  }
+  const seniority = typeof row.seniority === 'string' ? row.seniority.toLowerCase() : '';
+  if (['manager', 'director', 'senior', 'owner', 'partner'].includes(seniority)) score += 2;
+  else if (['vp', 'c_suite'].includes(seniority)) score += 0;
+  else score += 1;
 
-  return parts.join('');
+  const size = typeof row.companySize === 'string' ? row.companySize : '';
+  if (['11-50', '51-200', '201-500'].includes(size)) score += 1;
+
+  if (typeof row.linkedinUrl === 'string' && row.linkedinUrl.includes('linkedin')) score += 1;
+
+  if (score >= 4) return 'high';
+  if (score >= 2) return 'medium';
+  return 'low';
 }
 
-// Map a raw Apify dataset row to Continuum's lead + finder shape.
-function mapFinderRow(row: Record<string, unknown>): {
+// Pipeline Labs actor output → Continuum lead shape
+function mapLeadRow(row: Record<string, unknown>): {
   email: string | null;
   firstName: string | null;
   lastName: string | null;
@@ -67,97 +56,160 @@ function mapFinderRow(row: Record<string, unknown>): {
   title: string | null;
   linkedinUrl: string | null;
   location: string | null;
+  phone: string | null;
+  companyDomain: string | null;
+  companySize: string | null;
+  companyIndustry: string | null;
+  seniority: string | null;
+  emailStatus: string | null;
+  responseSignal: 'high' | 'medium' | 'low';
 } {
   const str = (v: unknown): string | null =>
     typeof v === 'string' && v.trim() ? v.trim() : null;
-  const nested = (obj: unknown, key: string): string | null =>
-    obj !== null && typeof obj === 'object'
-      ? str((obj as Record<string, unknown>)[key])
-      : null;
 
-  const city = str(row.city);
-  const country = str(row.country);
-  const location =
-    city && country
-      ? `${city}, ${country}`
-      : city ?? country ?? str(row.location);
+  const city = str(row.personCity);
+  const state = str(row.personState);
+  const country = str(row.personCountry);
+  const locParts = [city, state, country].filter(Boolean);
+  const location = locParts.length > 0 ? locParts.join(', ') : null;
+
+  // fullName fallback split
+  let firstName = str(row.firstName);
+  let lastName = str(row.lastName);
+  if (!firstName && !lastName) {
+    const full = str(row.fullName) ?? '';
+    const parts = full.trim().split(' ');
+    firstName = parts[0] ?? null;
+    lastName = parts.slice(1).join(' ') || null;
+  }
 
   return {
-    email:
-      str(row.email) ??
-      str(row.work_email) ??
-      str(row.Email),
-    firstName:
-      str(row.firstName) ??
-      str(row.first_name) ??
-      str(row['First Name']),
-    lastName:
-      str(row.lastName) ??
-      str(row.last_name) ??
-      str(row['Last Name']),
-    company:
-      str(row.company) ??
-      str(row.companyName) ??
-      nested(row.organization, 'name') ??
-      str(row.organization_name),
-    title:
-      str(row.title) ??
-      str(row.jobTitle) ??
-      str(row.headline),
-    linkedinUrl:
-      str(row.linkedin_url) ??
-      str(row.linkedinUrl) ??
-      str(row.linkedin),
+    email: str(row.email),
+    firstName,
+    lastName,
+    company: str(row.companyName),
+    title: str(row.title) ?? str(row.position),
+    linkedinUrl: str(row.linkedinUrl),
     location,
+    phone: str(row.phone),
+    companyDomain: str(row.companyDomain),
+    companySize: str(row.companySizeRange) ?? str(row.companySize),
+    companyIndustry: str(row.companyIndustry),
+    seniority: str(row.seniority),
+    emailStatus: str(row.emailStatus),
+    responseSignal: computeResponseSignal(row),
   };
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
-  // POST /v1/finder/search — start an Apify run and return the runId immediately
+  // POST /v1/finder/search — start a people search run and return runId
   fastify.post(
     '/finder/search',
     { preHandler: [requireAuth, requireRateLimit] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const token = getApifyToken();
-      const actorId = getActorId();
+      const token = getSearchToken();
+      const actorId = getSearchActorId();
 
       const body = request.body as {
-        titles?: string[];
-        companies?: string[];
-        industries?: string[];
-        locations?: string[];
-        headcountMin?: number;
-        headcountMax?: number;
-        keywords?: string;
-        limit?: number;
+        // Job title & role
+        personTitleIncludes?: string[];
+        personTitleExcludes?: string[];
+        includeTitleVariants?: boolean;
+        seniorityIncludes?: string[];
+        seniorityExcludes?: string[];
+        functionIncludes?: string[];
+        functionExcludes?: string[];
+        roleMatchMode?: 'all' | 'any';
+        // Contact
+        hasEmail?: boolean;
+        hasPhone?: boolean;
+        // Person location
+        personLocationCountryIncludes?: string[];
+        personLocationStateIncludes?: string[];
+        personLocationCityIncludes?: string[];
+        personLocationCountryExcludes?: string[];
+        // Company
+        companyNameIncludes?: string[];
+        companyNameExcludes?: string[];
+        companyIndustryIncludes?: string[];
+        companyIndustryExcludes?: string[];
+        companyKeywordIncludes?: string[];
+        companyKeywordExcludes?: string[];
+        // Company size
+        companySizeIncludes?: string[];
+        companyEmployeeMin?: number;
+        companyEmployeeMax?: number;
+        // Company domain
+        companyDomainIncludes?: string[];
+        // Company location
+        companyLocationCountryIncludes?: string[];
+        companyLocationStateIncludes?: string[];
+        companyLocationCityIncludes?: string[];
+        // Technologies & revenue
+        technologiesIncludes?: string[];
+        annualRevenueIncludes?: string[];
+        fundingStageIncludes?: string[];
+        // Limit
+        totalResults?: number;
       };
 
-      const searchUrl = buildApolloUrl({
-        titles: body.titles,
-        companies: body.companies,
-        industries: body.industries,
-        locations: body.locations,
-        headcountMin: body.headcountMin,
-        headcountMax: body.headcountMax,
-        keywords: body.keywords,
-      });
+      const totalResults = Math.min(Math.max(body.totalResults ?? 100, 1), 2500);
 
-      const maxResults = Math.min(body.limit ?? 100, 1000);
+      // Build Pipeline Labs actor input — only include non-empty fields
+      const actorInput: Record<string, unknown> = { totalResults };
+
+      const addArr = (key: string, val?: string[]) => {
+        if (val?.length) actorInput[key] = val;
+      };
+      const addBool = (key: string, val?: boolean) => {
+        if (val !== undefined) actorInput[key] = val;
+      };
+      const addNum = (key: string, val?: number) => {
+        if (val !== undefined && val > 0) actorInput[key] = val;
+      };
+      const addStr = (key: string, val?: string) => {
+        if (val) actorInput[key] = val;
+      };
+
+      addArr('personTitleIncludes', body.personTitleIncludes);
+      addArr('personTitleExcludes', body.personTitleExcludes);
+      addBool('includeTitleVariants', body.includeTitleVariants);
+      addArr('seniorityIncludes', body.seniorityIncludes);
+      addArr('seniorityExcludes', body.seniorityExcludes);
+      addArr('functionIncludes', body.functionIncludes);
+      addArr('functionExcludes', body.functionExcludes);
+      addStr('roleMatchMode', body.roleMatchMode);
+      addBool('hasEmail', body.hasEmail);
+      addBool('hasPhone', body.hasPhone);
+      addArr('personLocationCountryIncludes', body.personLocationCountryIncludes);
+      addArr('personLocationCountryExcludes', body.personLocationCountryExcludes);
+      addArr('personLocationStateIncludes', body.personLocationStateIncludes);
+      addArr('personLocationCityIncludes', body.personLocationCityIncludes);
+      addArr('companyNameIncludes', body.companyNameIncludes);
+      addArr('companyNameExcludes', body.companyNameExcludes);
+      addArr('companyIndustryIncludes', body.companyIndustryIncludes);
+      addArr('companyIndustryExcludes', body.companyIndustryExcludes);
+      addArr('companyKeywordIncludes', body.companyKeywordIncludes);
+      addArr('companyKeywordExcludes', body.companyKeywordExcludes);
+      addArr('companySizeIncludes', body.companySizeIncludes);
+      addNum('companyEmployeeMin', body.companyEmployeeMin);
+      addNum('companyEmployeeMax', body.companyEmployeeMax);
+      addArr('companyDomainIncludes', body.companyDomainIncludes);
+      addArr('companyLocationCountryIncludes', body.companyLocationCountryIncludes);
+      addArr('companyLocationStateIncludes', body.companyLocationStateIncludes);
+      addArr('companyLocationCityIncludes', body.companyLocationCityIncludes);
+      addArr('technologiesIncludes', body.technologiesIncludes);
+      addArr('annualRevenueIncludes', body.annualRevenueIncludes);
+      addArr('fundingStageIncludes', body.fundingStageIncludes);
 
       const runRes = await fetch(
         `https://api.apify.com/v2/acts/${actorId}/runs?token=${token}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            input: {
-              searchUrl,
-              maxResults,
-              proxy: { useApifyProxy: true },
-            },
-          }),
+          body: JSON.stringify(actorInput),
         },
       );
 
@@ -170,16 +222,16 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       const runId = runData?.data?.id;
       if (!runId) throw Errors.internalError('Search could not be started. Try again.');
 
-      return reply.status(202).send({ runId, status: 'running', estimatedSeconds: 120 });
+      return reply.status(202).send({ runId, status: 'running', estimatedSeconds: 90 });
     },
   );
 
-  // GET /v1/finder/jobs/:runId/status — poll Apify for run status
+  // GET /v1/finder/jobs/:runId/status
   fastify.get(
     '/finder/jobs/:runId/status',
     { preHandler: [requireAuth] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const token = getApifyToken();
+      const token = getSearchToken();
       const { runId } = request.params as { runId: string };
 
       const res = await fetch(
@@ -190,7 +242,7 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       if (!res.ok) throw Errors.notFound('Run');
 
       const data = await res.json() as {
-        data?: { id?: string; status?: string; defaultDatasetId?: string };
+        data?: { id?: string; status?: string; defaultDatasetId?: string; stats?: { itemCount?: number } };
       };
       const raw = data?.data;
       const apifyStatus = raw?.status ?? 'UNKNOWN';
@@ -207,23 +259,24 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send({
         runId,
         status,
-        ...(status === 'succeeded' ? { datasetId: raw?.defaultDatasetId } : {}),
+        ...(status === 'succeeded'
+          ? { datasetId: raw?.defaultDatasetId, count: raw?.stats?.itemCount ?? 0 }
+          : {}),
       });
     },
   );
 
-  // GET /v1/finder/jobs/:runId/results — fetch mapped results from the dataset
+  // GET /v1/finder/jobs/:runId/results
   fastify.get(
     '/finder/jobs/:runId/results',
     { preHandler: [requireAuth] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const token = getApifyToken();
+      const token = getSearchToken();
       const { runId } = request.params as { runId: string };
       const q = request.query as { offset?: string; limit?: string };
       const offset = Math.max(0, parseInt(q.offset ?? '0', 10));
       const limit = Math.min(200, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
-      // Resolve dataset ID from run
       const runRes = await fetch(
         `https://api.apify.com/v2/actor-runs/${runId}?fields=defaultDatasetId&token=${token}`,
         { headers: { Accept: 'application/json' } },
@@ -233,12 +286,9 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       const runData = await runRes.json() as { data?: { defaultDatasetId?: string } };
       const datasetId = runData?.data?.defaultDatasetId;
       if (!datasetId) {
-        throw Errors.validationFailed([
-          { field: 'runId', message: 'Run has no dataset yet — has it finished?' },
-        ]);
+        throw Errors.validationFailed([{ field: 'runId', message: 'Run has no dataset yet.' }]);
       }
 
-      // Fetch dataset items
       const [dsRes, infoRes] = await Promise.all([
         fetch(
           `https://api.apify.com/v2/datasets/${datasetId}/items?offset=${offset}&limit=${limit}&token=${token}`,
@@ -253,24 +303,23 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       if (!dsRes.ok) throw Errors.internalError('Failed to fetch results.');
 
       const rows = await dsRes.json() as Record<string, unknown>[];
-
       let total = rows.length;
       if (infoRes.ok) {
         const info = await infoRes.json() as { data?: { itemCount?: number } };
         total = info?.data?.itemCount ?? rows.length;
       }
 
-      const results = rows.map(mapFinderRow);
-      return reply.send({ results, total, hasMore: offset + rows.length < total });
+      const results = rows.map(mapLeadRow);
+      return reply.send({ results, total, offset, hasMore: offset + rows.length < total });
     },
   );
 
-  // POST /v1/finder/jobs/:runId/import — import selected (or all) results as leads
+  // POST /v1/finder/jobs/:runId/import — import selected results into leads
   fastify.post(
     '/finder/jobs/:runId/import',
     { preHandler: [requireAuth, requireRateLimit] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const token = getApifyToken();
+      const token = getSearchToken();
       const { runId } = request.params as { runId: string };
       const body = request.body as {
         indices?: number[];
@@ -279,7 +328,6 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       };
       const apiKeyId = request.apiKey.id;
 
-      // Resolve dataset ID
       const runRes = await fetch(
         `https://api.apify.com/v2/actor-runs/${runId}?fields=defaultDatasetId&token=${token}`,
         { headers: { Accept: 'application/json' } },
@@ -292,11 +340,10 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.validationFailed([{ field: 'runId', message: 'Run has no dataset yet.' }]);
       }
 
-      // Fetch the rows we need
       let rows: Record<string, unknown>[];
       if (body.importAll) {
         const dsRes = await fetch(
-          `https://api.apify.com/v2/datasets/${datasetId}/items?limit=1000&token=${token}`,
+          `https://api.apify.com/v2/datasets/${datasetId}/items?limit=2500&token=${token}`,
           { headers: { Accept: 'application/json' } },
         );
         rows = dsRes.ok ? (await dsRes.json() as Record<string, unknown>[]) : [];
@@ -317,7 +364,7 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       const sequenceId = body.sequenceId?.trim() || null;
 
       for (const row of rows) {
-        const mapped = mapFinderRow(row);
+        const mapped = mapLeadRow(row);
         if (!mapped.email) { skipped++; continue; }
         const email = mapped.email.toLowerCase();
 
@@ -331,7 +378,15 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
               lastName: mapped.lastName ?? null,
               company: mapped.company ?? null,
               title: mapped.title ?? null,
-              customVars: {} as Prisma.InputJsonValue,
+              customVars: {
+                ...(mapped.linkedinUrl ? { linkedin_url: mapped.linkedinUrl } : {}),
+                ...(mapped.phone ? { phone: mapped.phone } : {}),
+                ...(mapped.companyDomain ? { company_domain: mapped.companyDomain } : {}),
+                ...(mapped.companySize ? { company_size: mapped.companySize } : {}),
+                ...(mapped.companyIndustry ? { industry: mapped.companyIndustry } : {}),
+                ...(mapped.location ? { location: mapped.location } : {}),
+                ...(mapped.seniority ? { seniority: mapped.seniority } : {}),
+              } as Prisma.InputJsonValue,
             },
             update: {},
           });
@@ -352,6 +407,78 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       return reply.send({ imported, skipped });
+    },
+  );
+
+  // POST /v1/finder/jobs/:runId/verify — bulk-verify all emails from the run
+  // Generates a CSV in memory, uploads to storage, and queues a bulk verify job.
+  fastify.post(
+    '/finder/jobs/:runId/verify',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const token = getSearchToken();
+      const { runId } = request.params as { runId: string };
+      const apiKeyId = request.apiKey.id;
+
+      const runRes = await fetch(
+        `https://api.apify.com/v2/actor-runs/${runId}?fields=defaultDatasetId&token=${token}`,
+        { headers: { Accept: 'application/json' } },
+      );
+      if (!runRes.ok) throw Errors.notFound('Run');
+
+      const runData = await runRes.json() as { data?: { defaultDatasetId?: string } };
+      const datasetId = runData?.data?.defaultDatasetId;
+      if (!datasetId) {
+        throw Errors.validationFailed([{ field: 'runId', message: 'Run has no dataset yet.' }]);
+      }
+
+      const dsRes = await fetch(
+        `https://api.apify.com/v2/datasets/${datasetId}/items?limit=2500&token=${token}`,
+        { headers: { Accept: 'application/json' } },
+      );
+      if (!dsRes.ok) throw Errors.internalError('Failed to fetch leads for verification.');
+
+      const rows = await dsRes.json() as Record<string, unknown>[];
+      const emails = rows
+        .map((r) => (typeof r.email === 'string' ? r.email.trim().toLowerCase() : null))
+        .filter(Boolean) as string[];
+
+      if (emails.length === 0) {
+        return reply.send({ jobId: null, message: 'No emails in this run to verify.' });
+      }
+
+      // Build CSV in memory: "email\n..."
+      const csv = `email\n${emails.join('\n')}\n`;
+      const fileBuffer = Buffer.from(csv, 'utf-8');
+      const jobId = randomUUID();
+      const fileName = `finder-verify-${runId.slice(0, 8)}.csv`;
+      const storagePath = `uploads/${apiKeyId}/${jobId}/${fileName}`;
+
+      try {
+        await uploadToStorage(config.STORAGE_BUCKET_UPLOADS, storagePath, fileBuffer, 'text/csv');
+      } catch {
+        throw Errors.serviceUnavailable('Storage');
+      }
+
+      await prisma.bulkJob.create({
+        data: {
+          id: jobId,
+          apiKeyId,
+          fileName,
+          storagePath,
+          totalEmails: emails.length,
+          duplicateCount: 0,
+          status: 'pending',
+        },
+      });
+
+      await bulkQueue.add(
+        'process-bulk',
+        { jobId, apiKeyId, storagePath, fileName },
+        { jobId: `bulk-${jobId}` },
+      );
+
+      return reply.status(202).send({ jobId, total: emails.length });
     },
   );
 }
