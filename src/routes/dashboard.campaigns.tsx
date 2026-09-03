@@ -19,11 +19,14 @@ interface Campaign {
   fromName: string;
   fromEmail: string;
   subject: string;
+  subjectB?: string | null;
   status: string;
   totalRecipients: number;
   sentCount: number;
   openCount: number;
   clickCount: number;
+  openCountB: number;
+  clickCountB: number;
   bounceCount: number;
   complaintCount: number;
   trackOpens: boolean;
@@ -57,7 +60,7 @@ function CampaignsPage() {
   const [domains, setDomains] = useState<SendingDomain[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
+  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", subjectB: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
   const [saving, setSaving] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [testTarget, setTestTarget] = useState<string | null>(null);
@@ -100,7 +103,7 @@ function CampaignsPage() {
 
   useEffect(() => { load(); }, [primaryKey]);
 
-  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
+  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", subjectB: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
 
   const openHealth = async (c: Campaign) => {
     if (!primaryKey?.keyRaw) return;
@@ -147,6 +150,7 @@ function CampaignsPage() {
         from_name: form.fromName,
         from_email: form.fromEmail,
         subject: form.subject,
+        subject_b: form.subjectB || undefined,
         preheader: form.preheader || undefined,
         html_body: form.htmlBody,
         list_ids: form.listId ? [form.listId] : [],
@@ -188,6 +192,7 @@ function CampaignsPage() {
         from_name: form.fromName,
         from_email: form.fromEmail,
         subject: form.subject,
+        subject_b: form.subjectB || undefined,
         preheader: form.preheader || undefined,
         html_body: form.htmlBody,
         list_ids: form.listId ? [form.listId] : [],
@@ -303,8 +308,19 @@ function CampaignsPage() {
             <Input placeholder="replies@acme.com" type="email" value={form.replyTo} onChange={(e) => setForm((f) => ({ ...f, replyTo: e.target.value }))} />
           </div>
           <div className="space-y-1.5">
-            <Label>Subject</Label>
+            <Label>Subject <span className="text-muted-foreground font-normal">(Variant A)</span></Label>
             <Input placeholder="Your May update is here" value={form.subject} onChange={(e) => setForm((f) => ({ ...f, subject: e.target.value }))} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Subject B <span className="text-muted-foreground font-normal">(optional — leave blank to skip A/B test)</span></Label>
+            <Input
+              placeholder="Don't miss your exclusive May offer"
+              value={form.subjectB}
+              onChange={(e) => setForm((f) => ({ ...f, subjectB: e.target.value }))}
+            />
+            {form.subjectB && (
+              <p className="text-xs text-muted-foreground">A/B test active — 50% of recipients will receive Subject B</p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label>Preheader <span className="text-muted-foreground font-normal">(optional — inbox preview text shown after the subject line)</span></Label>
@@ -635,18 +651,53 @@ function CampaignsPage() {
             </thead>
             <tbody>
               {campaigns.map((c) => {
+                const half = c.sentCount > 0 ? Math.ceil(c.sentCount / 2) : 0;
+                const halfB = c.sentCount > 0 ? Math.floor(c.sentCount / 2) : 0;
                 const openRate = c.sentCount > 0 ? ((c.openCount / c.sentCount) * 100).toFixed(1) : "—";
                 const clickRate = c.sentCount > 0 ? ((c.clickCount / c.sentCount) * 100).toFixed(1) : "—";
+                const isAB = !!c.subjectB;
+                const openRateA = half > 0 ? ((c.openCount / half) * 100).toFixed(1) : "—";
+                const clickRateA = half > 0 ? ((c.clickCount / half) * 100).toFixed(1) : "—";
+                const openRateB = halfB > 0 ? ((c.openCountB / halfB) * 100).toFixed(1) : "—";
+                const clickRateB = halfB > 0 ? ((c.clickCountB / halfB) * 100).toFixed(1) : "—";
+                const aWins = isAB && openRateA !== "—" && openRateB !== "—" && parseFloat(openRateA) > parseFloat(openRateB);
+                const bWins = isAB && openRateA !== "—" && openRateB !== "—" && parseFloat(openRateB) > parseFloat(openRateA);
                 return (
                   <tr key={c.id} className="border-b border-border last:border-0 hover:bg-muted/20">
                     <td className="px-5 py-3">
                       <div className="font-medium truncate max-w-[200px]">{c.subject}</div>
+                      {isAB && (
+                        <div className="text-xs text-muted-foreground truncate max-w-[200px] mt-0.5">
+                          <span className="inline-flex items-center gap-1">
+                            <span className="font-mono text-[10px] bg-muted px-1 rounded">B</span>
+                            {c.subjectB}
+                          </span>
+                        </div>
+                      )}
                       <div className="text-xs text-muted-foreground">{c.fromName} &lt;{c.fromEmail}&gt;</div>
                     </td>
                     <td className="px-5 py-3"><StatusBadge status={c.status} /></td>
                     <td className="px-5 py-3 tabular-nums">{c.totalRecipients.toLocaleString()}</td>
-                    <td className="px-5 py-3 tabular-nums">{openRate}{openRate !== "—" ? "%" : ""}</td>
-                    <td className="px-5 py-3 tabular-nums">{clickRate}{clickRate !== "—" ? "%" : ""}</td>
+                    <td className="px-5 py-3 tabular-nums">
+                      {isAB ? (
+                        <div className="text-xs space-y-0.5">
+                          <div className={aWins ? "font-semibold" : ""}><span className="font-mono text-[10px] text-muted-foreground">A</span> {openRateA}{openRateA !== "—" ? "%" : ""} {aWins && "✓"}</div>
+                          <div className={bWins ? "font-semibold" : ""}><span className="font-mono text-[10px] text-muted-foreground">B</span> {openRateB}{openRateB !== "—" ? "%" : ""} {bWins && "✓"}</div>
+                        </div>
+                      ) : (
+                        <>{openRate}{openRate !== "—" ? "%" : ""}</>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 tabular-nums">
+                      {isAB ? (
+                        <div className="text-xs space-y-0.5">
+                          <div><span className="font-mono text-[10px] text-muted-foreground">A</span> {clickRateA}{clickRateA !== "—" ? "%" : ""}</div>
+                          <div><span className="font-mono text-[10px] text-muted-foreground">B</span> {clickRateB}{clickRateB !== "—" ? "%" : ""}</div>
+                        </div>
+                      ) : (
+                        <>{clickRate}{clickRate !== "—" ? "%" : ""}</>
+                      )}
+                    </td>
                     <td className="px-5 py-3 text-muted-foreground text-xs">
                       {c.sentAt ? new Date(c.sentAt).toLocaleDateString() : c.scheduledAt ? `Scheduled ${new Date(c.scheduledAt).toLocaleDateString()}` : new Date(c.createdAt).toLocaleDateString()}
                     </td>
@@ -656,7 +707,7 @@ function CampaignsPage() {
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => {
                             setEditingCampaign(c);
                             setCreating(false);
-                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: c.trackOpens, trackClicks: c.trackClicks, scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
+                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, subjectB: c.subjectB ?? "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: c.trackOpens, trackClicks: c.trackClicks, scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
                           }}>
                             <Edit2 className="h-3 w-3" /> Edit
                           </Button>
