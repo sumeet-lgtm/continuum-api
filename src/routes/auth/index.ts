@@ -147,6 +147,12 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         }
       }
 
+      // Check if this email belongs to a team member of another workspace
+      const teamMembership = await prisma.teamMember.findFirst({
+        where: { email: workosUser.email.toLowerCase() },
+        orderBy: { joinedAt: 'asc' },
+      });
+
       // Find or create a primary API key scoped to this user
       let apiKey = await prisma.apiKey.findFirst({
         where: { ownerId: user.id, isActive: true },
@@ -178,6 +184,18 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         });
       }
 
+      // If the user is a team member, override the primary key to the workspace key
+      let workspaceRole: string | undefined;
+      if (teamMembership) {
+        const workspaceKey = await prisma.apiKey.findFirst({
+          where: { id: teamMembership.workspaceKeyId, isActive: true },
+        });
+        if (workspaceKey) {
+          apiKey = workspaceKey;
+          workspaceRole = teamMembership.role;
+        }
+      }
+
       // Welcome email on first sign-in (new key = new user)
       const isNewUser = !await prisma.apiKey.findFirst({ where: { ownerId: user.id, isActive: true, NOT: { id: apiKey.id } } });
       if (isNewUser) {
@@ -199,6 +217,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         userId: user.id,
         email: user.email,
         primaryKeyId: apiKey.id,
+        workspaceRole,
         orgId: workosOrgId,
         orgRole,
       });
@@ -240,31 +259,38 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       throw Errors.unauthorized('Session expired or invalid — please sign in again');
     }
 
-    const [user, apiKeys] = await Promise.all([
+    const KEY_SELECT = {
+      id: true, keyPrefix: true, keyRaw: true, label: true,
+      name: true, plan: true, permission: true,
+      currentMonthUsage: true, monthlyLimit: true,
+      currentMonthSendUsage: true, monthlySendLimit: true,
+      lastUsedAt: true, createdAt: true,
+    } as const;
+
+    const [user, ownKeys] = await Promise.all([
       prisma.user.findUnique({ where: { id: payload.userId } }),
       prisma.apiKey.findMany({
         where: { ownerId: payload.userId, isActive: true },
-        select: {
-          id: true,
-          keyPrefix: true,
-          keyRaw: true,
-          label: true,
-          name: true,
-          plan: true,
-          permission: true,
-          currentMonthUsage: true,
-          monthlyLimit: true,
-          currentMonthSendUsage: true,
-          monthlySendLimit: true,
-          lastUsedAt: true,
-          createdAt: true,
-        },
+        select: KEY_SELECT,
         orderBy: { createdAt: 'asc' },
       }),
     ]);
 
     if (!user) {
       throw Errors.unauthorized('User account not found');
+    }
+
+    // If primaryKeyId belongs to a workspace the user is a member of (not their own key),
+    // fetch it separately so the frontend can use it as the active key.
+    let apiKeys = ownKeys as typeof ownKeys;
+    if (payload.primaryKeyId && !ownKeys.find((k) => k.id === payload.primaryKeyId)) {
+      const workspaceKey = await prisma.apiKey.findUnique({
+        where: { id: payload.primaryKeyId },
+        select: KEY_SELECT,
+      });
+      if (workspaceKey) {
+        apiKeys = [workspaceKey, ...ownKeys];
+      }
     }
 
     return reply.status(200).send({
@@ -276,6 +302,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       },
       apiKeys,
       primaryKeyId: payload.primaryKeyId,
+      workspaceRole: (payload as { workspaceRole?: string }).workspaceRole,
     });
   });
 
@@ -340,6 +367,54 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
     fastify.log.warn({ userId: user.id, email: user.email }, 'User account deleted via DELETE /auth/account');
     return reply.status(200).send({ deleted: true });
+  });
+
+  // ─── POST /auth/accept-invite ────────────────────────────────────────────────
+  // Accepts a team workspace invitation. Requires a valid session JWT (user must
+  // be logged in). Creates a TeamMember record and returns a refreshed session
+  // token with the workspace key set as primaryKeyId.
+  fastify.post('/auth/accept-invite', async (request: FastifyRequest, reply: FastifyReply) => {
+    const authHeader = request.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) throw Errors.unauthorized('Missing session token');
+    let payload: { userId: string; email: string };
+    try { payload = await verifySession(authHeader.slice(7)); }
+    catch { throw Errors.unauthorized('Session expired — please sign in again'); }
+
+    const { token } = request.body as { token?: string };
+    if (!token) throw Errors.validationFailed('Missing invite token');
+
+    const invite = await prisma.teamInvite.findUnique({ where: { token } });
+    if (!invite || invite.status !== 'pending') throw Errors.notFound('Invite not found or already used');
+    if (invite.expiresAt < new Date()) throw Errors.validationFailed('This invite link has expired. Ask the workspace owner for a new one.');
+    if (invite.inviteeEmail !== payload.email.toLowerCase()) {
+      throw Errors.validationFailed('This invite was sent to a different email address. Sign in with that email to accept it.');
+    }
+
+    // Create team member (idempotent)
+    await prisma.teamMember.upsert({
+      where: { workspaceKeyId_email: { workspaceKeyId: invite.workspaceKeyId, email: invite.inviteeEmail } },
+      create: {
+        workspaceKeyId: invite.workspaceKeyId,
+        email: invite.inviteeEmail,
+        role: invite.role,
+        invitedBy: invite.invitedBy,
+      },
+      update: { role: invite.role },
+    });
+
+    await prisma.teamInvite.update({ where: { token }, data: { status: 'accepted' } });
+
+    const workspaceKey = await prisma.apiKey.findFirst({ where: { id: invite.workspaceKeyId, isActive: true } });
+    if (!workspaceKey) throw Errors.notFound('Workspace not found or no longer active');
+
+    const newToken = await signSession({
+      userId: payload.userId,
+      email: payload.email,
+      primaryKeyId: workspaceKey.id,
+      workspaceRole: invite.role,
+    });
+
+    return reply.status(200).send({ ok: true, token: newToken, workspaceRole: invite.role });
   });
 
   // ─── POST /auth/logout ──────────────────────────────────────────────────────

@@ -151,9 +151,48 @@ model ApiKey {
   inboxTests     InboxTest[]
   automations    Automation[]
   requestLogs    ApiRequestLog[]
+  teamMembers    TeamMember[]
+  teamInvites    TeamInvite[]
 
   @@index([orgId])
   @@map("api_keys")
+}
+
+// ─── Team (workspace multi-user RBAC) ────────────────────────────────────────
+
+model TeamMember {
+  id             String   @id @default(cuid())
+  workspaceKeyId String
+  email          String
+  role           String   @default("member") // admin | member (owner = ApiKey creator)
+  invitedBy      String?
+  joinedAt       DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  workspaceKey   ApiKey   @relation(fields: [workspaceKeyId], references: [id])
+
+  @@unique([workspaceKeyId, email])
+  @@index([email])
+  @@map("team_members")
+}
+
+model TeamInvite {
+  id             String   @id @default(cuid())
+  workspaceKeyId String
+  inviteeEmail   String
+  role           String   @default("member")
+  token          String   @unique @default(cuid())
+  status         String   @default("pending") // pending | accepted | revoked
+  expiresAt      DateTime
+  invitedBy      String
+  createdAt      DateTime @default(now())
+
+  workspaceKey   ApiKey   @relation(fields: [workspaceKeyId], references: [id])
+
+  @@index([token])
+  @@index([workspaceKeyId])
+  @@index([inviteeEmail])
+  @@map("team_invites")
 }
 
 // ─── API Request Logs ────────────────────────────────────────────────────────

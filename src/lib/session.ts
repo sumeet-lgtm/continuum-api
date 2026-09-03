@@ -5,6 +5,7 @@ export interface SessionPayload extends JWTPayload {
   userId: string;
   email: string;
   primaryKeyId?: string;
+  workspaceRole?: string;   // 'owner' | 'admin' | 'member' — set when user is in a shared workspace
   orgId?: string;
   orgRole?: string;
 }
