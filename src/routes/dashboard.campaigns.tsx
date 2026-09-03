@@ -711,7 +711,9 @@ function CampaignsPage() {
                       )}
                       <div className="text-xs text-muted-foreground">{c.fromName} &lt;{c.fromEmail}&gt;</div>
                     </td>
-                    <td className="px-5 py-3"><StatusBadge status={c.status} /></td>
+                    <td className="px-5 py-3">
+                      <StatusBadge status={c.status}>{c.status === "paused_bounce" ? "Paused – High Bounce" : undefined}</StatusBadge>
+                    </td>
                     <td className="px-5 py-3 tabular-nums">{c.totalRecipients.toLocaleString()}</td>
                     <td className="px-5 py-3 tabular-nums">
                       {isAB ? (

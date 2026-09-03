@@ -13,6 +13,7 @@ const STYLES: Record<string, string> = {
   risky: "bg-[oklch(0.97_0.06_75)] text-[oklch(0.42_0.13_60)] border-[oklch(0.88_0.1_75)]",
   pending: "bg-[oklch(0.97_0.06_75)] text-[oklch(0.42_0.13_60)] border-[oklch(0.88_0.1_75)]",
   running: "bg-[oklch(0.97_0.06_75)] text-[oklch(0.42_0.13_60)] border-[oklch(0.88_0.1_75)]",
+  paused_bounce: "bg-[oklch(0.96_0.04_27)] text-[oklch(0.42_0.18_27)] border-[oklch(0.88_0.08_27)]",
   unknown: "bg-muted text-muted-foreground border-border",
 };
 
