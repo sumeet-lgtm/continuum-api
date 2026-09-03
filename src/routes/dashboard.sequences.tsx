@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2, Edit2, Sparkles, Phone, Linkedin, CheckSquare, Mail } from "lucide-react";
+import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2, Edit2, Sparkles, Linkedin, CheckSquare, Mail } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/sequences")({
   head: () => ({ meta: [{ title: "Sequences — Continuum API" }] }),
@@ -80,13 +80,12 @@ const CONDITION_LABELS: Record<string, string> = {
   if_not_replied: "Only if not replied",
 };
 
-type StepType = "email" | "call" | "linkedin" | "task";
+type StepType = "email" | "linkedin" | "task";
 
 const STEP_TYPE_CONFIG: Record<StepType, { label: string; icon: React.ElementType; color: string; bg: string }> = {
-  email:    { label: "Email",    icon: Mail,        color: "text-blue-500",   bg: "bg-blue-500/10" },
-  call:     { label: "Call",     icon: Phone,       color: "text-emerald-500", bg: "bg-emerald-500/10" },
-  linkedin: { label: "LinkedIn", icon: Linkedin,    color: "text-sky-500",    bg: "bg-sky-500/10" },
-  task:     { label: "Task",     icon: CheckSquare, color: "text-amber-500",  bg: "bg-amber-500/10" },
+  email:    { label: "Email",    icon: Mail,        color: "text-blue-500",  bg: "bg-blue-500/10" },
+  linkedin: { label: "LinkedIn", icon: Linkedin,    color: "text-sky-500",   bg: "bg-sky-500/10" },
+  task:     { label: "Task",     icon: CheckSquare, color: "text-amber-500", bg: "bg-amber-500/10" },
 };
 
 const DEFAULT_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
@@ -129,7 +128,7 @@ function SequencesPage() {
 
   // AI brief modal for generating a full sequence
   const [showAIBrief, setShowAIBrief] = useState<string | null>(null); // seqId
-  const [aiBriefForm, setAiBriefForm] = useState({ icpDescription: "", goal: "", tone: "professional" as string, numSteps: "5", allowedTypes: ["email", "call", "linkedin"] as string[] });
+  const [aiBriefForm, setAiBriefForm] = useState({ icpDescription: "", goal: "", tone: "professional" as string, numSteps: "5", allowedTypes: ["email", "linkedin", "task"] as string[] });
   const [aiBriefGenerating, setAiBriefGenerating] = useState(false);
 
   // Variants
@@ -650,7 +649,7 @@ function SequencesPage() {
               </div>
               <button onClick={() => setShowAIBrief(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
             </div>
-            <p className="text-xs text-muted-foreground">Describe your target audience and goal — AI will plan the full multi-channel sequence with email copy, call scripts, and LinkedIn touchpoints.</p>
+            <p className="text-xs text-muted-foreground">Describe your target audience and goal — AI will plan the full sequence with email copy, LinkedIn touchpoints, and manual tasks.</p>
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <Label className="text-xs">Who are you targeting? (ICP)</Label>
@@ -692,7 +691,7 @@ function SequencesPage() {
               <div className="space-y-1.5">
                 <Label className="text-xs">Channels to include</Label>
                 <div className="flex flex-wrap gap-2">
-                  {(["email", "call", "linkedin", "task"] as StepType[]).map((t) => {
+                  {(["email", "linkedin", "task"] as StepType[]).map((t) => {
                     const cfg = STEP_TYPE_CONFIG[t];
                     const Icon = cfg.icon;
                     const active = aiBriefForm.allowedTypes.includes(t);
@@ -970,7 +969,7 @@ function SequencesPage() {
                             <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs" onClick={() => { setAddingStep(seq.id); setStepForm({ type: "email", delayDays: "0", delayHours: "0", subject: "", htmlBody: "", taskNote: "", condition: "always", bodyMode: "html", text_body: "" }); }}>
                               <Plus className="h-3.5 w-3.5" /> Add manually
                             </Button>
-                            <Button size="sm" className="gap-1.5 h-7 text-xs bg-violet-600 hover:bg-violet-700 text-white" onClick={() => { setShowAIBrief(seq.id); setAiBriefForm({ icpDescription: "", goal: "", tone: "professional", numSteps: "5", allowedTypes: ["email", "call", "linkedin"] }); }}>
+                            <Button size="sm" className="gap-1.5 h-7 text-xs bg-violet-600 hover:bg-violet-700 text-white" onClick={() => { setShowAIBrief(seq.id); setAiBriefForm({ icpDescription: "", goal: "", tone: "professional", numSteps: "5", allowedTypes: ["email", "linkedin", "task"] }); }}>
                               <Sparkles className="h-3.5 w-3.5" /> Create with AI
                             </Button>
                           </div>
@@ -1051,7 +1050,7 @@ function SequencesPage() {
                                   <div>
                                     <label className="text-muted-foreground block mb-1">Step type</label>
                                     <div className="flex gap-1 flex-wrap">
-                                      {(["email", "call", "linkedin", "task"] as StepType[]).map((t) => {
+                                      {(["email", "linkedin", "task"] as StepType[]).map((t) => {
                                         const cfg = STEP_TYPE_CONFIG[t];
                                         const Icon = cfg.icon;
                                         return (
@@ -1194,7 +1193,7 @@ function SequencesPage() {
                           <div>
                             <Label className="text-xs mb-1.5 block">Step type</Label>
                             <div className="flex gap-1.5 flex-wrap">
-                              {(["email", "call", "linkedin", "task"] as StepType[]).map((t) => {
+                              {(["email", "linkedin", "task"] as StepType[]).map((t) => {
                                 const cfg = STEP_TYPE_CONFIG[t];
                                 const Icon = cfg.icon;
                                 return (
@@ -1298,14 +1297,12 @@ function SequencesPage() {
                           ) : (
                             <div className="space-y-1">
                               <Label className="text-xs">
-                                {stepForm.type === "call" ? "Call script / talking points" :
-                                 stepForm.type === "linkedin" ? "LinkedIn message or action" :
+                                {stepForm.type === "linkedin" ? "LinkedIn message or action" :
                                  "Task instructions"}
                               </Label>
                               <textarea
                                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm min-h-[80px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                                 placeholder={
-                                  stepForm.type === "call" ? "Call {{first_name}} at {{company}}. Ask about their current email outreach process. Key talking points: …" :
                                   stepForm.type === "linkedin" ? "Connect with {{first_name}} on LinkedIn. Reference the emails sent. Mention the case study link in the connection note." :
                                   "Send follow-up deck to {{email}} using Docusend for tracking. Check for views after 48 hours."
                                 }
@@ -1333,7 +1330,7 @@ function SequencesPage() {
                           <Button
                             size="sm"
                             className="gap-1.5 bg-violet-600 hover:bg-violet-700 text-white"
-                            onClick={() => { setShowAIBrief(seq.id); setAiBriefForm({ icpDescription: "", goal: "", tone: "professional", numSteps: "3", allowedTypes: ["email", "call", "linkedin"] }); }}
+                            onClick={() => { setShowAIBrief(seq.id); setAiBriefForm({ icpDescription: "", goal: "", tone: "professional", numSteps: "3", allowedTypes: ["email", "linkedin", "task"] }); }}
                           >
                             <Sparkles className="h-3.5 w-3.5" /> AI Steps
                           </Button>
