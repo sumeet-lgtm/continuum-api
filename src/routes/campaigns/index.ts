@@ -313,4 +313,84 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
       sent_at: campaign.sentAt,
     });
   });
+
+  // POST /v1/campaigns/:id/retarget
+  // Creates a new draft campaign pre-populated with the same settings as the
+  // original, but targeting ONLY contacts who did not open the original send.
+  // Accepts optional body overrides: subject, html_body, text_body, preheader.
+  fastify.post('/campaigns/:id/retarget', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+
+    const overrideSchema = z.object({
+      subject:   z.string().min(1).max(500).optional(),
+      html_body: z.string().min(1).optional(),
+      text_body: z.string().optional(),
+      preheader: z.string().max(200).optional(),
+    });
+    const parsed = overrideSchema.safeParse(request.body ?? {});
+    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+    const original = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
+    if (!original) throw Errors.notFound('Campaign not found.');
+    if (original.status !== 'sent') throw Errors.forbidden('Can only retarget campaigns that have been sent.');
+
+    // Find all recipients of the original campaign who did NOT open
+    const allRecipients = await prisma.campaignRecipient.findMany({
+      where: { campaignId: id, status: 'sent' },
+      select: { email: true },
+    });
+
+    // Collect emails that had at least one open event on this campaign
+    const openers = await prisma.trackingEvent.findMany({
+      where: { campaignId: id, type: 'open' },
+      select: { email: true },
+      distinct: ['email'],
+    });
+    const openerSet = new Set(openers.map(e => e.email));
+    const nonOpeners = allRecipients.filter(r => !openerSet.has(r.email)).map(r => r.email);
+
+    if (nonOpeners.length === 0) {
+      return reply.status(200).send({
+        non_openers: 0,
+        message: 'All recipients opened the original campaign — no one to retarget.',
+      });
+    }
+
+    // Create a retarget suppression list so the new campaign can exclude openers
+    // Strategy: create a new campaign in draft mode. The campaign worker will
+    // resolve contacts from the same original list_ids, but we store the openers'
+    // emails as a special excludedEmails JSON field so the worker can skip them.
+    // This avoids mutating the suppression table (openers of one campaign are
+    // not globally suppressed — they just shouldn't get the retarget campaign).
+    const retarget = await prisma.campaign.create({
+      data: {
+        apiKeyId,
+        name: `${original.name} — Retarget (non-openers)`,
+        fromName: original.fromName, fromEmail: original.fromEmail,
+        domainId: original.domainId, replyTo: original.replyTo,
+        subject:  parsed.data.subject   ?? `[Follow-up] ${original.subject}`,
+        htmlBody: parsed.data.html_body ?? original.htmlBody,
+        textBody: parsed.data.text_body ?? original.textBody,
+        preheader: parsed.data.preheader ?? original.preheader,
+        listIds: original.listIds,
+        segmentIds: original.segmentIds,
+        excludeListIds: original.excludeListIds,
+        excludedEmails: nonOpeners,  // worker reads this to skip openers
+        trackOpens: original.trackOpens, trackClicks: original.trackClicks,
+        status: 'draft',
+        retargetOfId: id,
+      },
+      select: { id: true, name: true, status: true, createdAt: true },
+    });
+
+    return reply.status(201).send({
+      campaign_id:  retarget.id,
+      name:         retarget.name,
+      status:       retarget.status,
+      non_openers:  nonOpeners.length,
+      total_sent:   allRecipients.length,
+      message:      `Retarget campaign created for ${nonOpeners.length} non-openers out of ${allRecipients.length} total recipients.`,
+    });
+  });
 }

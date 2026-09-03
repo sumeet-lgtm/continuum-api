@@ -19,6 +19,12 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
   if (!campaign || campaign.status === 'cancelled') return;
 
+  // Retarget campaigns carry a pre-computed list of emails to exclude
+  // (openers from the source campaign). This avoids suppressing them globally.
+  const retargetExcludeSet = new Set<string>(
+    (campaign.excludedEmails as string[] | null) ?? []
+  );
+
   await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'sending' } });
 
   // Resolve all recipient emails from list_ids
@@ -75,7 +81,9 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     select: { email: true },
   });
   const suppressedSet = new Set(suppressions.map(s => s.email));
-  const validRecipients = recipients.filter(r => !suppressedSet.has(r.email));
+  const validRecipients = recipients.filter(r =>
+    !suppressedSet.has(r.email) && !retargetExcludeSet.has(r.email)
+  );
 
   // Assign A/B variants before creating recipient rows (50/50 random split)
   const isABTest = !!campaign.subjectB;

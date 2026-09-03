@@ -773,6 +773,8 @@ model Campaign {
   subjectB       String?                       // A/B test: variant B subject line
   openCountB     Int       @default(0)         // A/B test: opens from B variant
   clickCountB    Int       @default(0)         // A/B test: clicks from B variant
+  excludedEmails String[]  @default([])        // retarget: emails to skip (openers of source campaign)
+  retargetOfId   String?                       // retarget: source campaign ID
   sendDays       String[]  @default(["monday","tuesday","wednesday","thursday","friday"])
   sendStartHour  Int       @default(8)
   sendEndHour    Int       @default(17)
