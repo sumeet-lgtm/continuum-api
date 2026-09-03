@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users } from "lucide-react";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
@@ -30,15 +30,18 @@ interface Campaign {
 }
 
 interface MailingList { id: string; name: string; }
+interface EmailTemplate { id: string; name: string; subject: string; htmlBody: string; }
 
 function CampaignsPage() {
   const { primaryKey } = useAuth();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [lists, setLists] = useState<MailingList[]>([]);
+  const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "" });
+  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "", scheduledAt: "" });
   const [saving, setSaving] = useState(false);
+  const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [testTarget, setTestTarget] = useState<string | null>(null);
   const [testEmail, setTestEmail] = useState("");
   const [testSending, setTestSending] = useState(false);
@@ -56,11 +59,17 @@ function CampaignsPage() {
       .get<{ data: MailingList[] }>("/v1/lists", primaryKey.keyRaw)
       .then((r) => setLists(r.data ?? []))
       .catch(() => {});
+    api.withKey
+      .get<{ data: EmailTemplate[] }>("/v1/templates?limit=50", primaryKey.keyRaw)
+      .then((r) => setTemplates(r.data ?? []))
+      .catch(() => {});
   };
 
   useEffect(() => { load(); }, [primaryKey]);
 
-  const create = async () => {
+  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "", scheduledAt: "" });
+
+  const create = async (asDraft = true) => {
     if (!primaryKey?.keyRaw) return;
     if (!form.fromName || !form.fromEmail || !form.subject || !form.htmlBody) {
       toast.error("Fill in all required fields");
@@ -68,23 +77,63 @@ function CampaignsPage() {
     }
     setSaving(true);
     try {
-      await api.withKey.post("/v1/campaigns", {
+      const payload: Record<string, unknown> = {
         name: form.name || form.subject,
         from_name: form.fromName,
         from_email: form.fromEmail,
         subject: form.subject,
         html_body: form.htmlBody,
         list_ids: form.listId ? [form.listId] : [],
-      }, primaryKey.keyRaw);
-      toast.success("Campaign created as draft");
+      };
+      if (!asDraft && form.scheduledAt) payload.scheduled_at = new Date(form.scheduledAt).toISOString();
+      const campaign = await api.withKey.post<{ id: string }>("/v1/campaigns", payload, primaryKey.keyRaw);
+      if (!asDraft && !form.scheduledAt) {
+        await api.withKey.post(`/v1/campaigns/${campaign.id}/send`, {}, primaryKey.keyRaw);
+        toast.success("Campaign queued for sending");
+      } else if (!asDraft && form.scheduledAt) {
+        await api.withKey.post(`/v1/campaigns/${campaign.id}/send`, {}, primaryKey.keyRaw);
+        toast.success(`Campaign scheduled for ${new Date(form.scheduledAt).toLocaleString()}`);
+      } else {
+        toast.success("Campaign saved as draft");
+      }
       setCreating(false);
-      setForm({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "" });
+      resetForm();
       load();
     } catch (e: unknown) {
       toast.error((e as Error).message);
     } finally {
       setSaving(false);
     }
+  };
+
+  const updateCampaign = async () => {
+    if (!primaryKey?.keyRaw || !editingCampaign) return;
+    setSaving(true);
+    try {
+      await api.withKey.patch(`/v1/campaigns/${editingCampaign.id}`, {
+        name: form.name || form.subject,
+        from_name: form.fromName,
+        from_email: form.fromEmail,
+        subject: form.subject,
+        html_body: form.htmlBody,
+        list_ids: form.listId ? [form.listId] : [],
+        ...(form.scheduledAt ? { scheduled_at: new Date(form.scheduledAt).toISOString() } : {}),
+      }, primaryKey.keyRaw);
+      toast.success("Campaign updated");
+      setEditingCampaign(null);
+      resetForm();
+      load();
+    } catch (e: unknown) { toast.error((e as Error).message); }
+    finally { setSaving(false); }
+  };
+
+  const cancelSchedule = async (id: string) => {
+    if (!primaryKey?.keyRaw) return;
+    try {
+      await api.withKey.post(`/v1/campaigns/${id}/cancel`, {}, primaryKey.keyRaw);
+      toast.success("Campaign reverted to draft");
+      setCampaigns((c) => c.map((x) => x.id === id ? { ...x, status: "draft", scheduledAt: null } : x));
+    } catch (e: unknown) { toast.error((e as Error).message); }
   };
 
   const sendCampaign = async (id: string) => {
@@ -141,9 +190,9 @@ function CampaignsPage() {
         </Button>
       </div>
 
-      {creating && (
+      {(creating || editingCampaign) && (
         <div className="rounded-lg border border-border bg-card p-6 space-y-4 max-w-2xl">
-          <h2 className="text-sm font-semibold">New Campaign</h2>
+          <h2 className="text-sm font-semibold">{editingCampaign ? "Edit Campaign" : "New Campaign"}</h2>
           <div className="space-y-1.5">
             <Label>Campaign name</Label>
             <Input placeholder="May Newsletter" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
@@ -175,6 +224,22 @@ function CampaignsPage() {
               </select>
             </div>
           )}
+          {templates.length > 0 && !editingCampaign && (
+            <div className="space-y-1.5">
+              <Label>Load from template <span className="text-muted-foreground font-normal">(optional)</span></Label>
+              <select
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                defaultValue=""
+                onChange={(e) => {
+                  const t = templates.find((x) => x.id === e.target.value);
+                  if (t) setForm((f) => ({ ...f, subject: t.subject, htmlBody: t.htmlBody }));
+                }}
+              >
+                <option value="">— pick a saved template —</option>
+                {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label>HTML body</Label>
             <textarea
@@ -185,9 +250,32 @@ function CampaignsPage() {
             />
             <p className="text-xs text-muted-foreground">Use {"{{first_name}}"}, {"{{email}}"}, {"{{unsubscribe_url}}"} as personalization tokens.</p>
           </div>
-          <div className="flex gap-2">
-            <Button onClick={create} disabled={saving}>{saving ? "Creating…" : "Create Campaign"}</Button>
-            <Button variant="outline" onClick={() => setCreating(false)}>Cancel</Button>
+          <div className="space-y-1.5">
+            <Label className="flex items-center gap-1.5"><Clock className="h-3.5 w-3.5 text-muted-foreground" /> Schedule send <span className="text-muted-foreground font-normal">(optional — leave blank to save as draft)</span></Label>
+            <Input
+              type="datetime-local"
+              value={form.scheduledAt}
+              min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
+              onChange={(e) => setForm((f) => ({ ...f, scheduledAt: e.target.value }))}
+              className="w-64"
+            />
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {editingCampaign ? (
+              <Button onClick={updateCampaign} disabled={saving}>{saving ? "Saving…" : "Save Changes"}</Button>
+            ) : form.scheduledAt ? (
+              <Button onClick={() => create(false)} disabled={saving} className="gap-1.5">
+                <Clock className="h-3.5 w-3.5" />{saving ? "Scheduling…" : `Schedule for ${new Date(form.scheduledAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}
+              </Button>
+            ) : (
+              <>
+                <Button onClick={() => create(true)} disabled={saving} variant="outline">{saving ? "Saving…" : "Save as Draft"}</Button>
+                <Button onClick={() => create(false)} disabled={saving} className="gap-1.5">
+                  <Send className="h-3.5 w-3.5" />{saving ? "Sending…" : "Send Now"}
+                </Button>
+              </>
+            )}
+            <Button variant="outline" onClick={() => { setCreating(false); setEditingCampaign(null); resetForm(); }}>Cancel</Button>
           </div>
         </div>
       )}
@@ -325,7 +413,16 @@ function CampaignsPage() {
                       {c.sentAt ? new Date(c.sentAt).toLocaleDateString() : c.scheduledAt ? `Scheduled ${new Date(c.scheduledAt).toLocaleDateString()}` : new Date(c.createdAt).toLocaleDateString()}
                     </td>
                     <td className="px-5 py-3">
-                      <div className="flex gap-1">
+                      <div className="flex gap-1 flex-wrap">
+                        {(c.status === "draft" || c.status === "scheduled") && (
+                          <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => {
+                            setEditingCampaign(c);
+                            setCreating(false);
+                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, subject: c.subject, htmlBody: "", listId: "", scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
+                          }}>
+                            <Edit2 className="h-3 w-3" /> Edit
+                          </Button>
+                        )}
                         <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => { setTestTarget(c.id); setTestEmail(""); }}>
                           <FlaskConical className="h-3 w-3" /> Test
                         </Button>
@@ -335,6 +432,11 @@ function CampaignsPage() {
                         {c.status === "draft" && (
                           <Button size="sm" variant="outline" className="gap-1 h-7 px-2 text-xs" onClick={() => setConfirmCampaign(c)}>
                             <Send className="h-3 w-3" /> Send
+                          </Button>
+                        )}
+                        {c.status === "scheduled" && (
+                          <Button size="sm" variant="outline" className="gap-1 h-7 px-2 text-xs text-amber-600 border-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/20" onClick={() => cancelSchedule(c.id)}>
+                            <XCircle className="h-3 w-3" /> Unschedule
                           </Button>
                         )}
                       </div>
