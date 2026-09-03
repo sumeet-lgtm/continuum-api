@@ -1,6 +1,11 @@
-// Applies all standalone SQL migration files in order (idempotent)
+// Applies all SQL migrations in order (idempotent).
+// Handles both standalone top-level .sql files and Prisma-style
+// subdirectory migrations (YYYYMMDD.../migration.sql).
+// Deduplicates: if both 20260903_foo.sql and 20260903_foo/migration.sql
+// exist, only the top-level file runs (it wins because it registers the
+// key first in the sorted directory listing).
 import { PrismaClient } from '@prisma/client';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const prisma = new PrismaClient({
@@ -9,20 +14,47 @@ const prisma = new PrismaClient({
 
 const MIGRATIONS_DIR = './prisma/migrations';
 
-// All standalone .sql files (not inside subdirectories) sorted by name
-const files = readdirSync(MIGRATIONS_DIR)
-  .filter(f => f.endsWith('.sql'))
-  .sort();
+const entries = [];
+const seen = new Set();
 
-console.log(`Found ${files.length} standalone SQL migration(s): ${files.join(', ')}`);
+for (const entry of readdirSync(MIGRATIONS_DIR).sort()) {
+  const fullPath = join(MIGRATIONS_DIR, entry);
+  const stat = statSync(fullPath);
+
+  if (stat.isFile() && entry.endsWith('.sql')) {
+    // Top-level standalone file: 20260903000001_send_window.sql
+    const key = entry.replace(/\.sql$/, '');
+    if (!seen.has(key)) {
+      seen.add(key);
+      entries.push({ key, label: entry, path: fullPath });
+    }
+  } else if (stat.isDirectory()) {
+    // Prisma-style subdirectory: 20260903000001_send_window/migration.sql
+    const migSql = join(fullPath, 'migration.sql');
+    try {
+      statSync(migSql);
+      const key = entry;
+      if (!seen.has(key)) {
+        seen.add(key);
+        entries.push({ key, label: `${entry}/migration.sql`, path: migSql });
+      }
+    } catch {
+      // no migration.sql in this directory — skip
+    }
+  }
+}
+
+entries.sort((a, b) => a.key.localeCompare(b.key));
+
+console.log(`Found ${entries.length} migration(s):`);
+entries.forEach(e => console.log(`  ${e.label}`));
 
 let totalOk = 0;
 let totalErrors = 0;
 
-for (const file of files) {
-  const path = join(MIGRATIONS_DIR, file);
-  console.log(`\nApplying: ${file}`);
-  const sql = readFileSync(path, 'utf8');
+for (const { label, path: filePath } of entries) {
+  console.log(`\nApplying: ${label}`);
+  const sql = readFileSync(filePath, 'utf8');
 
   const statements = sql
     .split(';')
@@ -43,19 +75,19 @@ for (const file of files) {
         msg.includes('already exists') ||
         msg.includes('duplicate') ||
         msg.includes('IF NOT EXISTS') ||
-        msg.includes('does not exist')  // DROP IF EXISTS when table missing
+        msg.includes('does not exist') // DROP IF EXISTS when table missing
       ) {
         ok++;
         process.stdout.write('s');
       } else {
         errors++;
-        console.error(`\nERROR in ${file}: ${msg.slice(0, 200)}`);
+        console.error(`\nERROR in ${label}: ${msg.slice(0, 200)}`);
         console.error(`Statement: ${stmt.slice(0, 150)}`);
       }
     }
   }
 
-  console.log(`\n  ${file}: ${ok} ok, ${errors} errors`);
+  console.log(`\n  ${label}: ${ok} ok, ${errors} errors`);
   totalOk += ok;
   totalErrors += errors;
 }
