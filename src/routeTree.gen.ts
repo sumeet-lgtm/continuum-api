@@ -62,6 +62,8 @@ import { Route as DashboardUsageRouteImport } from './routes/dashboard.usage'
 import { Route as DashboardVerifyRouteImport } from './routes/dashboard.verify'
 import { Route as DashboardWebhooksRouteImport } from './routes/dashboard.webhooks'
 import { Route as DashboardWidgetRouteImport } from './routes/dashboard.widget'
+import { Route as DashboardTeamRouteImport } from './routes/dashboard.team'
+import { Route as AcceptInviteRouteImport } from './routes/accept-invite'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -328,6 +330,16 @@ const DashboardWidgetRoute = DashboardWidgetRouteImport.update({
   path: '/widget',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardTeamRoute = DashboardTeamRouteImport.update({
+  id: '/team',
+  path: '/team',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const AcceptInviteRoute = AcceptInviteRouteImport.update({
+  id: '/accept-invite',
+  path: '/accept-invite',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -382,11 +394,14 @@ export interface FileRoutesByFullPath {
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
   '/dashboard/widget': typeof DashboardWidgetRoute
+  '/dashboard/team': typeof DashboardTeamRoute
   '/dashboard/': typeof DashboardIndexRoute
+  '/accept-invite': typeof AcceptInviteRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/callback': typeof CallbackRoute
+  '/accept-invite': typeof AcceptInviteRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
@@ -436,12 +451,15 @@ export interface FileRoutesByTo {
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
   '/dashboard/widget': typeof DashboardWidgetRoute
+  '/dashboard/team': typeof DashboardTeamRoute
   '/dashboard': typeof DashboardIndexRoute
+  '/accept-invite': typeof AcceptInviteRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/callback': typeof CallbackRoute
+  '/accept-invite': typeof AcceptInviteRoute
   '/dashboard': typeof DashboardRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -492,7 +510,9 @@ export interface FileRoutesById {
   '/dashboard/verify': typeof DashboardVerifyRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
   '/dashboard/widget': typeof DashboardWidgetRoute
+  '/dashboard/team': typeof DashboardTeamRoute
   '/dashboard/': typeof DashboardIndexRoute
+  '/accept-invite': typeof AcceptInviteRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -547,7 +567,9 @@ export interface FileRouteTypes {
     | '/dashboard/verify'
     | '/dashboard/webhooks'
     | '/dashboard/widget'
+    | '/dashboard/team'
     | '/dashboard/'
+    | '/accept-invite'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -599,11 +621,14 @@ export interface FileRouteTypes {
     | '/dashboard/verify'
     | '/dashboard/webhooks'
     | '/dashboard/widget'
+    | '/dashboard/team'
     | '/dashboard'
+    | '/accept-invite'
   id:
     | '__root__'
     | '/'
     | '/callback'
+    | '/accept-invite'
     | '/dashboard'
     | '/forgot-password'
     | '/login'
@@ -652,12 +677,15 @@ export interface FileRouteTypes {
     | '/dashboard/verify'
     | '/dashboard/webhooks'
     | '/dashboard/widget'
+    | '/dashboard/team'
     | '/dashboard/'
+    | '/accept-invite'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CallbackRoute: typeof CallbackRoute
+  AcceptInviteRoute: typeof AcceptInviteRoute
   DashboardRoute: typeof DashboardRouteWithChildren
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
@@ -680,6 +708,13 @@ declare module '@tanstack/react-router' {
       path: '/callback'
       fullPath: '/callback'
       preLoaderRoute: typeof CallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/accept-invite': {
+      id: '/accept-invite'
+      path: '/accept-invite'
+      fullPath: '/accept-invite'
+      preLoaderRoute: typeof AcceptInviteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard': {
@@ -1039,6 +1074,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardWidgetRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/team': {
+      id: '/dashboard/team'
+      path: '/team'
+      fullPath: '/dashboard/team'
+      preLoaderRoute: typeof DashboardTeamRouteImport
+      parentRoute: typeof DashboardRoute
+    }
   }
 }
 
@@ -1087,6 +1129,7 @@ interface DashboardRouteChildren {
   DashboardVerifyRoute: typeof DashboardVerifyRoute
   DashboardWebhooksRoute: typeof DashboardWebhooksRoute
   DashboardWidgetRoute: typeof DashboardWidgetRoute
+  DashboardTeamRoute: typeof DashboardTeamRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
 }
 
@@ -1135,6 +1178,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardVerifyRoute: DashboardVerifyRoute,
   DashboardWebhooksRoute: DashboardWebhooksRoute,
   DashboardWidgetRoute: DashboardWidgetRoute,
+  DashboardTeamRoute: DashboardTeamRoute,
   DashboardIndexRoute: DashboardIndexRoute,
 }
 
@@ -1145,6 +1189,7 @@ const DashboardRouteWithChildren = DashboardRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CallbackRoute: CallbackRoute,
+  AcceptInviteRoute: AcceptInviteRoute,
   DashboardRoute: DashboardRouteWithChildren,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,

@@ -35,12 +35,14 @@ interface MeResponse {
   user: ContinuumUser;
   apiKeys: ContinuumApiKey[];
   primaryKeyId: string | null;
+  workspaceRole?: string;
 }
 
 interface AuthContextValue {
   user: ContinuumUser | null;
   apiKeys: ContinuumApiKey[];
   primaryKey: ContinuumApiKey | null;
+  workspaceRole: string | null; // 'owner' | 'admin' | 'member' — null means owner
   loading: boolean;
   signIn: () => void;
   signOut: () => void;
@@ -53,6 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<ContinuumUser | null>(null);
   const [apiKeys, setApiKeys] = useState<ContinuumApiKey[]>([]);
   const [primaryKeyId, setPrimaryKeyId] = useState<string | null>(null);
+  const [workspaceRole, setWorkspaceRole] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const loadMe = async () => {
@@ -70,10 +73,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser({ ...me.user, ...(jwtClaims ?? {}) });
       setApiKeys(me.apiKeys);
       setPrimaryKeyId(me.primaryKeyId);
+      setWorkspaceRole(me.workspaceRole ?? null);
     } catch {
       clearToken();
       setUser(null);
       setApiKeys([]);
+      setWorkspaceRole(null);
     } finally {
       setLoading(false);
     }
@@ -123,7 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, apiKeys, primaryKey, loading, signIn, signOut, refreshMe: loadMe }}
+      value={{ user, apiKeys, primaryKey, workspaceRole, loading, signIn, signOut, refreshMe: loadMe }}
     >
       {children}
     </AuthContext.Provider>
