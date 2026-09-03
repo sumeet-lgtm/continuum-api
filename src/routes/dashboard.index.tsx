@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Area, AreaChart } from "recharts";
-import { Sparkles, KeyRound, Mail, Activity, CheckCircle2, Circle, ArrowRight, Send, GitBranch, ShieldAlert } from "lucide-react";
+import { Sparkles, KeyRound, Mail, Activity, CheckCircle2, Circle, ArrowRight, Send, GitBranch, ShieldAlert, Eye, MousePointer, AlertCircle, XCircle, Radio } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -75,6 +75,15 @@ interface HistoryItem {
   createdAt: string;
 }
 
+interface LiveEvent {
+  id: string;
+  type: string;
+  to: string;
+  subject: string;
+  occurredAt: string;
+  messageId: string;
+}
+
 function Overview() {
   const { primaryKey, loading: authLoading } = useAuth();
   const [usage, setUsage] = useState<UsageData | null>(null);
@@ -82,6 +91,8 @@ function Overview() {
   const [chartData, setChartData] = useState<{ date: string; count: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [sendHealth, setSendHealth] = useState<{ bounce_rate: number; complaint_rate: number; sent: number } | null>(null);
+  const [liveFeed, setLiveFeed] = useState<LiveEvent[]>([]);
+  const liveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!primaryKey?.keyRaw) {
@@ -119,6 +130,20 @@ function Overview() {
         setLoading(false);
       }
     })();
+  }, [primaryKey]);
+
+  // Live activity feed — poll every 5 s
+  useEffect(() => {
+    if (!primaryKey?.keyRaw) return;
+    const fetchLive = async () => {
+      try {
+        const res = await api.withKey.get<{ events: LiveEvent[] }>('/v1/events/live?limit=25', primaryKey.keyRaw!);
+        setLiveFeed(res.events ?? []);
+      } catch {}
+    };
+    fetchLive();
+    liveIntervalRef.current = setInterval(fetchLive, 5000);
+    return () => { if (liveIntervalRef.current) clearInterval(liveIntervalRef.current); };
   }, [primaryKey]);
 
   if (authLoading || loading) return <SkeletonOverview />;
@@ -279,6 +304,52 @@ function Overview() {
           )}
         </div>
       </div>
+
+      {liveFeed.length > 0 && (
+        <div className="rounded-lg border border-border bg-card overflow-hidden">
+          <div className="px-5 py-3 border-b border-border flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[oklch(0.55_0.16_145)] opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-[oklch(0.55_0.16_145)]" />
+              </span>
+              <h2 className="text-sm font-medium">Live activity</h2>
+            </div>
+            <span className="text-[10px] font-medium uppercase tracking-widest text-[oklch(0.55_0.16_145)]">Live</span>
+          </div>
+          <div className="divide-y divide-border max-h-80 overflow-y-auto">
+            {liveFeed.map((ev) => {
+              const cfg = {
+                sent:      { Icon: Send,          color: "text-foreground",                label: "Sent" },
+                delivered: { Icon: CheckCircle2,   color: "text-[oklch(0.55_0.16_145)]",  label: "Delivered" },
+                bounced:   { Icon: XCircle,        color: "text-[oklch(0.58_0.22_27)]",   label: "Bounced" },
+                complained:{ Icon: AlertCircle,    color: "text-[oklch(0.65_0.14_75)]",   label: "Complaint" },
+                failed:    { Icon: AlertCircle,    color: "text-[oklch(0.58_0.22_27)]",   label: "Failed" },
+                open:      { Icon: Eye,            color: "text-foreground",               label: "Opened" },
+                click:     { Icon: MousePointer,   color: "text-foreground",               label: "Clicked" },
+              }[ev.type] ?? { Icon: Radio, color: "text-muted-foreground", label: ev.type };
+              const { Icon, color, label } = cfg;
+              const ago = (() => {
+                const s = Math.floor((Date.now() - new Date(ev.occurredAt).getTime()) / 1000);
+                if (s < 60) return `${s}s ago`;
+                if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+                return `${Math.floor(s / 3600)}h ago`;
+              })();
+              return (
+                <div key={ev.id} className="flex items-center gap-3 px-5 py-2.5">
+                  <Icon className={`h-3.5 w-3.5 shrink-0 ${color}`} />
+                  <span className={`text-xs font-medium shrink-0 w-16 ${color}`}>{label}</span>
+                  <span className="text-xs font-mono text-muted-foreground truncate flex-1 min-w-0">{ev.to}</span>
+                  {ev.subject && (
+                    <span className="text-xs text-muted-foreground truncate max-w-[200px] hidden sm:block">{ev.subject}</span>
+                  )}
+                  <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">{ago}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {!empty && (
         <div className="rounded-lg border border-border bg-card overflow-hidden">
