@@ -486,13 +486,14 @@ model SendMessage {
   errorMessage   String?
   verificationId String?
   domainId       String?
-  templateId     String?
-  tags           Json?
-  trackingToken  String?    @unique
-  idempotencyKey String?    @unique
-  scheduledAt    DateTime?
-  createdAt      DateTime   @default(now())
-  sentAt         DateTime?
+  templateId      String?
+  sequenceStepId  String?                // set for sequence sends — used in funnel analytics
+  tags            Json?
+  trackingToken   String?    @unique
+  idempotencyKey  String?    @unique
+  scheduledAt     DateTime?
+  createdAt       DateTime   @default(now())
+  sentAt          DateTime?
 
   apiKey         ApiKey        @relation(fields: [apiKeyId], references: [id])
   verification   Verification? @relation(fields: [verificationId], references: [id])
@@ -502,6 +503,7 @@ model SendMessage {
   @@index([apiKeyId])
   @@index([apiKeyId, createdAt])
   @@index([sesMessageId])
+  @@index([sequenceStepId])
   @@map("send_messages")
 }
 

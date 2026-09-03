@@ -476,4 +476,106 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       });
     },
   );
+
+  // GET /v1/analytics/sequences/:id/funnel
+  // Per-step open/click/unsubscribe/bounce funnel for a sequence.
+  // Shows where contacts drop off and which steps perform best.
+  fastify.get(
+    '/analytics/sequences/:id/funnel',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+
+      const sequence = await prisma.sequence.findFirst({
+        where: { id, apiKeyId },
+        select: { id: true, name: true },
+      });
+      if (!sequence) throw Errors.notFound('Sequence not found.');
+
+      const steps = await prisma.sequenceStep.findMany({
+        where: { sequenceId: id },
+        orderBy: { stepOrder: 'asc' },
+        select: { id: true, stepOrder: true, subject: true, delayDays: true },
+      });
+
+      if (steps.length === 0) {
+        return reply.status(200).send({ sequence_id: id, name: sequence.name, steps: [] });
+      }
+
+      // Sent counts per step from CampaignRecipient-equivalent: SequenceEnrollmentLog
+      // Use SendMessage rows associated with each step via sequenceStepId
+      const stepIds = steps.map(s => s.id);
+
+      // Count sends per step
+      const sends = await prisma.sendMessage.groupBy({
+        by: ['sequenceStepId'],
+        where: { sequenceStepId: { in: stepIds }, status: { in: ['sent', 'delivered', 'bounced', 'complained', 'opened'] } },
+        _count: { id: true },
+      });
+      const sendMap = new Map(sends.map(s => [s.sequenceStepId!, s._count.id]));
+
+      // Count TrackingEvents per step
+      const stepSendIds = await prisma.sendMessage.findMany({
+        where: { sequenceStepId: { in: stepIds } },
+        select: { id: true, sequenceStepId: true, status: true },
+      });
+      const msgsByStep = new Map<string, string[]>();
+      for (const m of stepSendIds) {
+        if (!m.sequenceStepId) continue;
+        if (!msgsByStep.has(m.sequenceStepId)) msgsByStep.set(m.sequenceStepId, []);
+        msgsByStep.get(m.sequenceStepId)!.push(m.id);
+      }
+
+      // Aggregate events for all messages at once then bucket by step
+      const allMsgIds = stepSendIds.map(m => m.id);
+      const events = allMsgIds.length > 0 ? await prisma.trackingEvent.findMany({
+        where: { sendMessageId: { in: allMsgIds }, type: { in: ['open', 'click', 'unsubscribe'] } },
+        select: { sendMessageId: true, type: true },
+      }) : [];
+
+      const msgToStep = new Map(stepSendIds.map(m => [m.id, m.sequenceStepId!]));
+      const eventByStep = new Map<string, { opens: number; clicks: number; unsubscribes: number }>();
+      for (const ev of events) {
+        const stepId = msgToStep.get(ev.sendMessageId);
+        if (!stepId) continue;
+        if (!eventByStep.has(stepId)) eventByStep.set(stepId, { opens: 0, clicks: 0, unsubscribes: 0 });
+        const e = eventByStep.get(stepId)!;
+        if (ev.type === 'open')        e.opens++;
+        else if (ev.type === 'click')  e.clicks++;
+        else if (ev.type === 'unsubscribe') e.unsubscribes++;
+      }
+
+      // Bounce counts per step
+      const bouncesByStep = new Map<string, number>();
+      for (const m of stepSendIds) {
+        if (m.status === 'bounced' && m.sequenceStepId) {
+          bouncesByStep.set(m.sequenceStepId, (bouncesByStep.get(m.sequenceStepId) ?? 0) + 1);
+        }
+      }
+
+      const result = steps.map(step => {
+        const sent       = sendMap.get(step.id) ?? 0;
+        const ev         = eventByStep.get(step.id) ?? { opens: 0, clicks: 0, unsubscribes: 0 };
+        const bounces    = bouncesByStep.get(step.id) ?? 0;
+        return {
+          step_id:          step.id,
+          step_order:       step.stepOrder,
+          subject:          step.subject,
+          delay_days:       step.delayDays,
+          sent,
+          opens:            ev.opens,
+          clicks:           ev.clicks,
+          unsubscribes:     ev.unsubscribes,
+          bounces,
+          open_rate:        sent > 0 ? parseFloat((ev.opens / sent * 100).toFixed(1)) : 0,
+          click_rate:       sent > 0 ? parseFloat((ev.clicks / sent * 100).toFixed(1)) : 0,
+          unsubscribe_rate: sent > 0 ? parseFloat((ev.unsubscribes / sent * 100).toFixed(2)) : 0,
+          bounce_rate:      sent > 0 ? parseFloat((bounces / sent * 100).toFixed(2)) : 0,
+        };
+      });
+
+      return reply.status(200).send({ sequence_id: id, name: sequence.name, steps: result });
+    },
+  );
 }

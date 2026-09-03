@@ -298,6 +298,7 @@ export async function processSequenceTick(): Promise<void> {
           data: {
             apiKeyId: sequence.apiKeyId, to: enrollment.email, from: fromAddress, subject,
             sesMessageId, status: 'sent', sentAt: new Date(),
+            sequenceStepId: step.id,  // enables per-step funnel analytics
           },
         }).catch((err) => {
           logger.warn({ err, email: enrollment.email, sequenceId: sequence.id }, 'Failed to register sequence send for bounce tracking (non-fatal)');
