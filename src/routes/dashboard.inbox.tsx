@@ -39,12 +39,32 @@ interface ClassifyResult {
 }
 
 const CATEGORY_STYLES: Record<string, string> = {
-  interested: "bg-muted text-[oklch(0.55_0.16_145)]",
-  not_interested: "bg-muted text-[oklch(0.58_0.22_27)]",
-  out_of_office: "bg-muted text-muted-foreground",
-  question: "bg-muted text-muted-foreground",
-  unsubscribe: "bg-muted text-[oklch(0.58_0.22_27)]",
-  bounced: "bg-muted text-[oklch(0.58_0.22_27)]",
+  interested:      "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  meeting_request: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  not_interested:  "bg-red-500/10 text-red-600 dark:text-red-400",
+  unsubscribe:     "bg-red-500/10 text-red-600 dark:text-red-400",
+  out_of_office:   "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  referral:        "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+  question:        "bg-muted text-muted-foreground",
+  bounced:         "bg-red-500/10 text-red-600 dark:text-red-400",
+};
+
+const CATEGORY_EMOJI: Record<string, string> = {
+  interested:      "🔥",
+  meeting_request: "📅",
+  not_interested:  "✗",
+  unsubscribe:     "🚫",
+  out_of_office:   "🏖",
+  referral:        "👥",
+  question:        "❓",
+};
+
+const ACTION_LABEL: Record<string, string> = {
+  reply:       "Reply now",
+  close:       "Close / remove",
+  pause:       "Pause sequence",
+  escalate:    "Escalate to team",
+  unsubscribe: "Unsubscribe",
 };
 
 const STATUS_STYLES: Record<string, string> = {
@@ -63,18 +83,46 @@ function InboxPage() {
   const [classifyingId, setClassifyingId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [autoClassifyQueue, setAutoClassifyQueue] = useState<Reply[]>([]);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
     setLoading(true);
     api.withKey
       .get<{ data?: Reply[]; replies?: Reply[]; total: number }>("/v1/inbox?page=1&limit=100", primaryKey.keyRaw)
-      .then((r) => setReplies(r.data ?? r.replies ?? []))
+      .then((r) => {
+        const loaded = r.data ?? r.replies ?? [];
+        setReplies(loaded);
+        // Queue new/unread replies for auto-classification (up to 10 to avoid hammering)
+        setAutoClassifyQueue(loaded.filter(x => x.status === "new" || !x.isRead).slice(0, 10));
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); }, [primaryKey]);
+
+  // Auto-classify queued replies sequentially in the background
+  useEffect(() => {
+    if (!primaryKey?.keyRaw || autoClassifyQueue.length === 0) return;
+    const [next, ...rest] = autoClassifyQueue;
+    if (classifyResults[next.id]) { setAutoClassifyQueue(rest); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("https://api.continuumapi.com/v1/ai/classify-reply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
+          body: JSON.stringify({ subject: next.subject ?? undefined, body: next.bodySnippet ?? next.subject ?? "reply" }),
+        });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => null) as ClassifyResult | null;
+        if (data && !cancelled) setClassifyResults((prev) => ({ ...prev, [next.id]: data }));
+      } catch { /* silent — auto-classify is best-effort */ }
+      if (!cancelled) setAutoClassifyQueue(rest);
+    })();
+    return () => { cancelled = true; };
+  }, [autoClassifyQueue, primaryKey]);
 
   const classify = async (r: Reply) => {
     if (!primaryKey?.keyRaw || classifyingId) return;
@@ -191,11 +239,13 @@ function InboxPage() {
                               {r.status.replace(/_/g, " ")}
                             </span>
                           )}
-                          {classification && (
+                          {classification ? (
                             <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${CATEGORY_STYLES[classification.category] ?? "bg-muted text-muted-foreground"}`}>
-                              {classification.category.replace(/_/g, " ")} · {Math.round(classification.confidence * 100)}%
+                              {CATEGORY_EMOJI[classification.category] ?? "🤖"} {classification.category.replace(/_/g, " ")}
                             </span>
-                          )}
+                          ) : autoClassifyQueue.find(q => q.id === r.id) ? (
+                            <span className="text-xs text-muted-foreground animate-pulse">Classifying…</span>
+                          ) : null}
                         </div>
                         <p className="text-sm text-muted-foreground truncate">{r.subject ?? "(no subject)"}</p>
                         {r.bodySnippet && isExpanded && (
@@ -204,7 +254,10 @@ function InboxPage() {
                           </p>
                         )}
                         {classification?.suggested_action && (
-                          <p className="text-xs text-muted-foreground mt-0.5 italic">{classification.suggested_action}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            <span className="font-medium text-foreground/70">Next: </span>
+                            {ACTION_LABEL[classification.suggested_action] ?? classification.suggested_action}
+                          </p>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
