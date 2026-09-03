@@ -24,6 +24,10 @@ interface Campaign {
   sentCount: number;
   openCount: number;
   clickCount: number;
+  bounceCount: number;
+  complaintCount: number;
+  trackOpens: boolean;
+  trackClicks: boolean;
   createdAt: string;
   scheduledAt: string | null;
   sentAt: string | null;
@@ -41,7 +45,7 @@ function CampaignsPage() {
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", listId: "", segmentId: "", scheduledAt: "" });
+  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
   const [saving, setSaving] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [testTarget, setTestTarget] = useState<string | null>(null);
@@ -75,7 +79,16 @@ function CampaignsPage() {
 
   useEffect(() => { load(); }, [primaryKey]);
 
-  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", listId: "", segmentId: "", scheduledAt: "" });
+  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
+
+  const autoTextBody = () => {
+    const plain = form.htmlBody
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+    setForm((f) => ({ ...f, textBody: plain }));
+  };
 
   const create = async (asDraft = true) => {
     if (!primaryKey?.keyRaw) return;
@@ -93,7 +106,11 @@ function CampaignsPage() {
         html_body: form.htmlBody,
         list_ids: form.listId ? [form.listId] : [],
         segment_ids: form.segmentId ? [form.segmentId] : [],
+        exclude_list_ids: form.excludeListId ? [form.excludeListId] : [],
         reply_to: form.replyTo || undefined,
+        text_body: form.textBody || undefined,
+        track_opens: form.trackOpens,
+        track_clicks: form.trackClicks,
       };
       if (!asDraft && form.scheduledAt) payload.scheduled_at = new Date(form.scheduledAt).toISOString();
       const campaign = await api.withKey.post<{ id: string }>("/v1/campaigns", payload, primaryKey.keyRaw);
@@ -128,6 +145,9 @@ function CampaignsPage() {
         html_body: form.htmlBody,
         list_ids: form.listId ? [form.listId] : [],
         reply_to: form.replyTo || undefined,
+        text_body: form.textBody || undefined,
+        track_opens: form.trackOpens,
+        track_clicks: form.trackClicks,
         ...(form.scheduledAt ? { scheduled_at: new Date(form.scheduledAt).toISOString() } : {}),
       }, primaryKey.keyRaw);
       toast.success("Campaign updated");
@@ -284,6 +304,43 @@ function CampaignsPage() {
                 </button>
               )}
             </div>
+          </div>
+          {lists.length > 0 && (
+            <div className="space-y-1.5">
+              <Label>Exclude list <span className="text-muted-foreground font-normal">(optional — these contacts will not receive the campaign)</span></Label>
+              <select
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={form.excludeListId}
+                onChange={(e) => setForm((f) => ({ ...f, excludeListId: e.target.value }))}
+              >
+                <option value="">— no exclusion list —</option>
+                {lists.filter((l) => l.id !== form.listId).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label>Plain text body <span className="text-muted-foreground font-normal">(optional — recommended for deliverability)</span></Label>
+              {form.htmlBody && (
+                <button type="button" onClick={autoTextBody} className="text-xs text-muted-foreground hover:text-foreground">Auto-generate from HTML</button>
+              )}
+            </div>
+            <textarea
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[80px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              placeholder="Hi {{first_name}}, ..."
+              value={form.textBody}
+              onChange={(e) => setForm((f) => ({ ...f, textBody: e.target.value }))}
+            />
+          </div>
+          <div className="flex items-center gap-6">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" className="accent-foreground h-4 w-4" checked={form.trackOpens} onChange={(e) => setForm((f) => ({ ...f, trackOpens: e.target.checked }))} />
+              <span className="text-sm">Track opens</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" className="accent-foreground h-4 w-4" checked={form.trackClicks} onChange={(e) => setForm((f) => ({ ...f, trackClicks: e.target.checked }))} />
+              <span className="text-sm">Track clicks</span>
+            </label>
           </div>
           <div className="space-y-1.5">
             <Label className="flex items-center gap-1.5"><Clock className="h-3.5 w-3.5 text-muted-foreground" /> Schedule send <span className="text-muted-foreground font-normal">(optional — leave blank to save as draft)</span></Label>
@@ -527,7 +584,7 @@ function CampaignsPage() {
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => {
                             setEditingCampaign(c);
                             setCreating(false);
-                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, htmlBody: "", listId: "", segmentId: "", scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
+                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", trackOpens: c.trackOpens, trackClicks: c.trackClicks, scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
                           }}>
                             <Edit2 className="h-3 w-3" /> Edit
                           </Button>
