@@ -578,4 +578,91 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(200).send({ sequence_id: id, name: sequence.name, steps: result });
     },
   );
+
+  // GET /v1/analytics/inbox-providers
+  // Breakdown of delivery, open, bounce, and complaint rates grouped by recipient email domain.
+  // Normalises the top 6 consumer providers; everything else rolls into "Other (corporate/ISP)".
+  fastify.get(
+    '/analytics/inbox-providers',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const apiKeyId = request.apiKey.id;
+      const q = request.query as StatsQuery;
+      const where = buildWhere(apiKeyId, q);
+
+      // Map consumer domains to a display label; everything else is "Other"
+      const PROVIDER_MAP: Record<string, string> = {
+        'gmail.com':     'Gmail',
+        'googlemail.com':'Gmail',
+        'yahoo.com':     'Yahoo',
+        'yahoo.in':      'Yahoo',
+        'ymail.com':     'Yahoo',
+        'outlook.com':   'Outlook',
+        'hotmail.com':   'Outlook',
+        'live.com':      'Outlook',
+        'icloud.com':    'iCloud',
+        'me.com':        'iCloud',
+        'mac.com':       'iCloud',
+        'aol.com':       'AOL',
+        'protonmail.com':'ProtonMail',
+        'proton.me':     'ProtonMail',
+      };
+
+      // Pull delivery status + recipient address, then get tracking events for those messages
+      const messages = await prisma.sendMessage.findMany({ where, select: { id: true, to: true, status: true } });
+      const msgIds = messages.map((m) => m.id);
+      const trackingEvents = msgIds.length > 0
+        ? await prisma.trackingEvent.findMany({
+            where: { sendMessageId: { in: msgIds }, type: { in: ['open', 'click'] } },
+            select: { sendMessageId: true, type: true },
+          })
+        : [];
+
+      // Index tracking events by sendMessageId
+      const opensSet  = new Set<string>();
+      const clicksSet = new Set<string>();
+      for (const ev of trackingEvents) {
+        if (!ev.sendMessageId) continue;
+        if (ev.type === 'open')  opensSet.add(ev.sendMessageId);
+        if (ev.type === 'click') clicksSet.add(ev.sendMessageId);
+      }
+
+      type ProviderStats = { sent: number; delivered: number; bounced: number; complained: number; opens: number; clicks: number };
+      const byProvider = new Map<string, ProviderStats>();
+
+      const zero = (): ProviderStats => ({ sent: 0, delivered: 0, bounced: 0, complained: 0, opens: 0, clicks: 0 });
+
+      for (const msg of messages) {
+        const domainPart = (msg.to ?? '').split('@')[1]?.toLowerCase().trim() ?? '';
+        const provider = PROVIDER_MAP[domainPart] ?? 'Other (corporate / ISP)';
+        if (!byProvider.has(provider)) byProvider.set(provider, zero());
+        const s = byProvider.get(provider)!;
+        if (['sent', 'delivered', 'bounced', 'complained', 'failed'].includes(msg.status)) s.sent++;
+        if (msg.status === 'delivered')  s.delivered++;
+        if (msg.status === 'bounced')    s.bounced++;
+        if (msg.status === 'complained') s.complained++;
+        if (opensSet.has(msg.id))  s.opens++;
+        if (clicksSet.has(msg.id)) s.clicks++;
+      }
+
+      const data = Array.from(byProvider.entries())
+        .map(([provider, s]) => ({
+          provider,
+          sent:           s.sent,
+          delivered:      s.delivered,
+          bounced:        s.bounced,
+          complained:     s.complained,
+          opens:          s.opens,
+          clicks:         s.clicks,
+          delivery_rate:  s.sent > 0 ? +(s.delivered  / s.sent * 100).toFixed(1) : 0,
+          open_rate:      s.sent > 0 ? +(s.opens       / s.sent * 100).toFixed(1) : 0,
+          click_rate:     s.sent > 0 ? +(s.clicks      / s.sent * 100).toFixed(1) : 0,
+          bounce_rate:    s.sent > 0 ? +(s.bounced     / s.sent * 100).toFixed(2) : 0,
+          complaint_rate: s.sent > 0 ? +(s.complained  / s.sent * 100).toFixed(3) : 0,
+        }))
+        .sort((a, b) => b.sent - a.sent);
+
+      return reply.status(200).send({ data });
+    },
+  );
 }
