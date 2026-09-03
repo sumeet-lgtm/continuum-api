@@ -43,7 +43,7 @@ interface FinderResult {
   responseSignal: "high" | "medium" | "low";
 }
 
-type SearchPhase = "idle" | "running" | "succeeded" | "failed";
+type SearchPhase = "idle" | "searching" | "verifying" | "succeeded" | "failed";
 
 // Pipeline Labs enum values
 const SENIORITY_OPTIONS = [
@@ -197,22 +197,49 @@ function FinderPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [importing, setImporting] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const [verifyJobId, setVerifyJobId] = useState<string | null>(null);
+  const [verifyProgress, setVerifyProgress] = useState<{ done: number; total: number } | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Poll for status
+  // Poll for status — handles two phases: searching → verifying → succeeded
   useEffect(() => {
-    if (phase !== "running" || !runId) return;
+    if ((phase !== "searching" && phase !== "verifying") || !runId) return;
     pollRef.current = setInterval(async () => {
       try {
-        const data = await api.get<{ status: string }>(`/v1/finder/jobs/${runId}/status`);
-        if (data.status === "succeeded") {
-          clearInterval(pollRef.current!);
-          setPhase("succeeded");
-          fetchPage(runId, 0);
-        } else if (data.status === "failed") {
+        const data = await api.get<{
+          status: string;
+          phase?: string;
+          verifyJobId?: string;
+          progress?: number;
+          total?: number;
+        }>(`/v1/finder/jobs/${runId}/status`);
+
+        if (data.status === "failed") {
           clearInterval(pollRef.current!);
           setPhase("failed");
+          return;
+        }
+
+        if (data.phase === "searching") {
+          setPhase("searching");
+          return;
+        }
+
+        if (data.phase === "verifying") {
+          setPhase("verifying");
+          if (data.verifyJobId) setVerifyJobId(data.verifyJobId);
+          if (data.progress !== undefined && data.total) {
+            setVerifyProgress({ done: data.progress, total: data.total });
+          }
+          return;
+        }
+
+        if (data.status === "succeeded") {
+          clearInterval(pollRef.current!);
+          if (data.verifyJobId) setVerifyJobId(data.verifyJobId);
+          setPhase("succeeded");
+          fetchPage(runId, 0, data.verifyJobId ?? undefined);
         }
       } catch {
         clearInterval(pollRef.current!);
@@ -222,10 +249,11 @@ function FinderPage() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [phase, runId]);
 
-  async function fetchPage(rid: string, pg: number) {
+  async function fetchPage(rid: string, pg: number, vjId?: string) {
     try {
-      const data = await api.get<{ results: FinderResult[]; total: number }>(
-        `/v1/finder/jobs/${rid}/results?offset=${pg * PAGE_SIZE}&limit=${PAGE_SIZE}`,
+      const vjParam = vjId ? `&verifyJobId=${vjId}` : "";
+      const data = await api.get<{ results: FinderResult[]; total: number; rawTotal?: number; isVerified?: boolean }>(
+        `/v1/finder/jobs/${rid}/results?offset=${pg * PAGE_SIZE}&limit=${PAGE_SIZE}${vjParam}`,
       );
       setResults(data.results);
       setTotal(data.total);
@@ -238,11 +266,13 @@ function FinderPage() {
 
   async function handleSearch() {
     if (pollRef.current) clearInterval(pollRef.current);
-    setPhase("running");
+    setPhase("searching");
     setResults([]);
     setTotal(0);
     setPage(0);
     setSelected(new Set());
+    setVerifyJobId(null);
+    setVerifyProgress(null);
 
     // Build payload with only non-empty filters
     const payload: Record<string, unknown> = { totalResults: Math.min(totalResults, 2500) };
@@ -378,9 +408,11 @@ function FinderPage() {
           />
         </div>
 
-        <Button className="w-full" onClick={handleSearch} disabled={phase === "running"}>
-          {phase === "running" ? (
+        <Button className="w-full" onClick={handleSearch} disabled={phase === "searching" || phase === "verifying"}>
+          {phase === "searching" ? (
             <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Searching…</>
+          ) : phase === "verifying" ? (
+            <><ShieldCheck className="h-4 w-4 mr-2" /> Verifying…</>
           ) : (
             <><Search className="h-4 w-4 mr-2" /> Find People</>
           )}
@@ -397,11 +429,43 @@ function FinderPage() {
           </div>
         )}
 
-        {phase === "running" && (
+        {phase === "searching" && (
           <div className="flex flex-col items-center justify-center h-64 text-center rounded-xl border border-border bg-muted/5">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-3" />
             <p className="text-sm font-medium">Searching 250M+ contacts…</p>
             <p className="text-xs text-muted-foreground mt-1">Usually takes 1–2 minutes.</p>
+            <div className="mt-4 flex items-center gap-2">
+              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
+              <span className="text-xs text-muted-foreground">Step 1 of 2 — finding matches</span>
+            </div>
+          </div>
+        )}
+
+        {phase === "verifying" && (
+          <div className="flex flex-col items-center justify-center h-64 text-center rounded-xl border border-border bg-muted/5">
+            <ShieldCheck className="h-8 w-8 text-muted-foreground mb-3" />
+            <p className="text-sm font-medium">Verifying email deliverability…</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Running real SMTP checks on each address. Bounces never reach your list.
+            </p>
+            {verifyProgress && (
+              <div className="mt-4 w-48">
+                <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                  <span>{verifyProgress.done.toLocaleString()} checked</span>
+                  <span>{verifyProgress.total.toLocaleString()} total</span>
+                </div>
+                <div className="h-1 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full bg-foreground/60 rounded-full transition-all"
+                    style={{ width: `${Math.round((verifyProgress.done / verifyProgress.total) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            <div className="mt-4 flex items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">Step 2 of 2 — SMTP verification</span>
+            </div>
           </div>
         )}
 
@@ -425,19 +489,10 @@ function FinderPage() {
               </p>
               <div className="flex items-center gap-2">
                 {total > 0 && (
-                  <>
-                    <Button variant="outline" size="sm" onClick={handleVerify} disabled={verifying || importing}>
-                      {verifying ? (
-                        <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Verifying…</>
-                      ) : (
-                        <><ShieldCheck className="h-3.5 w-3.5 mr-1.5" />Verify all</>
-                      )}
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => handleImport(true)} disabled={importing || verifying}>
-                      <Download className="h-3.5 w-3.5 mr-1.5" />
-                      Import all {total.toLocaleString()}
-                    </Button>
-                  </>
+                  <Button variant="outline" size="sm" onClick={() => handleImport(true)} disabled={importing}>
+                    <Download className="h-3.5 w-3.5 mr-1.5" />
+                    Import all {total.toLocaleString()}
+                  </Button>
                 )}
                 {selected.size > 0 && (
                   <Button size="sm" onClick={() => handleImport(false)} disabled={importing}>
