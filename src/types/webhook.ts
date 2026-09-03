@@ -18,7 +18,10 @@ export type WebhookEventV2 =
   | 'email.delivered'
   | 'email.bounced'
   | 'email.complained'
-  | 'email.send_failed';
+  | 'email.send_failed'
+  // Campaign events
+  | 'campaign.sent'
+  | 'campaign.failed';
 
 // Legacy aliases (Phase 1-4 code paths still emit these)
 export type WebhookEventLegacy =
@@ -39,6 +42,8 @@ export const ALL_WEBHOOK_EVENTS: WebhookEvent[] = [
   'email.bounced',
   'email.complained',
   'email.send_failed',
+  'campaign.sent',
+  'campaign.failed',
   // Legacy aliases
   'verification_complete',
   'bulk_job_complete',
@@ -69,6 +74,8 @@ export type WebhookEventPayload =
   | EmailBouncedPayload
   | EmailComplainedPayload
   | EmailSendFailedPayload
+  | CampaignSentPayload
+  | CampaignFailedPayload
   // Legacy aliases
   | VerificationCompletePayload
   | BulkJobCompletePayload
@@ -255,6 +262,29 @@ export interface AttemptRecord {
   errorType:     string | null;
   errorMessage:  string | null;
   success:       boolean;
+}
+
+/** campaign.sent */
+export interface CampaignSentPayload {
+  event:            'campaign.sent';
+  campaign_id:      string;
+  name:             string;
+  subject:          string;
+  from_email:       string;
+  total_recipients: number;
+  sent_count:       number;
+  sent_at:          string | undefined;
+  apiVersion:       '2';
+}
+
+/** campaign.failed */
+export interface CampaignFailedPayload {
+  event:       'campaign.failed';
+  campaign_id: string;
+  name:        string;
+  subject:     string;
+  error:       string;
+  apiVersion:  '2';
 }
 
 // ─── Dispatch helper input ────────────────────────────────────────────────────

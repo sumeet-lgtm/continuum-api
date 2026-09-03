@@ -6,6 +6,7 @@ import { generateUnsubToken, generateUnsubHtml } from '../lib/unsubscribe.js';
 import { generateOpenToken, generateClickToken, injectTracking } from '../lib/tracking.js';
 import { processTemplate } from '../lib/spintax.js';
 import { logger } from '../lib/logger.js';
+import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
 
 interface CampaignJobData {
   campaignId: string;
@@ -192,10 +193,28 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     }
   }
 
-  await prisma.campaign.update({
+  const finalCampaign = await prisma.campaign.update({
     where: { id: campaignId },
     data: { status: 'sent', sentAt: new Date(), sentCount },
+    select: { id: true, name: true, subject: true, fromEmail: true, totalRecipients: true, sentCount: true, sentAt: true },
   });
+
+  void dispatchWebhook({
+    apiKeyId,
+    event: 'campaign.sent',
+    eventId: buildEventId('campaign.sent', campaignId),
+    payload: {
+      event: 'campaign.sent' as const,
+      campaign_id: finalCampaign.id,
+      name: finalCampaign.name,
+      subject: finalCampaign.subject,
+      from_email: finalCampaign.fromEmail,
+      total_recipients: finalCampaign.totalRecipients,
+      sent_count: finalCampaign.sentCount,
+      sent_at: finalCampaign.sentAt?.toISOString(),
+      apiVersion: '2' as const,
+    },
+  }).catch(() => {});
 
   logger.info({ campaignId, sentCount, total: validRecipients.length }, 'Campaign send complete');
 }
