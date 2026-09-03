@@ -255,22 +255,40 @@ function ScoreDial({ score }: { score: number }) {
   );
 }
 
+type InboxProvider = {
+  provider: string;
+  sent: number;
+  delivered: number;
+  bounced: number;
+  complained: number;
+  opens: number;
+  clicks: number;
+  delivery_rate: number;
+  open_rate: number;
+  click_rate: number;
+  bounce_rate: number;
+  complaint_rate: number;
+};
+
 function DeliverabilityPage() {
   const { primaryKey } = useAuth();
   const [health, setHealth] = useState<SendHealth | null>(null);
   const [domains, setDomains] = useState<Domain[]>([]);
+  const [providers, setProviders] = useState<InboxProvider[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     if (!primaryKey?.keyRaw) return;
     const dateFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const [healthRes, domainsRes] = await Promise.allSettled([
+    const [healthRes, domainsRes, providersRes] = await Promise.allSettled([
       api.withKey.get<SendHealth>(`/v1/analytics/sends?date_from=${dateFrom}`, primaryKey.keyRaw),
       api.withKey.get<{ data: Domain[] }>("/v1/domains", primaryKey.keyRaw),
+      api.withKey.get<{ data: InboxProvider[] }>(`/v1/analytics/inbox-providers?date_from=${dateFrom}`, primaryKey.keyRaw),
     ]);
     if (healthRes.status === "fulfilled") setHealth(healthRes.value);
     if (domainsRes.status === "fulfilled") setDomains(domainsRes.value.data ?? []);
+    if (providersRes.status === "fulfilled") setProviders(providersRes.value.data ?? []);
   }, [primaryKey]);
 
   useEffect(() => {
@@ -374,6 +392,47 @@ function DeliverabilityPage() {
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          )}
+
+          {/* Inbox provider breakdown */}
+          {providers.length > 0 && (
+            <div className="rounded-lg border border-border bg-card overflow-hidden">
+              <div className="px-5 py-3 border-b border-border flex items-center gap-2">
+                <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                <h2 className="text-sm font-medium">Inbox provider breakdown</h2>
+                <span className="text-xs text-muted-foreground ml-auto">Last 30 days</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/40">
+                      <th className="px-4 py-2 text-left font-medium text-muted-foreground">Provider</th>
+                      <th className="px-4 py-2 text-right font-medium text-muted-foreground tabular-nums">Sent</th>
+                      <th className="px-4 py-2 text-right font-medium text-muted-foreground">Delivery</th>
+                      <th className="px-4 py-2 text-right font-medium text-muted-foreground">Open</th>
+                      <th className="px-4 py-2 text-right font-medium text-muted-foreground">Click</th>
+                      <th className="px-4 py-2 text-right font-medium text-muted-foreground">Bounce</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {providers.slice(0, 8).map((p) => {
+                      const deliveryColor = p.delivery_rate >= 95 ? "text-[oklch(0.55_0.16_145)]" : p.delivery_rate >= 85 ? "text-[oklch(0.65_0.16_75)]" : "text-[oklch(0.58_0.22_27)]";
+                      const bounceColor = p.bounce_rate <= 2 ? "text-foreground" : p.bounce_rate <= 5 ? "text-[oklch(0.65_0.16_75)]" : "text-[oklch(0.58_0.22_27)]";
+                      return (
+                        <tr key={p.provider} className="border-b border-border last:border-0 hover:bg-muted/20">
+                          <td className="px-4 py-2.5 font-medium">{p.provider}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{p.sent.toLocaleString()}</td>
+                          <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${deliveryColor}`}>{p.delivery_rate}%</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{p.open_rate}%</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{p.click_rate}%</td>
+                          <td className={`px-4 py-2.5 text-right tabular-nums ${bounceColor}`}>{p.bounce_rate}%</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
