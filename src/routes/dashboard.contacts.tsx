@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Users, Trash2, Search, Upload, FileText, Loader2, X, Download, ChevronRight, Pencil, Save, Clock, Mail, MousePointer, Eye, AlertCircle, List, LogOut } from "lucide-react";
+import { Plus, Users, Trash2, Search, Upload, FileText, Loader2, X, Download, ChevronRight, Pencil, Save, Clock, Mail, MousePointer, Eye, AlertCircle, List, LogOut, Activity } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/contacts")({
   head: () => ({ meta: [{ title: "Contacts — Continuum API" }] }),
@@ -62,6 +62,8 @@ function ContactsPage() {
   const [newFieldVal, setNewFieldVal] = useState("");
   const [timeline, setTimeline] = useState<{ type: string; timestamp: string; data: Record<string, unknown> }[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
+  const [engagement, setEngagement] = useState<{ score: number; tier: string } | null>(null);
+  const [engagementLoading, setEngagementLoading] = useState(false);
   const [importPreview, setImportPreview] = useState<Record<string, string>[] | null>(null);
   const [importFile, setImportFile] = useState("");
   const [importing, setImporting] = useState(false);
@@ -210,6 +212,17 @@ function ContactsPage() {
       .finally(() => setTimelineLoading(false));
   };
 
+  const loadEngagement = (email: string) => {
+    if (!primaryKey?.keyRaw) return;
+    setEngagementLoading(true);
+    setEngagement(null);
+    api.withKey
+      .get<{ engagement_score: number; tier: string }>(`/v1/contacts/${encodeURIComponent(email)}/engagement`, primaryKey.keyRaw)
+      .then((r) => setEngagement({ score: r.engagement_score ?? 0, tier: r.tier ?? "unknown" }))
+      .catch(() => {})
+      .finally(() => setEngagementLoading(false));
+  };
+
   const exportContacts = async () => {
     if (!primaryKey?.keyRaw || !selectedList) return;
     setExporting(true);
@@ -237,7 +250,7 @@ function ContactsPage() {
     <div className="space-y-6">
       {/* Contact detail drawer */}
       {detailContact && (
-        <div className="fixed inset-0 z-50 flex justify-end" onClick={() => { setDetailContact(null); setEditingFields(false); setTimeline([]); }}>
+        <div className="fixed inset-0 z-50 flex justify-end" onClick={() => { setDetailContact(null); setEditingFields(false); setTimeline([]); setEngagement(null); }}>
           <div className="bg-black/40 absolute inset-0" />
           <div className="relative bg-card border-l border-border w-full max-w-sm h-full overflow-y-auto shadow-2xl flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-border sticky top-0 bg-card z-10">
@@ -245,12 +258,55 @@ function ContactsPage() {
                 <p className="font-medium text-sm">{[detailContact.firstName, detailContact.lastName].filter(Boolean).join(" ") || "—"}</p>
                 <p className="text-xs text-muted-foreground font-mono">{detailContact.email}</p>
               </div>
-              <button onClick={() => { setDetailContact(null); setEditingFields(false); setTimeline([]); }} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+              <button onClick={() => { setDetailContact(null); setEditingFields(false); setTimeline([]); setEngagement(null); }} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
             </div>
             <div className="px-5 py-4 space-y-5 flex-1">
               <div className="space-y-2">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Status</p>
                 <StatusBadge status={detailContact.status ?? "subscribed"} />
+              </div>
+              {/* Engagement score */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Activity className="h-3 w-3 text-muted-foreground" />
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Engagement</p>
+                </div>
+                {engagementLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+                  </div>
+                ) : engagement ? (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-2xl font-semibold tabular-nums">{engagement.score}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium capitalize ${
+                        ["champion", "loyal", "potential_loyalist"].includes(engagement.tier)
+                          ? "bg-[oklch(0.95_0.05_145)] text-[oklch(0.35_0.12_145)] border-[oklch(0.85_0.08_145)]"
+                          : ["at_risk", "hibernating"].includes(engagement.tier)
+                          ? "bg-[oklch(0.97_0.06_75)] text-[oklch(0.42_0.13_60)] border-[oklch(0.88_0.1_75)]"
+                          : "bg-muted text-muted-foreground border-border"
+                      }`}>
+                        {engagement.tier.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${engagement.score}%`,
+                          background: engagement.score >= 60
+                            ? "oklch(0.55 0.16 145)"
+                            : engagement.score >= 30
+                            ? "oklch(0.65 0.14 75)"
+                            : "oklch(0.7 0.1 0)",
+                        }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">Score out of 100, based on opens, clicks, and recency.</p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">No engagement data yet.</p>
+                )}
               </div>
               <div className="space-y-2">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Subscribed</p>
@@ -541,7 +597,7 @@ function ContactsPage() {
                   </td>
                   <td className="px-5 py-3">
                     <div className="flex gap-1 items-center">
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={() => { setDetailContact(c); setEditingFields(false); loadTimeline(c.email); }}>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={() => { setDetailContact(c); setEditingFields(false); loadTimeline(c.email); loadEngagement(c.email); }}>
                         <ChevronRight className="h-3.5 w-3.5" />
                       </Button>
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => unsubscribe(c.email)}>
