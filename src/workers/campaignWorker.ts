@@ -77,9 +77,26 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   const suppressedSet = new Set(suppressions.map(s => s.email));
   const validRecipients = recipients.filter(r => !suppressedSet.has(r.email));
 
+  // Assign A/B variants before creating recipient rows (50/50 random split)
+  const isABTest = !!campaign.subjectB;
+  const recipientVariants = new Map<string, 'a' | 'b'>();
+  if (isABTest) {
+    // Fisher-Yates shuffle then split for balanced 50/50
+    const shuffled = [...validRecipients].sort(() => Math.random() - 0.5);
+    const half = Math.ceil(shuffled.length / 2);
+    shuffled.forEach((r, idx) => {
+      recipientVariants.set(r.email, idx < half ? 'a' : 'b');
+    });
+  }
+
   // Create recipient rows
   await prisma.campaignRecipient.createMany({
-    data: validRecipients.map(r => ({ campaignId, email: r.email, status: 'pending' })),
+    data: validRecipients.map(r => ({
+      campaignId,
+      email: r.email,
+      status: 'pending',
+      variant: recipientVariants.get(r.email) ?? 'a',
+    })),
     skipDuplicates: true,
   });
 
@@ -122,6 +139,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
 
     await Promise.allSettled(chunk.map(async recipient => {
       try {
+        const recipientVariant = recipientVariants.get(recipient.email) ?? 'a';
         const vars = {
           first_name: recipient.firstName ?? 'there',
           last_name: recipient.lastName ?? '',
@@ -129,7 +147,8 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
           unsubscribe_url: `https://api.continuumapi.com/v1/unsubscribe?token=${generateUnsubToken(recipient.email, apiKeyId)}`,
         };
 
-        const subject = processTemplate(campaign.subject, vars);
+        const rawSubject = (isABTest && recipientVariant === 'b' && campaign.subjectB) ? campaign.subjectB : campaign.subject;
+        const subject = processTemplate(rawSubject, vars);
         let htmlBody = processTemplate(campaign.htmlBody, vars);
         const textBody = campaign.textBody ? processTemplate(campaign.textBody, vars) : undefined;
 
@@ -164,7 +183,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
 
         await prisma.campaignRecipient.updateMany({
           where: { campaignId, email: recipient.email },
-          data: { status: 'sent', sesMessageId, sentAt: new Date() },
+          data: { status: 'sent', sesMessageId, sentAt: new Date(), variant: recipientVariant },
         });
 
         // Also register this send as a SendMessage row — the SES bounce/

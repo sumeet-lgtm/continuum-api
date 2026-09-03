@@ -55,9 +55,15 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
 
           // Increment campaign open count for real-time health stats
           if (campaignId) {
+            // Check variant to update the right counter (A or B)
+            const cr = await prisma.campaignRecipient.findFirst({
+              where: { campaignId, email: msg.to },
+              select: { variant: true },
+            }).catch(() => null);
+            const isVariantB = cr?.variant === 'b';
             await prisma.campaign.update({
               where: { id: campaignId },
-              data: { openCount: { increment: 1 } },
+              data: isVariantB ? { openCountB: { increment: 1 } } : { openCount: { increment: 1 } },
             }).catch(() => { /* non-fatal */ });
           }
         }
@@ -111,9 +117,14 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
           }).catch(() => { /* ignore */ });
 
           if (campaignId) {
+            const crClick = await prisma.campaignRecipient.findFirst({
+              where: { campaignId, email: msg.to },
+              select: { variant: true },
+            }).catch(() => null);
+            const isVariantBClick = crClick?.variant === 'b';
             await prisma.campaign.update({
               where: { id: campaignId },
-              data: { clickCount: { increment: 1 } },
+              data: isVariantBClick ? { clickCountB: { increment: 1 } } : { clickCount: { increment: 1 } },
             }).catch(() => { /* non-fatal */ });
           }
         }

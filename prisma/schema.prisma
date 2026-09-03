@@ -770,6 +770,9 @@ model Campaign {
   clickCount     Int       @default(0)
   bounceCount    Int       @default(0)
   complaintCount Int       @default(0)
+  subjectB       String?                       // A/B test: variant B subject line
+  openCountB     Int       @default(0)         // A/B test: opens from B variant
+  clickCountB    Int       @default(0)         // A/B test: clicks from B variant
   sendDays       String[]  @default(["monday","tuesday","wednesday","thursday","friday"])
   sendStartHour  Int       @default(8)
   sendEndHour    Int       @default(17)
@@ -792,6 +795,7 @@ model CampaignRecipient {
   contactId    String?
   email        String
   status       String    @default("pending") // pending|sent|delivered|bounced|complained|failed
+  variant      String    @default("a")       // a|b for A/B test campaigns
   sesMessageId String?
   sentAt       DateTime?
   deliveredAt  DateTime?

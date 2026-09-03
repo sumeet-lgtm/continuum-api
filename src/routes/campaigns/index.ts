@@ -19,6 +19,7 @@ const createSchema = z.object({
   html_body: z.string().min(1),
   text_body: z.string().optional(),
   preheader: z.string().max(200).optional(),
+  subject_b: z.string().min(1).max(500).optional(),
   list_ids: z.array(z.string()).default([]),
   segment_ids: z.array(z.string()).optional(),
   exclude_list_ids: z.array(z.string()).optional(),
@@ -34,13 +35,14 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
     const apiKeyId = request.apiKey.id;
-    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at } = parsed.data;
+    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at } = parsed.data;
 
     const campaign = await prisma.campaign.create({
       data: {
         apiKeyId, name, fromName: from_name, fromEmail: from_email,
         domainId: domain_id ?? null, replyTo: reply_to ?? null,
         subject, htmlBody: html_body, textBody: text_body ?? null, preheader: preheader ?? null,
+        subjectB: subject_b ?? null,
         listIds: list_ids, segmentIds: segment_ids ?? [], excludeListIds: exclude_list_ids ?? [],
         trackOpens: track_opens, trackClicks: track_clicks,
         scheduledAt: scheduled_at ? new Date(scheduled_at) : null,
@@ -63,7 +65,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
         where: { apiKeyId, ...(q.status ? { status: q.status } : {}) },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit, take: limit,
-        select: { id: true, name: true, subject: true, fromName: true, fromEmail: true, status: true, totalRecipients: true, sentCount: true, openCount: true, clickCount: true, bounceCount: true, complaintCount: true, trackOpens: true, trackClicks: true, createdAt: true, scheduledAt: true, sentAt: true },
+        select: { id: true, name: true, subject: true, subjectB: true, fromName: true, fromEmail: true, status: true, totalRecipients: true, sentCount: true, openCount: true, clickCount: true, openCountB: true, clickCountB: true, bounceCount: true, complaintCount: true, trackOpens: true, trackClicks: true, createdAt: true, scheduledAt: true, sentAt: true },
       }),
       prisma.campaign.count({ where: { apiKeyId, ...(q.status ? { status: q.status } : {}) } }),
     ]);
@@ -90,7 +92,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = createSchema.partial().safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at } = parsed.data;
+    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at } = parsed.data;
 
     const updated = await prisma.campaign.update({
       where: { id },
@@ -100,6 +102,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
         ...(reply_to !== undefined && { replyTo: reply_to }), ...(subject && { subject }),
         ...(html_body && { htmlBody: html_body }), ...(text_body !== undefined && { textBody: text_body }),
         ...(preheader !== undefined && { preheader: preheader ?? null }),
+        ...(subject_b !== undefined && { subjectB: subject_b ?? null }),
         ...(list_ids && { listIds: list_ids }), ...(segment_ids && { segmentIds: segment_ids }),
         ...(exclude_list_ids && { excludeListIds: exclude_list_ids }),
         ...(track_opens !== undefined && { trackOpens: track_opens }),
