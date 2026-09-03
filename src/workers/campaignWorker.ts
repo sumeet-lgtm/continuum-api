@@ -22,16 +22,17 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
 
   // Resolve all recipient emails from list_ids
   const listIds = campaign.listIds as string[];
+  const segmentIds = campaign.segmentIds as string[];
   const excludeListIds = campaign.excludeListIds as string[];
 
   // Get all subscribed contacts from lists
   const memberships = await prisma.contactListMembership.findMany({
     where: {
-      listId: { in: listIds },
+      ...(listIds.length > 0 ? { listId: { in: listIds } } : {}),
       status: 'subscribed',
       ...(excludeListIds.length > 0 ? { NOT: { listId: { in: excludeListIds } } } : {}),
     },
-    include: { contact: { select: { email: true, firstName: true, lastName: true } } },
+    include: { contact: { select: { email: true, firstName: true, lastName: true, customFields: true } } },
   });
 
   // Deduplicate by email
@@ -41,6 +42,29 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     if (!seen.has(m.contact.email)) {
       seen.add(m.contact.email);
       recipients.push(m.contact);
+    }
+  }
+
+  // Resolve segment recipients and merge
+  if (segmentIds.length > 0) {
+    const segments = await prisma.segment.findMany({
+      where: { id: { in: segmentIds }, apiKeyId },
+      select: { id: true, listId: true, filterRules: true },
+    });
+    for (const seg of segments) {
+      if (!seg.listId) continue;
+      const segMemberships = await prisma.contactListMembership.findMany({
+        where: { listId: seg.listId, status: 'subscribed' },
+        include: { contact: { select: { email: true, firstName: true, lastName: true, customFields: true } } },
+      });
+      const rules = seg.filterRules as Array<{ field: string; operator: string; value: string }>;
+      for (const m of segMemberships) {
+        if (seen.has(m.contact.email)) continue;
+        if (matchSegmentRules(m.contact, rules)) {
+          seen.add(m.contact.email);
+          recipients.push(m.contact);
+        }
+      }
     }
   }
 
@@ -174,6 +198,28 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   });
 
   logger.info({ campaignId, sentCount, total: validRecipients.length }, 'Campaign send complete');
+}
+
+function matchSegmentRules(contact: { email: string; firstName: string | null; lastName: string | null; customFields?: unknown }, rules: Array<{ field: string; operator: string; value: string }>): boolean {
+  return rules.every(rule => {
+    let fieldVal: string;
+    if      (rule.field === 'email')      fieldVal = contact.email;
+    else if (rule.field === 'first_name') fieldVal = contact.firstName ?? '';
+    else if (rule.field === 'last_name')  fieldVal = contact.lastName ?? '';
+    else if (rule.field.startsWith('custom.')) {
+      const key = rule.field.slice(7);
+      const cf = contact.customFields as Record<string, unknown> | null | undefined;
+      fieldVal = cf ? String(cf[key] ?? '') : '';
+    } else fieldVal = '';
+
+    switch (rule.operator) {
+      case 'equals':      return fieldVal.toLowerCase() === rule.value.toLowerCase();
+      case 'not_equals':  return fieldVal.toLowerCase() !== rule.value.toLowerCase();
+      case 'contains':    return fieldVal.toLowerCase().includes(rule.value.toLowerCase());
+      case 'starts_with': return fieldVal.toLowerCase().startsWith(rule.value.toLowerCase());
+      default:            return true;
+    }
+  });
 }
 
 export function startCampaignWorker(): Worker {
