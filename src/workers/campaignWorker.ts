@@ -178,6 +178,11 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
           data: {
             apiKeyId, to: recipient.email, from: fromAddress, subject,
             sesMessageId, status: 'sent', sentAt: new Date(),
+            // Store the tracking token so the open/click pixel can find this
+            // row — the SendMessage id is a cuid and the tracking token uses
+            // campaignId_email, so without this the campaign open/click
+            // counts can never be incremented.
+            trackingToken: trackingId,
           },
         }).catch((err) => {
           logger.warn({ err, email: recipient.email, campaignId }, 'Failed to register campaign send for bounce tracking (non-fatal)');

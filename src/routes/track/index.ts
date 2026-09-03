@@ -17,28 +17,49 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
       const payload = verifyOpenToken(token);
 
       if (payload) {
-        const msg = await prisma.sendMessage.findUnique({
+        // First try by primary key (transactional sends), then by trackingToken
+        // (campaign sends use campaignId_email as the tracking ID stored in
+        // trackingToken, not the row's cuid id).
+        let msg = await prisma.sendMessage.findUnique({
           where: { id: payload.sendMessageId },
-          select: { id: true, to: true, apiKeyId: true },
+          select: { id: true, to: true, apiKeyId: true, trackingToken: true },
         });
+        if (!msg) {
+          msg = await prisma.sendMessage.findUnique({
+            where: { trackingToken: payload.sendMessageId },
+            select: { id: true, to: true, apiKeyId: true, trackingToken: true },
+          });
+        }
 
         if (msg) {
-          // Create open event (one per open — analytics keep count)
+          // Extract campaignId from trackingToken (format: ${campaignId}_${email})
+          const campaignId = msg.trackingToken?.includes('_')
+            ? msg.trackingToken.split('_')[0]
+            : null;
+
           await prisma.trackingEvent.create({
             data: {
               sendMessageId: msg.id,
               email: msg.to,
               type: 'open',
+              ...(campaignId ? { campaignId } : {}),
               userAgent: request.headers['user-agent'] ?? null,
               ip: request.ip ?? null,
             },
           }).catch(() => { /* ignore if already logged */ });
 
-          // Update message status to opened
           await prisma.sendMessage.update({
             where: { id: msg.id },
             data: { status: 'opened' as never },
           }).catch(() => { /* ignore */ });
+
+          // Increment campaign open count for real-time health stats
+          if (campaignId) {
+            await prisma.campaign.update({
+              where: { id: campaignId },
+              data: { openCount: { increment: 1 } },
+            }).catch(() => { /* non-fatal */ });
+          }
         }
       }
 
@@ -61,22 +82,40 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
       const payload = verifyClickToken(token);
 
       if (payload) {
-        const msg = await prisma.sendMessage.findUnique({
+        let msg = await prisma.sendMessage.findUnique({
           where: { id: payload.sendMessageId },
-          select: { id: true, to: true },
+          select: { id: true, to: true, trackingToken: true },
         });
+        if (!msg) {
+          msg = await prisma.sendMessage.findUnique({
+            where: { trackingToken: payload.sendMessageId },
+            select: { id: true, to: true, trackingToken: true },
+          });
+        }
 
         if (msg) {
+          const campaignId = msg.trackingToken?.includes('_')
+            ? msg.trackingToken.split('_')[0]
+            : null;
+
           await prisma.trackingEvent.create({
             data: {
               sendMessageId: msg.id,
               email: msg.to,
               type: 'click',
               linkUrl: payload.url,
+              ...(campaignId ? { campaignId } : {}),
               userAgent: request.headers['user-agent'] ?? null,
               ip: request.ip ?? null,
             },
           }).catch(() => { /* ignore */ });
+
+          if (campaignId) {
+            await prisma.campaign.update({
+              where: { id: campaignId },
+              data: { clickCount: { increment: 1 } },
+            }).catch(() => { /* non-fatal */ });
+          }
         }
 
         return reply.status(302).header('Location', payload.url).send();
