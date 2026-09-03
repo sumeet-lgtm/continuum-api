@@ -942,9 +942,11 @@ model SequenceStep {
   stepOrder  Int
   delayDays  Int      @default(0)
   delayHours Int      @default(0)
-  subject    String
-  htmlBody   String
+  type       String   @default("email") // email | call | linkedin | task
+  subject    String   @default("")
+  htmlBody   String   @default("")
   textBody   String?
+  taskNote   String?  // instructions for manual steps (call/linkedin/task)
   condition  String   @default("always") // always|if_not_opened|if_opened|if_not_clicked|if_not_replied
   createdAt  DateTime @default(now())
 

@@ -34,12 +34,21 @@ const subsequenceSchema = z.object({
 });
 
 const stepSchema = z.object({
+  type: z.enum(['email', 'call', 'linkedin', 'task']).default('email'),
   delay_days: z.coerce.number().int().min(0).max(365),
   delay_hours: z.coerce.number().int().min(0).max(23).default(0),
-  subject: z.string().min(1).max(500),
-  html_body: z.string().min(1),
+  subject: z.string().max(500).optional(),
+  html_body: z.string().optional(),
   text_body: z.string().optional(),
+  task_note: z.string().max(2000).optional(),
   condition: z.enum(['always', 'if_not_opened', 'if_opened', 'if_not_clicked', 'if_not_replied']).default('always'),
+}).superRefine((data, ctx) => {
+  if (data.type === 'email') {
+    if (!data.subject || data.subject.trim() === '') ctx.addIssue({ code: 'custom', path: ['subject'], message: 'Subject is required for email steps.' });
+    if (!data.html_body || data.html_body.trim() === '') ctx.addIssue({ code: 'custom', path: ['html_body'], message: 'Body is required for email steps.' });
+  } else {
+    if (!data.task_note || data.task_note.trim() === '') ctx.addIssue({ code: 'custom', path: ['task_note'], message: `Instructions are required for ${data.type} steps.` });
+  }
 });
 
 const enrollSchema = z.object({
@@ -148,9 +157,13 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const step = await prisma.sequenceStep.create({
       data: {
         sequenceId: id, stepOrder,
+        type: parsed.data.type,
         delayDays: parsed.data.delay_days, delayHours: parsed.data.delay_hours,
-        subject: parsed.data.subject, htmlBody: parsed.data.html_body,
-        textBody: parsed.data.text_body ?? null, condition: parsed.data.condition,
+        subject: parsed.data.subject ?? '',
+        htmlBody: parsed.data.html_body ?? '',
+        textBody: parsed.data.text_body ?? null,
+        taskNote: parsed.data.task_note ?? null,
+        condition: parsed.data.condition,
       },
     });
     return reply.status(201).send(step);
@@ -179,15 +192,17 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = patchSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const { delay_days, delay_hours, subject, html_body, text_body, condition } = parsed.data;
+    const { type, delay_days, delay_hours, subject, html_body, text_body, task_note, condition } = parsed.data;
     const updated = await prisma.sequenceStep.update({
       where: { id: stepId },
       data: {
+        ...(type !== undefined && { type }),
         ...(delay_days !== undefined && { delayDays: delay_days }),
         ...(delay_hours !== undefined && { delayHours: delay_hours }),
         ...(subject !== undefined && { subject }),
         ...(html_body !== undefined && { htmlBody: html_body }),
         ...(text_body !== undefined && { textBody: text_body }),
+        ...(task_note !== undefined && { taskNote: task_note }),
         ...(condition !== undefined && { condition }),
       },
     });

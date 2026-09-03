@@ -285,6 +285,116 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  // POST /v1/ai/generate-sequence — AI brief → full multi-channel sequence plan (Growth+ plan)
+  fastify.post(
+    '/ai/generate-sequence',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!config.AI_PERSONALIZATION_ENABLED) {
+        throw Errors.forbidden('AI features are not enabled on this account.');
+      }
+      const plan: string = (request.apiKey as { plan?: string }).plan ?? 'free';
+      if (!GROWTH_PLANS.has(plan)) {
+        throw Errors.forbidden('AI sequence generation requires a Growth or Scale plan.');
+      }
+      const anthropicKey = config.ANTHROPIC_API_KEY;
+      if (!anthropicKey) throw Errors.serviceUnavailable('AI service temporarily unavailable.');
+
+      const seqGenSchema = z.object({
+        icp_description: z.string().min(10).max(1000),
+        goal: z.string().min(5).max(500),
+        tone: z.enum(['professional', 'casual', 'friendly', 'direct']).default('professional'),
+        num_steps: z.number().int().min(2).max(10).default(5),
+        allowed_step_types: z.array(z.enum(['email', 'call', 'linkedin', 'task'])).default(['email', 'call', 'linkedin']),
+        sender_name: z.string().optional(),
+        sender_company: z.string().optional(),
+        sender_product: z.string().optional(),
+      });
+
+      const parsed = seqGenSchema.safeParse(request.body);
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+      const { icp_description, goal, tone, num_steps, allowed_step_types, sender_name, sender_company, sender_product } = parsed.data;
+
+      const senderCtx = [sender_name, sender_product, sender_company].filter(Boolean).join(' at ') || 'the sender';
+      const typesAllowed = allowed_step_types.join(', ');
+
+      const system = `You are an expert outbound sales strategist. Design multi-channel sequences that convert. Tone: ${tone}. Be specific, not generic. Mix channel types for maximum engagement.`;
+
+      const userPrompt = `Design a ${num_steps}-step outbound sequence.
+
+Target ICP: ${icp_description}
+Goal: ${goal}
+Sender: ${senderCtx}
+Allowed step types: ${typesAllowed}
+
+Rules:
+- Mix channels intelligently (don't just send emails)
+- Delay days should escalate: first step=0, then space out realistically (1-3 days between early steps, 5-7 between later ones)
+- Email steps MUST have subject and html_body (proper HTML, no markdown)
+- Call/LinkedIn/Task steps MUST have task_note with specific instructions (what to say/do)
+- Each step should have a brief rationale explaining why this channel/timing
+
+Return ONLY valid JSON in this exact format:
+{
+  "sequence_name": "Sequence name based on goal",
+  "steps": [
+    {
+      "step_order": 1,
+      "type": "email|call|linkedin|task",
+      "delay_days": 0,
+      "delay_hours": 0,
+      "subject": "Email subject (email steps only)",
+      "html_body": "<p>Full HTML email body (email steps only)</p>",
+      "task_note": "Specific instructions for manual step (non-email steps only)",
+      "condition": "always",
+      "rationale": "Why this step at this point"
+    }
+  ]
+}`;
+
+      try {
+        const resp = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': anthropicKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 4000,
+            system,
+            messages: [{ role: 'user', content: userPrompt }],
+          }),
+        });
+
+        if (!resp.ok) throw new Error(`Anthropic error: ${resp.status}`);
+        const data = await resp.json() as { content?: Array<{ text?: string }> };
+        const text = data.content?.[0]?.text?.trim() ?? '{}';
+        const stripped = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+
+        let result: { sequence_name?: string; steps?: unknown[] };
+        try {
+          result = jsonMatch ? JSON.parse(jsonMatch[0]) as { sequence_name?: string; steps?: unknown[] } : { steps: [] };
+        } catch {
+          result = { sequence_name: 'Generated Sequence', steps: [] };
+        }
+
+        return reply.status(200).send({
+          sequence_name: result.sequence_name ?? 'Generated Sequence',
+          steps: result.steps ?? [],
+          model: 'claude-haiku-4-5-20251001',
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'generation failed';
+        logger.error({ err: msg }, 'AI generate-sequence failed');
+        throw Errors.serviceUnavailable('AI sequence generation failed. Please try again.');
+      }
+    },
+  );
+
   // POST /v1/ai/detect-esp — detect email service provider for a list of email addresses
   fastify.post(
     '/ai/detect-esp',
