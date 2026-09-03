@@ -1,19 +1,25 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Trash2, Edit2, FileText, Eye, X, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Trash2, Edit2, FileText, Eye, X, ChevronDown, ChevronUp, History, RotateCcw, Check } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/templates")({
   head: () => ({ meta: [{ title: "Templates — Continuum API" }] }),
   component: TemplatesPage,
 });
 
-interface Template { id: string; name: string; subject: string; htmlBody?: string; createdAt: string; }
+interface Template { id: string; name: string; subject: string; htmlBody?: string; createdAt: string; updatedAt?: string; }
+interface TemplateVersion { id: string; version: number; name: string; subject: string; savedAt: string; savedBy?: string; }
+interface TemplateVersionDetail extends TemplateVersion { htmlBody: string; textBody?: string; }
+
+function fmt(iso: string) {
+  return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
 
 function extractVars(html: string, subject: string): string[] {
   const matches = new Set<string>();
@@ -30,7 +36,175 @@ function applyVars(text: string, vars: Record<string, string>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? `{{${k}}}`);
 }
 
-function TemplatePreviewModal({ template, onClose }: { template: { id: string; name: string; subject: string; htmlBody?: string }; onClose: () => void }) {
+// ── Version History Modal ──────────────────────────────────────────────────────
+
+function VersionHistoryModal({
+  template,
+  apiKey,
+  onClose,
+  onRestored,
+}: {
+  template: Template;
+  apiKey: string;
+  onClose: () => void;
+  onRestored: () => void;
+}) {
+  const [versions, setVersions] = useState<TemplateVersion[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<TemplateVersionDetail | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [restoring, setRestoring] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`https://api.continuumapi.com/v1/templates/${template.id}/versions`, {
+      headers: { "X-API-Key": apiKey },
+    })
+      .then((r) => r.json())
+      .then((data) => setVersions(data.data ?? []))
+      .catch(() => setVersions([]))
+      .finally(() => setLoading(false));
+  }, [template.id, apiKey]);
+
+  const loadDetail = useCallback(async (v: TemplateVersion) => {
+    if (selected?.id === v.id) { setSelected(null); return; }
+    setLoadingDetail(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/templates/${template.id}/versions/${v.id}`, {
+        headers: { "X-API-Key": apiKey },
+      });
+      const data = await res.json() as TemplateVersionDetail;
+      setSelected(data);
+    } catch {
+      toast.error("Failed to load version");
+    } finally {
+      setLoadingDetail(false);
+    }
+  }, [selected, template.id, apiKey]);
+
+  const restore = async (versionId: string, versionNum: number) => {
+    if (!confirm(`Restore version ${versionNum}? The current template will be saved as a new version.`)) return;
+    setRestoring(versionId);
+    try {
+      await fetch(`https://api.continuumapi.com/v1/templates/${template.id}/versions/${versionId}/restore`, {
+        method: "POST",
+        headers: { "X-API-Key": apiKey },
+      });
+      toast.success(`Restored to version ${versionNum}`);
+      onRestored();
+      onClose();
+    } catch {
+      toast.error("Failed to restore version");
+    } finally {
+      setRestoring(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="rounded-lg border border-border bg-card w-full max-w-2xl shadow-xl flex flex-col max-h-[85vh]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+          <div>
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <History className="h-4 w-4" /> Version History
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">{template.name}</p>
+          </div>
+          <button onClick={onClose} className="rounded p-1.5 hover:bg-muted transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto flex-1">
+          {loading ? (
+            <div className="p-8 text-center text-sm text-muted-foreground">Loading versions…</div>
+          ) : versions.length === 0 ? (
+            <div className="p-8 text-center">
+              <History className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
+              <p className="text-sm text-muted-foreground">No previous versions yet.</p>
+              <p className="text-xs text-muted-foreground mt-1">Versions are saved automatically each time you edit this template.</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {versions.map((v) => (
+                <div key={v.id} className="px-5 py-3">
+                  <button
+                    className="w-full flex items-center justify-between text-left hover:text-foreground transition-colors group"
+                    onClick={() => void loadDetail(v)}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] font-mono bg-foreground/10 text-foreground px-1.5 py-0.5 rounded">
+                        v{v.version}
+                      </span>
+                      <div>
+                        <p className="text-sm font-medium">{v.name}</p>
+                        <p className="text-xs text-muted-foreground truncate max-w-xs">{v.subject}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 ml-4 shrink-0">
+                      <div className="text-right">
+                        <p className="text-xs text-muted-foreground">{fmt(v.savedAt)}</p>
+                        {v.savedBy && <p className="text-[10px] text-muted-foreground/70">{v.savedBy}</p>}
+                      </div>
+                      {selected?.id === v.id ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    </div>
+                  </button>
+
+                  {selected?.id === v.id && (
+                    <div className="mt-3 space-y-3">
+                      {loadingDetail ? (
+                        <div className="text-xs text-muted-foreground">Loading…</div>
+                      ) : (
+                        <>
+                          <div className="rounded-md border border-border overflow-hidden bg-background">
+                            <div className="px-3 py-2 border-b border-border bg-muted/40 flex items-center justify-between">
+                              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Subject</span>
+                            </div>
+                            <div className="px-3 py-2 text-sm">{selected.subject}</div>
+                          </div>
+                          <div className="rounded-md border border-border overflow-hidden">
+                            <div className="px-3 py-2 border-b border-border bg-muted/40">
+                              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">HTML Preview</span>
+                            </div>
+                            <iframe
+                              srcDoc={selected.htmlBody || "<p style='font-family:sans-serif;color:#888;padding:1rem'>No HTML body</p>"}
+                              sandbox="allow-same-origin"
+                              className="w-full border-0 bg-white"
+                              style={{ height: 200 }}
+                              title={`v${v.version} preview`}
+                            />
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs gap-1.5"
+                              onClick={() => void restore(v.id, v.version)}
+                              disabled={restoring === v.id}
+                            >
+                              {restoring === v.id ? (
+                                <><RotateCcw className="h-3.5 w-3.5 animate-spin" /> Restoring…</>
+                              ) : (
+                                <><RotateCcw className="h-3.5 w-3.5" /> Restore this version</>
+                              )}
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Preview Modal ──────────────────────────────────────────────────────────────
+
+function TemplatePreviewModal({ template, onClose }: { template: Template; onClose: () => void }) {
   const { primaryKey } = useAuth();
   const html = template.htmlBody ?? "";
   const vars = extractVars(html, template.subject);
@@ -50,21 +224,12 @@ function TemplatePreviewModal({ template, onClose }: { template: { id: string; n
       await fetch("https://api.continuumapi.com/v1/send", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
-        body: JSON.stringify({
-          to: [testEmail],
-          from: testFrom,
-          template_id: template.id,
-          variables: values,
-          test: false,
-        }),
+        body: JSON.stringify({ to: [testEmail], from: testFrom, template_id: template.id, variables: values }),
       });
       toast.success(`Test email sent to ${testEmail}`);
       setShowTest(false);
-    } catch (e: unknown) {
-      toast.error((e as Error).message ?? "Failed to send");
-    } finally {
-      setSendingTest(false);
-    }
+    } catch (e: unknown) { toast.error((e as Error).message ?? "Failed to send"); }
+    finally { setSendingTest(false); }
   };
 
   const renderedHtml = applyVars(html, values);
@@ -72,7 +237,6 @@ function TemplatePreviewModal({ template, onClose }: { template: { id: string; n
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm">
-      {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-card shrink-0">
         <div className="min-w-0">
           <p className="text-sm font-medium truncate">{template.name}</p>
@@ -80,8 +244,7 @@ function TemplatePreviewModal({ template, onClose }: { template: { id: string; n
         </div>
         <div className="flex items-center gap-2 ml-4 shrink-0">
           <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => setShowTest((v) => !v)}>
-            <Eye className="h-3.5 w-3.5" />
-            Send test
+            <Eye className="h-3.5 w-3.5" /> Send test
           </Button>
           <button onClick={onClose} className="rounded p-1.5 hover:bg-muted transition-colors">
             <X className="h-4 w-4" />
@@ -89,7 +252,6 @@ function TemplatePreviewModal({ template, onClose }: { template: { id: string; n
         </div>
       </div>
 
-      {/* Send test panel */}
       {showTest && (
         <div className="shrink-0 border-b border-border bg-card px-5 py-4 space-y-3">
           <p className="text-xs font-medium">Send a test email with the current variables</p>
@@ -112,7 +274,6 @@ function TemplatePreviewModal({ template, onClose }: { template: { id: string; n
         </div>
       )}
 
-      {/* Variable panel */}
       {vars.length > 0 && (
         <div className="shrink-0 border-b border-border bg-muted/30">
           <button
@@ -130,12 +291,7 @@ function TemplatePreviewModal({ template, onClose }: { template: { id: string; n
               {vars.map((v) => (
                 <div key={v} className="space-y-1">
                   <label className="text-[10px] text-muted-foreground font-mono">{`{{${v}}}`}</label>
-                  <Input
-                    className="h-7 text-xs"
-                    placeholder={v}
-                    value={values[v] ?? ""}
-                    onChange={(e) => setValues((prev) => ({ ...prev, [v]: e.target.value }))}
-                  />
+                  <Input className="h-7 text-xs" placeholder={v} value={values[v] ?? ""} onChange={(e) => setValues((prev) => ({ ...prev, [v]: e.target.value }))} />
                 </div>
               ))}
             </div>
@@ -143,7 +299,6 @@ function TemplatePreviewModal({ template, onClose }: { template: { id: string; n
         </div>
       )}
 
-      {/* Preview */}
       <div className="flex-1 overflow-hidden bg-zinc-50 dark:bg-zinc-900 flex justify-center py-4">
         <div className="w-full max-w-2xl rounded-md shadow-sm overflow-hidden border border-border">
           <iframe
@@ -160,6 +315,8 @@ function TemplatePreviewModal({ template, onClose }: { template: { id: string; n
   );
 }
 
+// ── Main Page ──────────────────────────────────────────────────────────────────
+
 function TemplatesPage() {
   const { primaryKey } = useAuth();
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -171,17 +328,20 @@ function TemplatesPage() {
   const [editForm, setEditForm] = useState({ name: "", subject: "", html: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
+  const [historyTemplate, setHistoryTemplate] = useState<Template | null>(null);
 
-  const load = () => {
+  const load = useCallback(() => {
     if (!primaryKey?.keyRaw) return;
-    api.withKey
-      .get<{ templates: Template[] }>("/v1/templates", primaryKey.keyRaw)
-      .then((r) => setTemplates(r.templates ?? []))
+    fetch("https://api.continuumapi.com/v1/templates", {
+      headers: { "X-API-Key": primaryKey.keyRaw },
+    })
+      .then((r) => r.json())
+      .then((data) => setTemplates(data.data ?? data.templates ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
-  };
+  }, [primaryKey?.keyRaw]);
 
-  useEffect(() => { load(); }, [primaryKey]);
+  useEffect(() => { load(); }, [load]);
 
   const create = async () => {
     if (!primaryKey?.keyRaw) return;
@@ -192,11 +352,8 @@ function TemplatesPage() {
       setCreating(false);
       setForm({ name: "", subject: "", html: "" });
       load();
-    } catch (e: unknown) {
-      toast.error((e as Error).message);
-    } finally {
-      setSaving(false);
-    }
+    } catch (e: unknown) { toast.error((e as Error).message); }
+    finally { setSaving(false); }
   };
 
   const openEdit = (t: Template) => {
@@ -213,8 +370,8 @@ function TemplatesPage() {
         headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
         body: JSON.stringify({ name: editForm.name, subject: editForm.subject, html_body: editForm.html }),
       });
-      setTemplates((ts) => ts.map((t) => t.id === editTarget.id ? { ...t, name: editForm.name, subject: editForm.subject } : t));
-      toast.success("Template updated");
+      setTemplates((ts) => ts.map((t) => t.id === editTarget.id ? { ...t, name: editForm.name, subject: editForm.subject, htmlBody: editForm.html } : t));
+      toast.success("Template updated — previous version saved to history");
       setEditTarget(null);
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setEditSaving(false); }
@@ -229,9 +386,7 @@ function TemplatesPage() {
       });
       setTemplates((t) => t.filter((x) => x.id !== id));
       toast.success("Template deleted");
-    } catch (e: unknown) {
-      toast.error((e as Error).message);
-    }
+    } catch (e: unknown) { toast.error((e as Error).message); }
   };
 
   return (
@@ -239,13 +394,14 @@ function TemplatesPage() {
       <div className="flex items-center justify-between">
         <header>
           <h1 className="text-2xl font-display font-medium tracking-tight">Email Templates</h1>
-          <p className="text-sm text-muted-foreground">Reusable templates with variable substitution.</p>
+          <p className="text-sm text-muted-foreground">Reusable templates with variable substitution and version history.</p>
         </header>
         <Button size="sm" className="gap-1.5" onClick={() => setCreating(true)}>
           <Plus className="h-4 w-4" /> New Template
         </Button>
       </div>
 
+      {/* Edit modal */}
       {editTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="rounded-lg border border-border bg-card p-6 w-full max-w-2xl space-y-4 shadow-xl">
@@ -266,6 +422,10 @@ function TemplatesPage() {
                 onChange={(e) => setEditForm((f) => ({ ...f, html: e.target.value }))}
               />
             </div>
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <History className="h-3.5 w-3.5" />
+              Saving will snapshot the current version to history automatically.
+            </p>
             <div className="flex gap-2">
               <Button onClick={saveEdit} disabled={editSaving}>{editSaving ? "Saving…" : "Save Changes"}</Button>
               <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
@@ -274,6 +434,7 @@ function TemplatesPage() {
         </div>
       )}
 
+      {/* Create form */}
       {creating && (
         <div className="rounded-lg border border-border bg-card p-6 space-y-4 max-w-2xl">
           <h2 className="text-sm font-semibold">New Template</h2>
@@ -327,8 +488,8 @@ function TemplatesPage() {
               <tr className="text-left text-xs text-muted-foreground border-b border-border bg-muted/40">
                 <th className="px-5 py-3 font-medium">Name</th>
                 <th className="px-5 py-3 font-medium">Subject</th>
-                <th className="px-5 py-3 font-medium">Created</th>
-                <th className="px-5 py-3 font-medium w-24"></th>
+                <th className="px-5 py-3 font-medium">Updated</th>
+                <th className="px-5 py-3 font-medium w-32"></th>
               </tr>
             </thead>
             <tbody>
@@ -336,12 +497,21 @@ function TemplatesPage() {
                 <tr key={t.id} className="border-b border-border last:border-0 hover:bg-muted/20">
                   <td className="px-5 py-3 font-medium">{t.name}</td>
                   <td className="px-5 py-3 text-muted-foreground max-w-xs truncate">{t.subject}</td>
-                  <td className="px-5 py-3 text-muted-foreground">{new Date(t.createdAt).toLocaleDateString()}</td>
+                  <td className="px-5 py-3 text-muted-foreground text-xs">{new Date(t.updatedAt ?? t.createdAt).toLocaleDateString()}</td>
                   <td className="px-5 py-3">
                     <div className="flex gap-1">
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPreviewTemplate(t)} title="Preview"><Eye className="h-3.5 w-3.5" /></Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(t)}><Edit2 className="h-3.5 w-3.5" /></Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => del(t.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Preview" onClick={() => setPreviewTemplate(t)}>
+                        <Eye className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit" onClick={() => openEdit(t)}>
+                        <Edit2 className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Version History" onClick={() => setHistoryTemplate(t)}>
+                        <History className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" title="Delete" onClick={() => del(t.id)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -352,10 +522,24 @@ function TemplatesPage() {
       )}
 
       {previewTemplate && (
-        <TemplatePreviewModal
-          template={previewTemplate}
-          onClose={() => setPreviewTemplate(null)}
+        <TemplatePreviewModal template={previewTemplate} onClose={() => setPreviewTemplate(null)} />
+      )}
+
+      {historyTemplate && primaryKey?.keyRaw && (
+        <VersionHistoryModal
+          template={historyTemplate}
+          apiKey={primaryKey.keyRaw}
+          onClose={() => setHistoryTemplate(null)}
+          onRestored={load}
         />
+      )}
+
+      {/* Version history legend */}
+      {templates.length > 0 && (
+        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <Check className="h-3 w-3 text-[oklch(0.55_0.16_145)]" />
+          Every edit automatically saves the previous version — click <History className="h-3 w-3 inline" /> to browse and restore.
+        </p>
       )}
     </div>
   );
