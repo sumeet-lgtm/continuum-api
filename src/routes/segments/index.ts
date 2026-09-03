@@ -76,6 +76,52 @@ export async function segmentRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.status(200).send({ ...segment, matching_contacts: count });
   });
 
+  // PATCH /v1/segments/:id — update name and/or filter rules
+  fastify.patch('/segments/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const body = request.body as { name?: string; filter_rules?: Array<{ field: string; operator: string; value: string }> };
+
+    const existing = await prisma.segment.findFirst({ where: { id, apiKeyId } });
+    if (!existing) throw Errors.notFound('Segment not found.');
+
+    const updated = await prisma.segment.update({
+      where: { id },
+      data: {
+        ...(body.name !== undefined && { name: body.name }),
+        ...(body.filter_rules !== undefined && { filterRules: body.filter_rules }),
+      },
+    });
+    return reply.status(200).send(updated);
+  });
+
+  // GET /v1/segments/:id/contacts — preview matching contacts (up to 200)
+  fastify.get('/segments/:id/contacts', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+
+    const segment = await prisma.segment.findFirst({
+      where: { id, apiKeyId },
+      select: { id: true, listId: true, filterRules: true },
+    });
+    if (!segment) throw Errors.notFound('Segment not found.');
+
+    const rules = segment.filterRules as Array<{ field: string; operator: string; value: string }>;
+    let contacts: Array<{ email: string; firstName: string | null; lastName: string | null }> = [];
+    if (segment.listId) {
+      const memberships = await prisma.contactListMembership.findMany({
+        where: { listId: segment.listId, status: 'subscribed' },
+        include: { contact: { select: { email: true, firstName: true, lastName: true } } },
+      });
+      contacts = memberships
+        .filter(m => matchRules(m.contact, rules))
+        .slice(0, 200)
+        .map(m => m.contact);
+    }
+
+    return reply.status(200).send({ total: contacts.length, data: contacts });
+  });
+
   // DELETE /v1/segments/:id
   fastify.delete('/segments/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
