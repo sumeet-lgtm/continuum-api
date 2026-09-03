@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Plus, CheckCircle2, XCircle, RefreshCw, KeyRound, Copy, Check } from "lucide-react";
+import { Plus, CheckCircle2, XCircle, RefreshCw, KeyRound, Copy, Check, ChevronRight, X } from "lucide-react";
 import { toast } from "sonner";
 import { API_BASE } from "@/lib/supabase";
 import { useApiKey } from "@/lib/use-api-key";
@@ -41,6 +41,23 @@ interface Delivery {
   nextRetryAt: string | null;
 }
 
+interface DeliveryDetail extends Delivery {
+  payload: unknown;
+  responseBody: string | null;
+  responseHeaders: Record<string, string> | null;
+  errorMessage: string | null;
+  latencyMs: number | null;
+  attempts_detail?: Array<{
+    id: string;
+    statusCode: number | null;
+    responseBody: string | null;
+    responseHeaders: Record<string, string> | null;
+    latencyMs: number | null;
+    attemptedAt: string;
+    errorMessage: string | null;
+  }>;
+}
+
 const EVENTS: { value: string; label: string; group: string }[] = [
   // Transactional
   { value: "email.delivered", label: "Email delivered", group: "Transactional" },
@@ -66,6 +83,19 @@ const EVENTS: { value: string; label: string; group: string }[] = [
   { value: "monitor_status_change", label: "Monitor status changed", group: "Monitoring" },
 ];
 
+function CopyBtn({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      onClick={() => { void navigator.clipboard.writeText(text); setDone(true); setTimeout(() => setDone(false), 1500); }}
+      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-0.5 rounded hover:bg-muted transition-colors"
+    >
+      {done ? <Check className="h-3 w-3 text-[oklch(0.55_0.16_145)]" /> : <Copy className="h-3 w-3" />}
+      {done ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
 function WebhooksPage() {
   const { apiKey } = useApiKey();
   const [hooks, setHooks] = useState<Webhook[]>([]);
@@ -78,6 +108,8 @@ function WebhooksPage() {
   const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
   const [rotating, setRotating] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [inspecting, setInspecting] = useState<DeliveryDetail | null>(null);
+  const [inspectLoading, setInspectLoading] = useState(false);
 
   const load = async () => {
     if (!apiKey?.keyRaw) {
@@ -217,6 +249,26 @@ function WebhooksPage() {
       toast.error((e as Error).message);
     } finally {
       setRotating(null);
+    }
+  };
+
+  const inspectDelivery = async (webhookId: string, deliveryId: string) => {
+    if (!apiKey?.keyRaw) return;
+    setInspectLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/v1/webhooks/${webhookId}/deliveries/${deliveryId}`, {
+        headers: { "X-API-Key": apiKey.keyRaw },
+      });
+      if (res.ok) {
+        const data = await res.json() as DeliveryDetail;
+        setInspecting(data);
+      } else {
+        toast.error("Could not load delivery details");
+      }
+    } catch {
+      toast.error("Failed to load delivery");
+    } finally {
+      setInspectLoading(false);
     }
   };
 
@@ -360,19 +412,127 @@ function WebhooksPage() {
                       {d.lastAttemptAt ? new Date(d.lastAttemptAt).toLocaleString() : "—"}
                     </td>
                     <td className="px-5 py-2 text-right">
-                      {(!d.delivered && (d.failedPermanently || d.attempts !== null)) && (
+                      <div className="flex items-center justify-end gap-2">
+                        {(!d.delivered && (d.failedPermanently || d.attempts !== null)) && (
+                          <button
+                            onClick={() => retryDelivery(active!.id, d.id)}
+                            className="text-xs text-muted-foreground hover:text-foreground underline"
+                          >
+                            Retry
+                          </button>
+                        )}
                         <button
-                          onClick={() => retryDelivery(active!.id, d.id)}
-                          className="text-xs text-muted-foreground hover:text-foreground underline"
+                          onClick={() => inspectDelivery(active!.id, d.id)}
+                          className="inline-flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
+                          title="Inspect payload"
                         >
-                          Retry
+                          <ChevronRight className="h-3.5 w-3.5" />
                         </button>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          )}
+        </div>
+      )}
+
+      {/* Delivery inspector panel */}
+      {(inspecting || inspectLoading) && (
+        <div className="rounded-lg border border-border bg-card overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium">Delivery inspector</span>
+              {inspecting && (
+                <>
+                  <span className="font-mono text-xs text-muted-foreground">{inspecting.event.replace(/_/g, ".")}</span>
+                  {inspecting.statusCode && (
+                    <span className={`text-xs font-bold tabular-nums ${inspecting.statusCode >= 200 && inspecting.statusCode < 300 ? "text-[oklch(0.55_0.16_145)]" : "text-[oklch(0.58_0.22_27)]"}`}>
+                      HTTP {inspecting.statusCode}
+                    </span>
+                  )}
+                  {inspecting.latencyMs && (
+                    <span className="text-xs text-muted-foreground">{inspecting.latencyMs}ms</span>
+                  )}
+                </>
+              )}
+            </div>
+            <button onClick={() => setInspecting(null)} className="text-muted-foreground hover:text-foreground">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {inspectLoading ? (
+            <div className="p-6 space-y-2">
+              {[...Array(3)].map((_, i) => <div key={i} className="h-3 bg-muted rounded animate-pulse" />)}
+            </div>
+          ) : inspecting && (
+            <div className="divide-y divide-border">
+              {/* Request payload */}
+              <div>
+                <div className="flex items-center justify-between px-5 py-2 bg-muted/20">
+                  <span className="text-xs font-mono font-medium text-muted-foreground">REQUEST BODY</span>
+                  <CopyBtn text={JSON.stringify(inspecting.payload, null, 2)} />
+                </div>
+                <pre className="px-5 py-3 text-xs font-mono leading-relaxed bg-[oklch(0.12_0_0)] text-[oklch(0.88_0_0)] overflow-x-auto max-h-64">
+                  <code>{JSON.stringify(inspecting.payload, null, 2)}</code>
+                </pre>
+              </div>
+              {/* Response body */}
+              <div>
+                <div className="flex items-center justify-between px-5 py-2 bg-muted/20">
+                  <span className="text-xs font-mono font-medium text-muted-foreground">RESPONSE BODY</span>
+                  {inspecting.responseBody && <CopyBtn text={inspecting.responseBody} />}
+                </div>
+                <pre className="px-5 py-3 text-xs font-mono leading-relaxed bg-[oklch(0.12_0_0)] text-[oklch(0.88_0_0)] overflow-x-auto max-h-64">
+                  <code>{inspecting.responseBody ?? "(no response body)"}</code>
+                </pre>
+              </div>
+              {/* Error */}
+              {inspecting.errorMessage && (
+                <div className="px-5 py-3">
+                  <p className="text-xs font-medium text-[oklch(0.58_0.22_27)] mb-1">Error</p>
+                  <p className="text-xs font-mono text-[oklch(0.58_0.22_27)]">{inspecting.errorMessage}</p>
+                </div>
+              )}
+              {/* Response headers */}
+              {inspecting.responseHeaders && Object.keys(inspecting.responseHeaders).length > 0 && (
+                <div>
+                  <div className="px-5 py-2 bg-muted/20">
+                    <span className="text-xs font-mono font-medium text-muted-foreground">RESPONSE HEADERS</span>
+                  </div>
+                  <div className="px-5 py-3 space-y-1">
+                    {Object.entries(inspecting.responseHeaders).map(([k, v]) => (
+                      <div key={k} className="flex gap-3 text-xs font-mono">
+                        <span className="text-muted-foreground w-48 shrink-0 truncate">{k}</span>
+                        <span className="text-foreground/80 truncate">{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Attempt history */}
+              {(inspecting.attempts_detail ?? []).length > 0 && (
+                <div>
+                  <div className="px-5 py-2 bg-muted/20">
+                    <span className="text-xs font-mono font-medium text-muted-foreground">ATTEMPT HISTORY ({inspecting.attempts_detail!.length})</span>
+                  </div>
+                  <div className="divide-y divide-border">
+                    {inspecting.attempts_detail!.map((a, i) => (
+                      <div key={a.id} className="px-5 py-2 flex items-center gap-4 text-xs">
+                        <span className="text-muted-foreground tabular-nums">#{i + 1}</span>
+                        <span className={a.statusCode && a.statusCode >= 200 && a.statusCode < 300 ? "text-[oklch(0.55_0.16_145)]" : "text-[oklch(0.58_0.22_27)]"}>
+                          {a.statusCode ? `HTTP ${a.statusCode}` : "No response"}
+                        </span>
+                        {a.latencyMs && <span className="text-muted-foreground">{a.latencyMs}ms</span>}
+                        <span className="text-muted-foreground ml-auto">{new Date(a.attemptedAt).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
