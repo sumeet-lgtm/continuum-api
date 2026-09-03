@@ -41,7 +41,7 @@ function CampaignsPage() {
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "", segmentId: "", scheduledAt: "" });
+  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", listId: "", segmentId: "", scheduledAt: "" });
   const [saving, setSaving] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [testTarget, setTestTarget] = useState<string | null>(null);
@@ -75,7 +75,7 @@ function CampaignsPage() {
 
   useEffect(() => { load(); }, [primaryKey]);
 
-  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "", segmentId: "", scheduledAt: "" });
+  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", listId: "", segmentId: "", scheduledAt: "" });
 
   const create = async (asDraft = true) => {
     if (!primaryKey?.keyRaw) return;
@@ -93,6 +93,7 @@ function CampaignsPage() {
         html_body: form.htmlBody,
         list_ids: form.listId ? [form.listId] : [],
         segment_ids: form.segmentId ? [form.segmentId] : [],
+        reply_to: form.replyTo || undefined,
       };
       if (!asDraft && form.scheduledAt) payload.scheduled_at = new Date(form.scheduledAt).toISOString();
       const campaign = await api.withKey.post<{ id: string }>("/v1/campaigns", payload, primaryKey.keyRaw);
@@ -126,6 +127,7 @@ function CampaignsPage() {
         subject: form.subject,
         html_body: form.htmlBody,
         list_ids: form.listId ? [form.listId] : [],
+        reply_to: form.replyTo || undefined,
         ...(form.scheduledAt ? { scheduled_at: new Date(form.scheduledAt).toISOString() } : {}),
       }, primaryKey.keyRaw);
       toast.success("Campaign updated");
@@ -215,6 +217,10 @@ function CampaignsPage() {
               <Label>From email</Label>
               <Input placeholder="hello@acme.com" value={form.fromEmail} onChange={(e) => setForm((f) => ({ ...f, fromEmail: e.target.value }))} />
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Reply-to <span className="text-muted-foreground font-normal">(optional)</span></Label>
+            <Input placeholder="replies@acme.com" type="email" value={form.replyTo} onChange={(e) => setForm((f) => ({ ...f, replyTo: e.target.value }))} />
           </div>
           <div className="space-y-1.5">
             <Label>Subject</Label>
@@ -521,7 +527,7 @@ function CampaignsPage() {
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => {
                             setEditingCampaign(c);
                             setCreating(false);
-                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, subject: c.subject, htmlBody: "", listId: "", segmentId: "", scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
+                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, htmlBody: "", listId: "", segmentId: "", scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
                           }}>
                             <Edit2 className="h-3 w-3" /> Edit
                           </Button>
