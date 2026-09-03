@@ -33,7 +33,7 @@ interface DailyBreakdown { date: string; sent: number; replied: number; bounced:
 interface MailboxDetail extends MailboxStat { daily_breakdown: DailyBreakdown[]; }
 interface DomainStat { domain_id: string; domain: string; domain_status: string; sent: number; delivered: number; bounced: number; complained: number; delivery_rate: number; bounce_rate: number; complaint_rate: number; }
 
-type Tab = "overview" | "campaigns" | "sequences" | "mailboxes" | "domains";
+type Tab = "overview" | "campaigns" | "sequences" | "mailboxes" | "domains" | "send-time";
 type Preset = "7d" | "30d" | "90d" | "custom";
 
 function presetLabel(p: Preset) {
@@ -98,6 +98,8 @@ function AnalyticsPage() {
   const [mailboxDetailLoading, setMailboxDetailLoading] = useState(false);
   const [domains, setDomains] = useState<DomainStat[]>([]);
   const [domainsLoading, setDomainsLoading] = useState(false);
+  const [sendTime, setSendTime] = useState<{ enough_data: boolean; sample_size: number; recommendation?: { day_name: string; hour_utc: number; opens_in_slot: number; label: string }; top_5_slots?: Array<{ day_name: string; hour_utc: number; opens: number; label: string }>; by_hour_utc?: Array<{ hour: number; opens: number }>; by_day_of_week?: Array<{ day: number; day_name: string; opens: number }> } | null>(null);
+  const [sendTimeLoading, setSendTimeLoading] = useState(false);
 
   const effectiveDateFrom = preset === "custom" ? customFrom : presetDateFrom(preset);
   const effectiveDateTo = preset === "custom" && customTo ? customTo : new Date().toISOString().slice(0, 10);
@@ -170,6 +172,15 @@ function AnalyticsPage() {
     if (tab === "domains") loadDomains();
   }, [tab, loadDomains]);
 
+  useEffect(() => {
+    if (tab !== "send-time" || !primaryKey?.keyRaw || sendTime !== null) return;
+    setSendTimeLoading(true);
+    api.withKey.get<typeof sendTime>("/v1/analytics/send-time?days=90", primaryKey.keyRaw)
+      .then((r) => setSendTime(r))
+      .catch(() => setSendTime({ enough_data: false, sample_size: 0 }))
+      .finally(() => setSendTimeLoading(false));
+  }, [tab, primaryKey, sendTime]);
+
   const pct = (n: number) => `${n.toFixed(1)}%`;
 
   return (
@@ -228,7 +239,7 @@ function AnalyticsPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border">
-        {(["overview", "campaigns", "sequences", "mailboxes", "domains"] as Tab[]).map((t) => (
+        {(["overview", "campaigns", "sequences", "mailboxes", "domains", "send-time"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -236,7 +247,7 @@ function AnalyticsPage() {
               tab === t ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
-            {t}
+            {t === "send-time" ? "Send Time" : t}
           </button>
         ))}
       </div>
@@ -500,6 +511,86 @@ function AnalyticsPage() {
           </div>
         </div>
       )
+      ) : tab === "send-time" ? (
+        sendTimeLoading ? (
+          <SkeletonAnalytics />
+        ) : !sendTime || !sendTime.enough_data ? (
+          <div className="rounded-lg border border-border bg-card p-10 text-center">
+            <Calendar className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
+            <p className="text-sm text-muted-foreground mb-1">Not enough data yet.</p>
+            <p className="text-xs text-muted-foreground">
+              {sendTime ? `${sendTime.sample_size} opens recorded — need at least 10 to generate a recommendation.` : "Send campaigns and track opens to unlock send time insights."}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* Best slot */}
+            <div className="rounded-lg border border-border bg-card p-5 flex items-center gap-5">
+              <div className="flex-shrink-0 w-14 h-14 rounded-full bg-[oklch(0.97_0.04_145)] flex items-center justify-center">
+                <Calendar className="h-6 w-6 text-[oklch(0.45_0.14_145)]" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium">Recommended send time</p>
+                <p className="text-xl font-semibold mt-0.5">{sendTime.recommendation?.label ?? "—"}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{sendTime.recommendation?.opens_in_slot ?? 0} opens in this slot · based on {sendTime.sample_size} opens over 90 days</p>
+              </div>
+            </div>
+
+            {/* Top 5 slots */}
+            {sendTime.top_5_slots && (
+              <div className="rounded-lg border border-border bg-card p-5">
+                <h3 className="text-sm font-medium mb-3">Top 5 send slots</h3>
+                <div className="space-y-2">
+                  {sendTime.top_5_slots.map((s, i) => {
+                    const maxOpens = sendTime.top_5_slots![0]!.opens;
+                    return (
+                      <div key={i} className="flex items-center gap-3">
+                        <span className="text-xs text-muted-foreground w-4 tabular-nums text-right">{i + 1}</span>
+                        <div className="flex-1 rounded bg-muted/30 h-5 relative overflow-hidden">
+                          <div className="absolute inset-y-0 left-0 rounded bg-[oklch(0.55_0.16_145)]/70" style={{ width: `${(s.opens / maxOpens) * 100}%` }} />
+                          <span className="absolute inset-0 flex items-center px-2 text-xs font-medium">{s.label}</span>
+                        </div>
+                        <span className="text-xs tabular-nums text-muted-foreground w-12 text-right">{s.opens} open{s.opens !== 1 ? "s" : ""}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Hour of day bar chart */}
+            {sendTime.by_hour_utc && (
+              <div className="rounded-lg border border-border bg-card p-5">
+                <h3 className="text-sm font-medium mb-3">Opens by hour (UTC)</h3>
+                <ResponsiveContainer width="100%" height={120}>
+                  <BarChart data={sendTime.by_hour_utc} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                    <XAxis dataKey="hour" tick={{ fontSize: 10 }} tickFormatter={(h) => `${h}h`} />
+                    <YAxis tick={{ fontSize: 10 }} />
+                    <Tooltip formatter={(v) => [v, "Opens"]} labelFormatter={(h) => `${h}:00 UTC`} />
+                    <Bar dataKey="opens" fill="oklch(0.55 0.16 145)" radius={[2,2,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {/* Day of week */}
+            {sendTime.by_day_of_week && (
+              <div className="rounded-lg border border-border bg-card p-5">
+                <h3 className="text-sm font-medium mb-3">Opens by day of week</h3>
+                <ResponsiveContainer width="100%" height={120}>
+                  <BarChart data={sendTime.by_day_of_week} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                    <XAxis dataKey="day_name" tick={{ fontSize: 10 }} tickFormatter={(d: string) => d.slice(0,3)} />
+                    <YAxis tick={{ fontSize: 10 }} />
+                    <Tooltip formatter={(v) => [v, "Opens"]} />
+                    <Bar dataKey="opens" fill="oklch(0.65 0.16 75)" radius={[2,2,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        )
       ) : null
       }
     </div>
