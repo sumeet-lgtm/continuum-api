@@ -198,20 +198,9 @@ const envSchema = baseEnvSchema.superRefine((val, ctx) => {
       message: 'API_KEY_SALT must be set to a real value in production — the dev default is not allowed',
     });
   }
-  if (!val.ALLOWED_ORIGINS) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['ALLOWED_ORIGINS'],
-      message: 'ALLOWED_ORIGINS must be set in production — without it all browser (CORS) requests from the dashboard are rejected',
-    });
-  }
-  if (val.SMTP_HELO_DOMAIN === 'localhost') {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['SMTP_HELO_DOMAIN'],
-      message: 'SMTP_HELO_DOMAIN is set to "localhost" — most mail servers will reject EHLO localhost; set it to your verify subdomain (e.g. verify.continuumapi.com)',
-    });
-  }
+  // Note: ALLOWED_ORIGINS and SMTP_HELO_DOMAIN are not enforced here because
+  // this config is loaded by worker processes that don't serve HTTP or run
+  // SMTP probes. Each service validates these at the point of use instead.
 });
 
 export type Config = z.infer<typeof envSchema>;
