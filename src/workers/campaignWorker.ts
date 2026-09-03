@@ -18,7 +18,7 @@ function isInSendWindow(campaign: { sendDays: string[]; sendStartHour: number; s
   try {
     const tz = campaign.timezone || 'UTC';
     const nowInTz = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
-    const day = DAY_NAMES[nowInTz.getDay()];
+    const day = DAY_NAMES[nowInTz.getDay()] ?? 'sunday';
     const hour = nowInTz.getHours();
     const days = campaign.sendDays as string[];
     // No window configured = always in window
