@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye } from "lucide-react";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
@@ -36,6 +36,16 @@ interface Campaign {
 interface MailingList { id: string; name: string; }
 interface EmailTemplate { id: string; name: string; subject: string; htmlBody: string; }
 interface Segment { id: string; name: string; }
+interface CampaignHealth {
+  health_score: number;
+  signals: Array<{ type: "warning" | "critical" | "good"; message: string }>;
+  metrics: {
+    total_recipients: number; sent: number; delivered: number;
+    opened: number; clicked: number; bounced: number; complained: number;
+    delivery_rate: number; open_rate: number; click_rate: number;
+    bounce_rate: number; complaint_rate: number;
+  };
+}
 
 function CampaignsPage() {
   const { primaryKey } = useAuth();
@@ -55,6 +65,9 @@ function CampaignsPage() {
   const [confirming, setConfirming] = useState(false);
   const [preview, setPreview] = useState(false);
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
+  const [healthCampaign, setHealthCampaign] = useState<Campaign | null>(null);
+  const [health, setHealth] = useState<CampaignHealth | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -80,6 +93,18 @@ function CampaignsPage() {
   useEffect(() => { load(); }, [primaryKey]);
 
   const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
+
+  const openHealth = async (c: Campaign) => {
+    if (!primaryKey?.keyRaw) return;
+    setHealthCampaign(c);
+    setHealth(null);
+    setHealthLoading(true);
+    try {
+      const h = await api.withKey.get<CampaignHealth>(`/v1/campaigns/${c.id}/health`, primaryKey.keyRaw);
+      setHealth(h);
+    } catch { toast.error("Could not load campaign health"); }
+    finally { setHealthLoading(false); }
+  };
 
   const autoTextBody = () => {
     const plain = form.htmlBody
@@ -605,6 +630,11 @@ function CampaignsPage() {
                             <XCircle className="h-3 w-3" /> Unschedule
                           </Button>
                         )}
+                        {(c.status === "sent" || c.status === "sending") && (
+                          <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => openHealth(c)}>
+                            <BarChart2 className="h-3 w-3" /> Stats
+                          </Button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -612,6 +642,95 @@ function CampaignsPage() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Campaign health drawer */}
+      {healthCampaign && (
+        <div className="fixed inset-0 z-40" onClick={() => setHealthCampaign(null)}>
+          <div
+            className="absolute right-0 top-0 h-full w-[420px] bg-card border-l border-border shadow-2xl overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <div>
+                <p className="text-sm font-semibold truncate max-w-[300px]">{healthCampaign.subject}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{healthCampaign.fromName} &lt;{healthCampaign.fromEmail}&gt;</p>
+              </div>
+              <button onClick={() => setHealthCampaign(null)} className="text-muted-foreground hover:text-foreground ml-3 shrink-0">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {healthLoading ? (
+                <div className="space-y-3">
+                  {[1,2,3].map(i => <div key={i} className="h-10 rounded bg-muted animate-pulse" />)}
+                </div>
+              ) : health ? (
+                <>
+                  {/* Health score */}
+                  <div className="flex items-center gap-4">
+                    <div className="relative w-16 h-16 shrink-0">
+                      <svg className="w-16 h-16 -rotate-90" viewBox="0 0 64 64">
+                        <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" strokeWidth="6" className="text-muted/30" />
+                        <circle
+                          cx="32" cy="32" r="28" fill="none" strokeWidth="6" strokeLinecap="round"
+                          stroke={health.health_score >= 80 ? "oklch(0.55 0.16 145)" : health.health_score >= 50 ? "oklch(0.65 0.16 75)" : "oklch(0.58 0.22 27)"}
+                          strokeDasharray={`${(health.health_score / 100) * 175.9} 175.9`}
+                        />
+                      </svg>
+                      <span className="absolute inset-0 flex items-center justify-center text-sm font-bold">{health.health_score}</span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold">
+                        {health.health_score >= 80 ? "Healthy" : health.health_score >= 50 ? "At Risk" : "Poor"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">Deliverability score</p>
+                    </div>
+                  </div>
+
+                  {/* Signals */}
+                  {health.signals.length > 0 && (
+                    <div className="space-y-1.5">
+                      {health.signals.map((s, i) => (
+                        <div key={i} className={`flex items-start gap-2 rounded-md px-3 py-2 text-xs ${
+                          s.type === "critical" ? "bg-[oklch(0.97_0.04_27)] text-[oklch(0.40_0.18_27)] border border-[oklch(0.88_0.10_27)]" :
+                          s.type === "warning" ? "bg-[oklch(0.97_0.04_75)] text-[oklch(0.50_0.16_75)] border border-[oklch(0.88_0.10_75)]" :
+                          "bg-[oklch(0.97_0.04_145)] text-[oklch(0.40_0.14_145)] border border-[oklch(0.85_0.10_145)]"
+                        }`}>
+                          {s.type === "critical" ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" /> :
+                           s.type === "warning" ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" /> :
+                           <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5" />}
+                          {s.message}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Metrics grid */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { label: "Recipients", value: health.metrics.total_recipients.toLocaleString() },
+                      { label: "Sent", value: health.metrics.sent.toLocaleString() },
+                      { label: "Delivered", value: `${health.metrics.delivery_rate}%` },
+                      { label: "Opened", value: `${health.metrics.open_rate}%` },
+                      { label: "Clicked", value: `${health.metrics.click_rate}%` },
+                      { label: "Bounced", value: `${health.metrics.bounce_rate}%`, warn: health.metrics.bounce_rate > 2 },
+                      { label: "Complained", value: `${health.metrics.complaint_rate}%`, warn: health.metrics.complaint_rate > 0.08 },
+                    ].map((m) => (
+                      <div key={m.label} className="rounded-md border border-border bg-muted/30 px-3 py-2.5">
+                        <p className="text-xs text-muted-foreground">{m.label}</p>
+                        <p className={`text-lg font-semibold tabular-nums mt-0.5 ${(m as { warn?: boolean }).warn ? "text-[oklch(0.58_0.22_27)]" : ""}`}>{m.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">No health data available.</p>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
