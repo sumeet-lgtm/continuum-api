@@ -18,7 +18,7 @@ const createSchema = z.object({
   subject: z.string().min(1).max(500),
   html_body: z.string().min(1),
   text_body: z.string().optional(),
-  list_ids: z.array(z.string()).min(1),
+  list_ids: z.array(z.string()).default([]),
   segment_ids: z.array(z.string()).optional(),
   exclude_list_ids: z.array(z.string()).optional(),
   track_opens: z.boolean().default(true),
@@ -62,7 +62,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
         where: { apiKeyId, ...(q.status ? { status: q.status } : {}) },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit, take: limit,
-        select: { id: true, subject: true, status: true, totalRecipients: true, sentCount: true, openCount: true, clickCount: true, createdAt: true, sentAt: true },
+        select: { id: true, name: true, subject: true, fromName: true, fromEmail: true, status: true, totalRecipients: true, sentCount: true, openCount: true, clickCount: true, bounceCount: true, complaintCount: true, trackOpens: true, trackClicks: true, createdAt: true, scheduledAt: true, sentAt: true },
       }),
       prisma.campaign.count({ where: { apiKeyId, ...(q.status ? { status: q.status } : {}) } }),
     ]);
