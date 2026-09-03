@@ -666,4 +666,65 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  // GET /v1/analytics/schedule — upcoming scheduled sends (transactional + campaigns)
+  fastify.get(
+    '/analytics/schedule',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const apiKeyId = request.apiKey.id;
+      const now = new Date();
+      const horizon = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days out
+
+      const [msgs, campaigns] = await Promise.all([
+        prisma.sendMessage.findMany({
+          where: { apiKeyId, scheduledAt: { gte: now, lte: horizon }, status: { in: ['queued', 'scheduled'] } },
+          orderBy: { scheduledAt: 'asc' },
+          take: 200,
+          select: { id: true, to: true, subject: true, scheduledAt: true, status: true, tags: true },
+        }),
+        prisma.campaign.findMany({
+          where: { apiKeyId, scheduledAt: { gte: now, lte: horizon }, status: 'scheduled' },
+          orderBy: { scheduledAt: 'asc' },
+          take: 50,
+          select: { id: true, name: true, subject: true, scheduledAt: true, status: true, totalRecipients: true },
+        }),
+      ]);
+
+      const items = [
+        ...msgs.map((m) => ({
+          id: `msg_${m.id}`,
+          kind: 'transactional' as const,
+          label: m.subject ?? '(no subject)',
+          detail: m.to,
+          scheduledAt: m.scheduledAt!.toISOString(),
+          status: m.status,
+          recipients: 1,
+        })),
+        ...campaigns.map((c) => ({
+          id: `cmp_${c.id}`,
+          kind: 'campaign' as const,
+          label: c.subject ?? c.name,
+          detail: c.name,
+          scheduledAt: c.scheduledAt!.toISOString(),
+          status: c.status,
+          recipients: c.totalRecipients,
+        })),
+      ].sort((a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime());
+
+      // Group by date for calendar view
+      const byDate: Record<string, typeof items> = {};
+      for (const item of items) {
+        const day = item.scheduledAt.slice(0, 10);
+        if (!byDate[day]) byDate[day] = [];
+        byDate[day].push(item);
+      }
+
+      return reply.status(200).send({
+        total: items.length,
+        items,
+        by_date: Object.entries(byDate).map(([date, entries]) => ({ date, count: entries.length, items: entries })),
+      });
+    },
+  );
+
 }
