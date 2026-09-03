@@ -390,6 +390,59 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.send({ email, total: trimmed.length, events: trimmed });
   });
 
+  // GET /v1/contacts/:email/send-time — optimal send-time window for a single contact.
+  // Analyses the hour of day and day of week when this contact opens emails.
+  // Falls back to "insufficient data" if fewer than 3 open events exist.
+  fastify.get('/contacts/:email/send-time', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { email: rawEmail } = request.params as { email: string };
+    const email = decodeURIComponent(rawEmail).toLowerCase();
+    const apiKeyId = request.apiKey.id;
+
+    const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
+    if (!contact) throw Errors.notFound('Contact not found.');
+
+    const opens = await prisma.trackingEvent.findMany({
+      where: { email, type: 'open', sendMessage: { apiKeyId } },
+      select: { occurredAt: true },
+      orderBy: { occurredAt: 'desc' },
+      take: 200,
+    });
+
+    if (opens.length < 3) {
+      return reply.send({ email, sufficient_data: false, opens_analyzed: opens.length, message: 'Not enough data yet — at least 3 opens needed.' });
+    }
+
+    const hourCounts = new Array(24).fill(0) as number[];
+    const dayCounts  = new Array(7).fill(0) as number[];
+    for (const { occurredAt } of opens) {
+      hourCounts[occurredAt.getUTCHours()]++;
+      dayCounts[occurredAt.getUTCDay()]++;
+    }
+
+    const optimalHour = hourCounts.indexOf(Math.max(...hourCounts));
+    const optimalDay  = dayCounts.indexOf(Math.max(...dayCounts));
+    const confidence  = Math.min(1, opens.length / 20);
+    const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    const topHours = hourCounts
+      .map((count, hour) => ({ hour, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3);
+
+    return reply.send({
+      email,
+      sufficient_data: true,
+      opens_analyzed: opens.length,
+      optimal_hour: optimalHour,
+      optimal_day: optimalDay,
+      optimal_day_name: DAY_NAMES[optimalDay],
+      confidence: parseFloat(confidence.toFixed(2)),
+      hour_distribution: hourCounts,
+      day_distribution: dayCounts,
+      top_hours: topHours,
+    });
+  });
+
   // GET /v1/confirm?token=xxx — double opt-in confirmation (no auth required — email link)
   fastify.get('/confirm', { preHandler: [requireIpRateLimit('confirm', 60)] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const q = request.query as { token?: string };
