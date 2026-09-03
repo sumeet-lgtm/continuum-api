@@ -490,14 +490,13 @@ const HOUR_LABELS = Array.from({ length: 24 }, (_, i) => {
 });
 
 interface SendTimeResult {
-  total_opens_analyzed: number;
-  hour_distribution: number[];
-  day_distribution: number[];
-  heatmap: number[][];
-  top_windows: Array<{ day: number; hour: number; count: number; day_name: string }>;
-  optimal_hour: number | null;
-  optimal_day: number | null;
-  optimal_day_name: string | null;
+  enough_data: boolean;
+  sample_size: number;
+  message?: string;
+  recommendation?: { day_of_week: number; day_name: string; hour_utc: number; opens_in_slot: number; label: string };
+  top_5_slots?: Array<{ day_name: string; hour_utc: number; opens: number; label: string }>;
+  by_hour_utc?: Array<{ hour: number; opens: number }>;
+  by_day_of_week?: Array<{ day: number; day_name: string; opens: number }>;
 }
 
 function SendTimeTab() {
@@ -549,9 +548,6 @@ function SendTimeTab() {
     }
   };
 
-  const maxHour = result ? Math.max(...result.hour_distribution, 1) : 1;
-  const maxDay  = result ? Math.max(...result.day_distribution, 1) : 1;
-
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-border bg-card p-5 space-y-4">
@@ -568,93 +564,101 @@ function SendTimeTab() {
           </Button>
         </div>
 
-        {result && result.total_opens_analyzed === 0 && (
-          <p className="text-sm text-muted-foreground">No open events found yet — send some emails and track opens first.</p>
+        {result && !result.enough_data && (
+          <p className="text-sm text-muted-foreground">{result.message ?? "Not enough data yet — send some emails with open tracking first."} ({result.sample_size} opens found)</p>
         )}
 
-        {result && result.total_opens_analyzed > 0 && (
+        {result && result.enough_data && result.recommendation && (
           <div className="space-y-5">
-            {result.optimal_hour !== null && (
-              <div className="flex flex-wrap gap-3">
-                <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center min-w-[120px]">
-                  <p className="text-xs text-muted-foreground">Best hour (UTC)</p>
-                  <p className="text-2xl font-semibold tabular-nums mt-0.5">{HOUR_LABELS[result.optimal_hour]}</p>
-                </div>
-                <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center min-w-[120px]">
-                  <p className="text-xs text-muted-foreground">Best day</p>
-                  <p className="text-2xl font-semibold mt-0.5">{result.optimal_day_name}</p>
-                </div>
-                <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center min-w-[120px]">
-                  <p className="text-xs text-muted-foreground">Opens analysed</p>
-                  <p className="text-2xl font-semibold tabular-nums mt-0.5">{result.total_opens_analyzed.toLocaleString()}</p>
-                </div>
+            <div className="flex flex-wrap gap-3">
+              <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center min-w-[120px]">
+                <p className="text-xs text-muted-foreground">Best hour (UTC)</p>
+                <p className="text-2xl font-semibold tabular-nums mt-0.5">{HOUR_LABELS[result.recommendation.hour_utc]}</p>
               </div>
-            )}
-
-            <div>
-              <p className="text-xs font-medium text-muted-foreground mb-2">Opens by hour of day (UTC)</p>
-              <div className="flex items-end gap-0.5 h-16">
-                {result.hour_distribution.map((count, hour) => (
-                  <div key={hour} className="flex-1 flex flex-col items-center gap-0.5" title={`${HOUR_LABELS[hour]}: ${count} opens`}>
-                    <div
-                      className="w-full rounded-sm transition-all"
-                      style={{
-                        height: `${Math.max(2, (count / maxHour) * 52)}px`,
-                        background: count === Math.max(...result.hour_distribution)
-                          ? "oklch(0.55 0.16 145)"
-                          : "oklch(0.55 0.16 145 / 0.35)",
-                      }}
-                    />
-                  </div>
-                ))}
+              <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center min-w-[120px]">
+                <p className="text-xs text-muted-foreground">Best day</p>
+                <p className="text-2xl font-semibold mt-0.5">{result.recommendation.day_name}</p>
               </div>
-              <div className="flex gap-0.5 mt-1">
-                {HOUR_LABELS.map((label, i) => (
-                  i % 4 === 0 ? (
-                    <div key={i} className="flex-1 text-[9px] text-muted-foreground text-center" style={{ marginLeft: i === 0 ? 0 : undefined }}>
-                      {label}
-                    </div>
-                  ) : <div key={i} className="flex-1" />
-                ))}
+              <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center min-w-[120px]">
+                <p className="text-xs text-muted-foreground">Opens analysed</p>
+                <p className="text-2xl font-semibold tabular-nums mt-0.5">{result.sample_size.toLocaleString()}</p>
               </div>
             </div>
 
-            <div>
-              <p className="text-xs font-medium text-muted-foreground mb-2">Opens by day of week</p>
-              <div className="flex items-end gap-1.5 h-12">
-                {result.day_distribution.map((count, day) => (
-                  <div key={day} className="flex-1 flex flex-col items-center gap-0.5">
-                    <div
-                      className="w-full rounded-sm"
-                      style={{
-                        height: `${Math.max(2, (count / maxDay) * 40)}px`,
-                        background: count === Math.max(...result.day_distribution)
-                          ? "oklch(0.55 0.16 145)"
-                          : "oklch(0.55 0.16 145 / 0.35)",
-                      }}
-                      title={`${DAY_NAMES[day]}: ${count} opens`}
-                    />
-                    <span className="text-[9px] text-muted-foreground">{DAY_NAMES[day]}</span>
+            {result.by_hour_utc && (() => {
+              const hourOpens = result.by_hour_utc!.map(x => x.opens);
+              const maxH = Math.max(...hourOpens, 1);
+              return (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Opens by hour of day (UTC)</p>
+                  <div className="flex items-end gap-0.5 h-16">
+                    {result.by_hour_utc!.map(({ hour, opens }) => (
+                      <div key={hour} className="flex-1" title={`${HOUR_LABELS[hour]}: ${opens} opens`}>
+                        <div
+                          className="w-full rounded-sm"
+                          style={{
+                            height: `${Math.max(2, (opens / maxH) * 52)}px`,
+                            background: opens === Math.max(...hourOpens)
+                              ? "oklch(0.55 0.16 145)"
+                              : "oklch(0.55 0.16 145 / 0.35)",
+                          }}
+                        />
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </div>
+                  <div className="flex gap-0.5 mt-1">
+                    {HOUR_LABELS.map((label, i) => (
+                      i % 4 === 0
+                        ? <div key={i} className="flex-1 text-[9px] text-muted-foreground text-center">{label}</div>
+                        : <div key={i} className="flex-1" />
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
-            {result.top_windows.length > 0 && (
+            {result.by_day_of_week && (() => {
+              const dayOpens = result.by_day_of_week!.map(x => x.opens);
+              const maxD = Math.max(...dayOpens, 1);
+              return (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Opens by day of week</p>
+                  <div className="flex items-end gap-1.5 h-12">
+                    {result.by_day_of_week!.map(({ day, day_name, opens }) => (
+                      <div key={day} className="flex-1 flex flex-col items-center gap-0.5">
+                        <div
+                          className="w-full rounded-sm"
+                          style={{
+                            height: `${Math.max(2, (opens / maxD) * 40)}px`,
+                            background: opens === Math.max(...dayOpens)
+                              ? "oklch(0.55 0.16 145)"
+                              : "oklch(0.55 0.16 145 / 0.35)",
+                          }}
+                          title={`${day_name}: ${opens} opens`}
+                        />
+                        <span className="text-[9px] text-muted-foreground">{DAY_NAMES[day]}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {result.top_5_slots && result.top_5_slots.length > 0 && (
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-2">Top 5 send windows</p>
                 <div className="space-y-1.5">
-                  {result.top_windows.map((w, i) => (
+                  {result.top_5_slots.map((w, i) => (
                     <div key={i} className="flex items-center gap-3 text-sm">
                       <span className="text-xs text-muted-foreground tabular-nums w-4">{i + 1}.</span>
-                      <span className="font-medium">{w.day_name} {HOUR_LABELS[w.hour]}</span>
+                      <span className="font-medium">{w.label}</span>
                       <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
                         <div
                           className="h-full rounded-full bg-foreground/60"
-                          style={{ width: `${(w.count / result.top_windows[0]!.count) * 100}%` }}
+                          style={{ width: `${(w.opens / result.top_5_slots![0]!.opens) * 100}%` }}
                         />
                       </div>
-                      <span className="text-xs text-muted-foreground tabular-nums">{w.count} opens</span>
+                      <span className="text-xs text-muted-foreground tabular-nums">{w.opens} opens</span>
                     </div>
                   ))}
                 </div>
