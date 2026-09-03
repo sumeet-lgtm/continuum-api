@@ -183,13 +183,24 @@ export async function processSequenceTick(): Promise<void> {
       continue;
     }
 
-    // Build personalization vars
+    // Build personalization vars — merge lead customVars (AI-enriched fields like
+    // {{icebreaker}}, {{company_description}}, {{pain_point}}) so they are
+    // available in every sequence step template without re-generation at send time.
     const vars = enrollment.variables as Record<string, string> ?? {};
+    const lead = await prisma.lead.findFirst({
+      where: { email: enrollment.email, apiKeyId: sequence.apiKeyId },
+      select: { customVars: true, firstName: true, lastName: true, company: true, title: true },
+    });
+    const leadVars = (lead?.customVars as Record<string, string>) ?? {};
     const mergedVars: Record<string, string> = {
-      first_name: vars['first_name'] ?? enrollment.email.split('@')[0] ?? 'there',
+      first_name: vars['first_name'] ?? lead?.firstName ?? enrollment.email.split('@')[0] ?? 'there',
+      last_name:  vars['last_name']  ?? lead?.lastName  ?? '',
+      company:    vars['company']    ?? lead?.company    ?? '',
+      title:      vars['title']      ?? lead?.title      ?? '',
       email: enrollment.email,
       unsubscribe_url: `https://api.continuumapi.com/v1/unsubscribe?token=${generateUnsubToken(enrollment.email, sequence.apiKeyId)}`,
-      ...vars,
+      ...leadVars, // AI-enriched custom vars (icebreaker, pain_point, etc.)
+      ...vars,     // Enrollment-time vars take final precedence
     };
 
     const subject = processTemplate(step.subject, mergedVars);
