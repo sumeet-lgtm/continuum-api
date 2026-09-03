@@ -204,6 +204,51 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.status(200).send({ sent: true, to, subject: `[TEST] ${campaign.subject}` });
   });
 
+  // POST /v1/campaigns/:id/spam-check — analyze HTML body for spam triggers before send
+  fastify.post('/campaigns/:id/spam-check', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
+    if (!campaign) throw Errors.notFound('Campaign not found.');
+
+    const html = campaign.htmlBody;
+    const subject = campaign.subject;
+    const flags: Array<{ severity: 'low' | 'medium' | 'high'; message: string }> = [];
+
+    // Subject checks
+    if (/\bfree\b|\bwin\b|\bcash\b|\bclaim\b/i.test(subject))
+      flags.push({ severity: 'high', message: 'Subject contains spam trigger words (free, win, cash, claim)' });
+    if (/!!!|€€€|\$\$\$/.test(subject))
+      flags.push({ severity: 'high', message: 'Subject contains consecutive exclamation marks or currency symbols' });
+    if (subject === subject.toUpperCase() && subject.length > 10)
+      flags.push({ severity: 'medium', message: 'Subject is all uppercase' });
+
+    // HTML body checks
+    if (!html.toLowerCase().includes('unsubscribe'))
+      flags.push({ severity: 'high', message: 'No unsubscribe link found (CAN-SPAM requirement)' });
+    if (!html.toLowerCase().includes('<html') || !html.toLowerCase().includes('<body'))
+      flags.push({ severity: 'low', message: 'Missing <html>/<body> tags — some clients may render poorly' });
+    const imgTags = (html.match(/<img /gi) ?? []).length;
+    const textLength = html.replace(/<[^>]+>/g, '').trim().length;
+    if (imgTags > 0 && textLength < 50)
+      flags.push({ severity: 'medium', message: 'Image-to-text ratio is very high — image-only emails often get filtered' });
+    if (html.length > 100_000)
+      flags.push({ severity: 'medium', message: 'HTML body is very large (> 100KB) — may be clipped in Gmail' });
+    if (/javascript:/i.test(html))
+      flags.push({ severity: 'high', message: 'HTML contains javascript: URI — triggers spam filters' });
+    if ((html.match(/href=/gi) ?? []).length > 50)
+      flags.push({ severity: 'medium', message: 'More than 50 links detected — high link-to-text ratio triggers filters' });
+    if (!campaign.textBody)
+      flags.push({ severity: 'low', message: 'No plain-text alternative — add a text_body for better deliverability' });
+
+    // Score: 100 = clean, deduct based on severity
+    const deductions = flags.reduce((acc, f) => acc + (f.severity === 'high' ? 30 : f.severity === 'medium' ? 10 : 5), 0);
+    const score = Math.max(0, 100 - deductions);
+    const verdict = score >= 80 ? 'likely_inbox' : score >= 50 ? 'at_risk' : 'likely_spam';
+
+    return reply.send({ campaign_id: id, spam_score: score, verdict, flags });
+  });
+
   // GET /v1/campaigns/:id/health — real-time deliverability health for a campaign
   // Returns bounce rate, complaint rate, open rate, spam signal score 0-100
   fastify.get('/campaigns/:id/health', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {

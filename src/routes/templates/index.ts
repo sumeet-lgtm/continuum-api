@@ -12,6 +12,7 @@ const baseTemplateShape = {
   html_body: z.string().optional(),
   mjml_body: z.string().optional(),
   text_body: z.string().optional(),
+  preheader: z.string().max(200).optional(),
   variables: z.array(z.string()).optional(),
 };
 
@@ -26,6 +27,7 @@ const updateSchema = z.object({
   html_body: z.string().optional(),
   mjml_body: z.string().optional(),
   text_body: z.string().optional(),
+  preheader: z.string().max(200).optional(),
   variables: z.array(z.string()).optional(),
 });
 
@@ -38,14 +40,14 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       const parsed = createSchema.safeParse(request.body);
       if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map((i: { path: (string | number)[]; message: string }) => ({ field: i.path.join('.'), message: i.message })));
 
-      const { name, subject, html_body, mjml_body, text_body, variables } = parsed.data;
+      const { name, subject, html_body, mjml_body, text_body, preheader, variables } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
       // Compile MJML to HTML if provided
       const htmlBody = mjml_body ? await compileMjml(mjml_body) : html_body!;
 
       const template = await prisma.emailTemplate.create({
-        data: { apiKeyId, name, subject, htmlBody, textBody: text_body ?? null, variables: variables ?? [] },
+        data: { apiKeyId, name, subject, htmlBody, textBody: text_body ?? null, preheader: preheader ?? null, variables: variables ?? [] },
         select: { id: true, name: true, subject: true, variables: true, createdAt: true },
       });
 
@@ -88,7 +90,7 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
 
       const template = await prisma.emailTemplate.findFirst({
         where: { id, apiKeyId },
-        select: { id: true, name: true, subject: true, htmlBody: true, textBody: true, variables: true, createdAt: true, updatedAt: true },
+        select: { id: true, name: true, subject: true, htmlBody: true, textBody: true, preheader: true, variables: true, createdAt: true, updatedAt: true },
       });
       if (!template) throw Errors.notFound('Template not found.');
 
@@ -124,7 +126,7 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
         },
       }).catch(() => { /* best-effort */ });
 
-      const { name, subject, html_body, mjml_body, text_body, variables } = parsed.data;
+      const { name, subject, html_body, mjml_body, text_body, preheader, variables } = parsed.data;
       const htmlBody = mjml_body ? await compileMjml(mjml_body) : html_body;
 
       const updated = await prisma.emailTemplate.update({
@@ -134,6 +136,7 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
           ...(subject !== undefined && { subject }),
           ...(htmlBody !== undefined && { htmlBody }),
           ...(text_body !== undefined && { textBody: text_body }),
+          ...(preheader !== undefined && { preheader: preheader ?? null }),
           ...(variables !== undefined && { variables }),
         },
         select: { id: true, name: true, subject: true, variables: true, updatedAt: true },

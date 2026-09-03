@@ -265,6 +265,67 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.status(200).send(updated);
   });
 
+  // GET /v1/contacts/:email/engagement — contact engagement score (0-100)
+  fastify.get('/contacts/:email/engagement', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { email: rawEmail } = request.params as { email: string };
+    const email = decodeURIComponent(rawEmail).toLowerCase();
+    const apiKeyId = request.apiKey.id;
+
+    const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
+    if (!contact) throw Errors.notFound('Contact not found.');
+
+    const [sendCount, opens, clicks, bounces, complaints, lastEvent] = await Promise.all([
+      prisma.sendMessage.count({ where: { apiKeyId, to: email } }),
+      prisma.trackingEvent.count({ where: { email, type: 'open', sendMessage: { apiKeyId } } }),
+      prisma.trackingEvent.count({ where: { email, type: 'click', sendMessage: { apiKeyId } } }),
+      prisma.sendMessage.count({ where: { apiKeyId, to: email, status: 'bounced' } }),
+      prisma.sendMessage.count({ where: { apiKeyId, to: email, status: 'complained' } }),
+      prisma.trackingEvent.findFirst({
+        where: { email, sendMessage: { apiKeyId } },
+        orderBy: { occurredAt: 'desc' },
+        select: { occurredAt: true },
+      }),
+    ]);
+
+    const delivered = sendCount - bounces - complaints;
+    const openRate  = delivered > 0 ? opens / delivered : 0;
+    const clickRate = delivered > 0 ? clicks / delivered : 0;
+
+    // Recency score: 100 if engaged in last 7 days, 50 within 30 days, 25 within 90 days, 0 beyond
+    let recencyScore = 0;
+    if (lastEvent) {
+      const daysSince = (Date.now() - lastEvent.occurredAt.getTime()) / 86_400_000;
+      if (daysSince <= 7)  recencyScore = 100;
+      else if (daysSince <= 30) recencyScore = 50;
+      else if (daysSince <= 90) recencyScore = 25;
+    }
+
+    // Score: 40% open rate, 30% click rate, 30% recency
+    const score = Math.min(100, Math.round(openRate * 40 + clickRate * 30 + recencyScore * 0.3));
+
+    const tier = score >= 70 ? 'highly_engaged'
+      : score >= 40 ? 'engaged'
+      : score >= 15 ? 'low_engagement'
+      : 'inactive';
+
+    return reply.send({
+      email,
+      engagement_score: score,
+      tier,
+      metrics: {
+        emails_sent: sendCount,
+        delivered,
+        opens,
+        clicks,
+        bounces,
+        complaints,
+        open_rate: parseFloat((openRate * 100).toFixed(2)),
+        click_rate: parseFloat((clickRate * 100).toFixed(2)),
+      },
+      last_engaged_at: lastEvent?.occurredAt ?? null,
+    });
+  });
+
   // GET /v1/confirm?token=xxx — double opt-in confirmation (no auth required — email link)
   fastify.get('/confirm', { preHandler: [requireIpRateLimit('confirm', 60)] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const q = request.query as { token?: string };
