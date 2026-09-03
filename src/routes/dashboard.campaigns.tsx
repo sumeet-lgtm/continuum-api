@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target } from "lucide-react";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target, Play } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
@@ -83,6 +83,7 @@ function CampaignsPage() {
   const [recipientsPage, setRecipientsPage] = useState(1);
   const [recipientsLoading, setRecipientsLoading] = useState(false);
   const [recipientsSearch, setRecipientsSearch] = useState("");
+  const [resumingCampaign, setResumingCampaign] = useState<string | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -170,6 +171,17 @@ function CampaignsPage() {
     setRecipientsPage(1);
     setRecipientsSearch("");
     loadRecipients(c.id, 1, "");
+  };
+
+  const resumeCampaign = async (c: Campaign) => {
+    if (!primaryKey?.keyRaw) return;
+    setResumingCampaign(c.id);
+    try {
+      await api.withKey.post(`/v1/campaigns/${c.id}/resume`, {}, primaryKey.keyRaw);
+      toast.success("Campaign resumed");
+      load();
+    } catch { toast.error("Could not resume campaign"); }
+    finally { setResumingCampaign(null); }
   };
 
   const autoTextBody = () => {
@@ -812,6 +824,16 @@ function CampaignsPage() {
                         {c.status === "sent" && (
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => openRecipients(c)}>
                             <Users className="h-3 w-3" /> Recipients
+                          </Button>
+                        )}
+                        {(c.status === "sending" || c.status === "paused_bounce") && (
+                          <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => openRecipients(c)}>
+                            <Users className="h-3 w-3" /> Recipients
+                          </Button>
+                        )}
+                        {c.status === "paused_bounce" && (
+                          <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs text-[oklch(0.55_0.16_145)] hover:text-[oklch(0.45_0.16_145)]" onClick={() => resumeCampaign(c)} disabled={resumingCampaign === c.id}>
+                            <Play className="h-3 w-3" /> Resume
                           </Button>
                         )}
                       </div>
