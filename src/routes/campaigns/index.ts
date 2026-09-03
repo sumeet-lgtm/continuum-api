@@ -18,6 +18,7 @@ const createSchema = z.object({
   subject: z.string().min(1).max(500),
   html_body: z.string().min(1),
   text_body: z.string().optional(),
+  preheader: z.string().max(200).optional(),
   list_ids: z.array(z.string()).default([]),
   segment_ids: z.array(z.string()).optional(),
   exclude_list_ids: z.array(z.string()).optional(),
@@ -33,13 +34,13 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
     const apiKeyId = request.apiKey.id;
-    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at } = parsed.data;
+    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at } = parsed.data;
 
     const campaign = await prisma.campaign.create({
       data: {
         apiKeyId, name, fromName: from_name, fromEmail: from_email,
         domainId: domain_id ?? null, replyTo: reply_to ?? null,
-        subject, htmlBody: html_body, textBody: text_body ?? null,
+        subject, htmlBody: html_body, textBody: text_body ?? null, preheader: preheader ?? null,
         listIds: list_ids, segmentIds: segment_ids ?? [], excludeListIds: exclude_list_ids ?? [],
         trackOpens: track_opens, trackClicks: track_clicks,
         scheduledAt: scheduled_at ? new Date(scheduled_at) : null,
@@ -89,7 +90,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = createSchema.partial().safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at } = parsed.data;
+    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at } = parsed.data;
 
     const updated = await prisma.campaign.update({
       where: { id },
@@ -98,6 +99,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
         ...(from_email && { fromEmail: from_email }), ...(domain_id !== undefined && { domainId: domain_id }),
         ...(reply_to !== undefined && { replyTo: reply_to }), ...(subject && { subject }),
         ...(html_body && { htmlBody: html_body }), ...(text_body !== undefined && { textBody: text_body }),
+        ...(preheader !== undefined && { preheader: preheader ?? null }),
         ...(list_ids && { listIds: list_ids }), ...(segment_ids && { segmentIds: segment_ids }),
         ...(exclude_list_ids && { excludeListIds: exclude_list_ids }),
         ...(track_opens !== undefined && { trackOpens: track_opens }),

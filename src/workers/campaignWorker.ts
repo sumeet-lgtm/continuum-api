@@ -133,6 +133,15 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
         let htmlBody = processTemplate(campaign.htmlBody, vars);
         const textBody = campaign.textBody ? processTemplate(campaign.textBody, vars) : undefined;
 
+        // Inject preheader as a hidden div at the start of <body> (or top of HTML).
+        // The trailing &nbsp;&zwnj; filler stops email clients from pulling the
+        // next visible line of text into the preview pane.
+        if (campaign.preheader) {
+          const preheaderHtml = `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${campaign.preheader}${'&nbsp;&zwnj;'.repeat(60)}</div>`;
+          htmlBody = htmlBody.replace(/<body[^>]*>/i, (m) => `${m}${preheaderHtml}`);
+          if (!htmlBody.includes('<body')) htmlBody = `${preheaderHtml}${htmlBody}`;
+        }
+
         const unsubToken = generateUnsubToken(recipient.email, apiKeyId);
         const trackingId = `${campaignId}_${recipient.email}`;
 

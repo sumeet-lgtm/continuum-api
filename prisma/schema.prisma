@@ -616,6 +616,7 @@ model EmailTemplate {
   subject   String
   htmlBody  String
   textBody  String?
+  preheader String?
   variables Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -753,6 +754,7 @@ model Campaign {
   subject        String
   htmlBody       String
   textBody       String?
+  preheader      String?
   status         String    @default("draft") // draft|scheduled|sending|sent|failed|cancelled
   listIds        String[]  @default([])
   segmentIds     String[]  @default([])
