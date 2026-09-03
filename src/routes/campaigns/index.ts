@@ -179,6 +179,32 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.status(200).send({ resumed: true, id, pending_recipients: pendingCount });
   });
 
+  // POST /v1/campaigns/:id/pick-winner
+  // For A/B test campaigns still sending: converts all pending recipients of the losing
+  // variant to the winning variant so the rest of the send uses one subject line.
+  fastify.post('/campaigns/:id/pick-winner', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const body = request.body as { variant?: string };
+    const winner = body?.variant;
+    if (winner !== 'a' && winner !== 'b') throw Errors.validationFailed({ variant: 'must be "a" or "b"' });
+
+    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
+    if (!campaign) throw Errors.notFound('Campaign not found.');
+    if (!campaign.subjectB) throw Errors.forbidden('This campaign has no A/B test configured.');
+    if (!['sending', 'paused_bounce'].includes(campaign.status)) {
+      throw Errors.forbidden('Winner can only be picked for campaigns that are currently sending or paused.');
+    }
+
+    const loser = winner === 'a' ? 'b' : 'a';
+    const updated = await prisma.campaignRecipient.updateMany({
+      where: { campaignId: id, status: 'pending', variant: loser },
+      data: { variant: winner },
+    });
+
+    return reply.status(200).send({ winner, updated_recipients: updated.count, id });
+  });
+
   // POST /v1/campaigns/:id/duplicate
   fastify.post('/campaigns/:id/duplicate', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
