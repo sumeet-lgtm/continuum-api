@@ -77,6 +77,12 @@ function CampaignsPage() {
   const [spamLoading, setSpamLoading] = useState(false);
   const [retargetResult, setRetargetResult] = useState<{ campaign_id?: string; non_openers: number; total_sent?: number; message: string } | null>(null);
   const [retargetLoading, setRetargetLoading] = useState(false);
+  const [recipientsCampaign, setRecipientsCampaign] = useState<string | null>(null);
+  const [recipients, setRecipients] = useState<Array<{ id: string; email: string; status: string; variant: string; sentAt: string | null; openedAt: string | null; clickedAt: string | null }>>([]);
+  const [recipientsTotal, setRecipientsTotal] = useState(0);
+  const [recipientsPage, setRecipientsPage] = useState(1);
+  const [recipientsLoading, setRecipientsLoading] = useState(false);
+  const [recipientsSearch, setRecipientsSearch] = useState("");
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -141,6 +147,29 @@ function CampaignsPage() {
       else toast.info(r.message);
     } catch { toast.error("Could not create retarget campaign"); }
     finally { setRetargetLoading(false); }
+  };
+
+  const loadRecipients = async (campaignId: string, page = 1, search = "") => {
+    if (!primaryKey?.keyRaw) return;
+    setRecipientsLoading(true);
+    try {
+      const qs = new URLSearchParams({ page: String(page), limit: "50" });
+      if (search) qs.set("search", search);
+      const r = await api.withKey.get<{ total: number; page: number; data: typeof recipients }>(`/v1/campaigns/${campaignId}/recipients?${qs}`, primaryKey.keyRaw);
+      setRecipients(r.data ?? []);
+      setRecipientsTotal(r.total ?? 0);
+      setRecipientsPage(r.page ?? 1);
+    } catch { toast.error("Could not load recipients"); }
+    finally { setRecipientsLoading(false); }
+  };
+
+  const openRecipients = (c: Campaign) => {
+    setRecipientsCampaign(c.id);
+    setRecipients([]);
+    setRecipientsTotal(0);
+    setRecipientsPage(1);
+    setRecipientsSearch("");
+    loadRecipients(c.id, 1, "");
   };
 
   const autoTextBody = () => {
@@ -780,6 +809,11 @@ function CampaignsPage() {
                             <Target className="h-3 w-3" /> Retarget
                           </Button>
                         )}
+                        {c.status === "sent" && (
+                          <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => openRecipients(c)}>
+                            <Users className="h-3 w-3" /> Recipients
+                          </Button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -787,6 +821,78 @@ function CampaignsPage() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Recipients drawer */}
+      {recipientsCampaign && (
+        <div className="fixed inset-0 z-40" onClick={() => setRecipientsCampaign(null)}>
+          <div
+            className="absolute right-0 top-0 h-full w-[520px] bg-card border-l border-border shadow-2xl overflow-y-auto flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border sticky top-0 bg-card z-10">
+              <div>
+                <p className="font-medium text-sm">Recipients</p>
+                <p className="text-xs text-muted-foreground">{recipientsTotal.toLocaleString()} total</p>
+              </div>
+              <button onClick={() => setRecipientsCampaign(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="px-5 py-3 border-b border-border sticky top-[57px] bg-card z-10">
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Search by email…"
+                  value={recipientsSearch}
+                  onChange={(e) => {
+                    setRecipientsSearch(e.target.value);
+                    loadRecipients(recipientsCampaign, 1, e.target.value);
+                  }}
+                  className="h-8 text-sm"
+                />
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {recipientsLoading ? (
+                <div className="flex items-center justify-center py-10 text-xs text-muted-foreground">Loading…</div>
+              ) : recipients.length === 0 ? (
+                <div className="flex items-center justify-center py-10 text-xs text-muted-foreground">No recipients found.</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-muted/50">
+                    <tr>
+                      <th className="text-left px-5 py-2 font-medium text-muted-foreground">Email</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Status</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Var</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Opened</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Clicked</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recipients.map((r) => (
+                      <tr key={r.id} className="border-t border-border hover:bg-muted/20">
+                        <td className="px-5 py-2 font-mono truncate max-w-[180px]">{r.email}</td>
+                        <td className="px-3 py-2">
+                          <StatusBadge status={r.status} />
+                        </td>
+                        <td className="px-3 py-2 font-mono uppercase">{r.variant}</td>
+                        <td className="px-3 py-2">{r.openedAt ? <CheckCircle2 className="h-3.5 w-3.5 text-[oklch(0.55_0.16_145)]" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground/40" />}</td>
+                        <td className="px-3 py-2">{r.clickedAt ? <CheckCircle2 className="h-3.5 w-3.5 text-[oklch(0.55_0.16_145)]" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground/40" />}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            {recipientsTotal > 50 && (
+              <div className="px-5 py-3 border-t border-border flex items-center justify-between bg-card">
+                <span className="text-xs text-muted-foreground">Page {recipientsPage} of {Math.ceil(recipientsTotal / 50)}</span>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={recipientsPage <= 1 || recipientsLoading} onClick={() => { const p = recipientsPage - 1; setRecipientsPage(p); loadRecipients(recipientsCampaign, p, recipientsSearch); }}>Prev</Button>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={recipientsPage >= Math.ceil(recipientsTotal / 50) || recipientsLoading} onClick={() => { const p = recipientsPage + 1; setRecipientsPage(p); loadRecipients(recipientsCampaign, p, recipientsSearch); }}>Next</Button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
