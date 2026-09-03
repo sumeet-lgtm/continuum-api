@@ -322,10 +322,10 @@ function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", subject: "", html: "" });
+  const [form, setForm] = useState({ name: "", subject: "", preheader: "", html: "" });
   const [saving, setSaving] = useState(false);
   const [editTarget, setEditTarget] = useState<Template | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", subject: "", html: "" });
+  const [editForm, setEditForm] = useState({ name: "", subject: "", preheader: "", html: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
   const [historyTemplate, setHistoryTemplate] = useState<Template | null>(null);
@@ -347,10 +347,10 @@ function TemplatesPage() {
     if (!primaryKey?.keyRaw) return;
     setSaving(true);
     try {
-      await api.withKey.post("/v1/templates", { name: form.name, subject: form.subject, html_body: form.html }, primaryKey.keyRaw);
+      await api.withKey.post("/v1/templates", { name: form.name, subject: form.subject, preheader: form.preheader || undefined, html_body: form.html }, primaryKey.keyRaw);
       toast.success("Template created");
       setCreating(false);
-      setForm({ name: "", subject: "", html: "" });
+      setForm({ name: "", subject: "", preheader: "", html: "" });
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }
@@ -358,7 +358,7 @@ function TemplatesPage() {
 
   const openEdit = (t: Template) => {
     setEditTarget(t);
-    setEditForm({ name: t.name, subject: t.subject, html: t.htmlBody ?? "" });
+    setEditForm({ name: t.name, subject: t.subject, preheader: "", html: t.htmlBody ?? "" });
   };
 
   const saveEdit = async () => {
@@ -368,7 +368,7 @@ function TemplatesPage() {
       await fetch(`https://api.continuumapi.com/v1/templates/${editTarget.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
-        body: JSON.stringify({ name: editForm.name, subject: editForm.subject, html_body: editForm.html }),
+        body: JSON.stringify({ name: editForm.name, subject: editForm.subject, preheader: editForm.preheader || undefined, html_body: editForm.html }),
       });
       setTemplates((ts) => ts.map((t) => t.id === editTarget.id ? { ...t, name: editForm.name, subject: editForm.subject, htmlBody: editForm.html } : t));
       toast.success("Template updated — previous version saved to history");
@@ -415,6 +415,13 @@ function TemplatesPage() {
               <Input value={editForm.subject} onChange={(e) => setEditForm((f) => ({ ...f, subject: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label>Preheader <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                <span className="text-xs text-muted-foreground">{editForm.preheader.length}/200</span>
+              </div>
+              <Input maxLength={200} placeholder="Short preview text shown after subject in inbox…" value={editForm.preheader} onChange={(e) => setEditForm((f) => ({ ...f, preheader: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
               <Label>HTML Body</Label>
               <textarea
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[120px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -445,6 +452,13 @@ function TemplatesPage() {
           <div className="space-y-1.5">
             <Label>Subject</Label>
             <Input placeholder="Welcome, {{first_name}}!" value={form.subject} onChange={(e) => setForm((f) => ({ ...f, subject: e.target.value }))} />
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label>Preheader <span className="text-muted-foreground font-normal">(optional)</span></Label>
+              <span className="text-xs text-muted-foreground">{form.preheader.length}/200</span>
+            </div>
+            <Input maxLength={200} placeholder="Short preview text shown after subject in inbox…" value={form.preheader} onChange={(e) => setForm((f) => ({ ...f, preheader: e.target.value }))} />
           </div>
           <div className="space-y-1.5">
             <Label>HTML Body</Label>

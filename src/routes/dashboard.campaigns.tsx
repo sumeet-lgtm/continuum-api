@@ -70,6 +70,8 @@ function CampaignsPage() {
   const [healthCampaign, setHealthCampaign] = useState<Campaign | null>(null);
   const [health, setHealth] = useState<CampaignHealth | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
+  const [spamResult, setSpamResult] = useState<{ campaign_id: string; spam_score: number; verdict: string; flags: Array<{ severity: string; message: string }> } | null>(null);
+  const [spamLoading, setSpamLoading] = useState(false);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -110,6 +112,17 @@ function CampaignsPage() {
       setHealth(h);
     } catch { toast.error("Could not load campaign health"); }
     finally { setHealthLoading(false); }
+  };
+
+  const runSpamCheck = async (c: Campaign) => {
+    if (!primaryKey?.keyRaw) return;
+    setSpamLoading(true);
+    setSpamResult(null);
+    try {
+      const r = await api.withKey.post<typeof spamResult>(`/v1/campaigns/${c.id}/spam-check`, {}, primaryKey.keyRaw);
+      setSpamResult(r);
+    } catch { toast.error("Could not run spam check"); }
+    finally { setSpamLoading(false); }
   };
 
   const autoTextBody = () => {
@@ -651,6 +664,11 @@ function CampaignsPage() {
                         <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => { setTestTarget(c.id); setTestEmail(""); }}>
                           <FlaskConical className="h-3 w-3" /> Test
                         </Button>
+                        {c.status === "draft" && (
+                          <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => runSpamCheck(c)} disabled={spamLoading}>
+                            <AlertTriangle className="h-3 w-3" /> Spam
+                          </Button>
+                        )}
                         <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => duplicate(c.id)}>
                           <Copy className="h-3 w-3" /> Dupe
                         </Button>
@@ -764,6 +782,56 @@ function CampaignsPage() {
                 <p className="text-sm text-muted-foreground">No health data available.</p>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Spam check result modal */}
+      {spamResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="rounded-lg border border-border bg-card p-6 w-full max-w-md space-y-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Spam Analysis</h2>
+              <button onClick={() => setSpamResult(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="relative w-16 h-16 shrink-0">
+                <svg className="w-16 h-16 -rotate-90" viewBox="0 0 64 64">
+                  <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" strokeWidth="6" className="text-muted/30" />
+                  <circle
+                    cx="32" cy="32" r="28" fill="none" strokeWidth="6" strokeLinecap="round"
+                    stroke={spamResult.spam_score >= 80 ? "oklch(0.55 0.16 145)" : spamResult.spam_score >= 50 ? "oklch(0.65 0.16 75)" : "oklch(0.58 0.22 27)"}
+                    strokeDasharray={`${(spamResult.spam_score / 100) * 175.9} 175.9`}
+                  />
+                </svg>
+                <span className="absolute inset-0 flex items-center justify-center text-sm font-bold">{spamResult.spam_score}</span>
+              </div>
+              <div>
+                <p className="text-sm font-semibold">
+                  {spamResult.verdict === "likely_inbox" ? "Likely Inbox" : spamResult.verdict === "at_risk" ? "At Risk" : "Likely Spam"}
+                </p>
+                <p className="text-xs text-muted-foreground">Content spam score</p>
+              </div>
+            </div>
+            {spamResult.flags.length === 0 ? (
+              <div className="flex items-center gap-2 rounded-md px-3 py-2 text-xs bg-[oklch(0.97_0.04_145)] text-[oklch(0.40_0.14_145)] border border-[oklch(0.85_0.10_145)]">
+                <CheckCircle2 className="h-3.5 w-3.5" /> No spam triggers found
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {spamResult.flags.map((f, i) => (
+                  <div key={i} className={`flex items-start gap-2 rounded-md px-3 py-2 text-xs border ${
+                    f.severity === "high" ? "bg-[oklch(0.97_0.04_27)] text-[oklch(0.40_0.18_27)] border-[oklch(0.88_0.10_27)]" :
+                    f.severity === "medium" ? "bg-[oklch(0.97_0.04_75)] text-[oklch(0.50_0.16_75)] border-[oklch(0.88_0.10_75)]" :
+                    "bg-muted text-muted-foreground border-border"
+                  }`}>
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    <span><span className="font-medium uppercase tracking-wide mr-1">{f.severity}</span>{f.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Button size="sm" variant="outline" onClick={() => setSpamResult(null)} className="w-full">Close</Button>
           </div>
         </div>
       )}
