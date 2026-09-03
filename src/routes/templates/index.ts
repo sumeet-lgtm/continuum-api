@@ -271,7 +271,7 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       const from = `${fromName} <${fromEmail}>`;
 
       try {
-        await sendViaSes({ to, from, subject: `[TEST] ${renderedSubject}`, htmlBody: renderedHtml, textBody: renderedText });
+        await sendViaSes({ to, from, subject: `[TEST] ${renderedSubject}`, htmlBody: renderedHtml, ...(renderedText !== undefined && { textBody: renderedText }) });
       } catch (err: unknown) {
         const msg = (err instanceof Error) ? err.message : 'Send failed';
         throw Errors.internalError(msg);

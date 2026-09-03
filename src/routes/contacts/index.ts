@@ -415,8 +415,8 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const hourCounts = new Array(24).fill(0) as number[];
     const dayCounts  = new Array(7).fill(0) as number[];
     for (const { occurredAt } of opens) {
-      hourCounts[occurredAt.getUTCHours()]++;
-      dayCounts[occurredAt.getUTCDay()]++;
+      hourCounts[occurredAt.getUTCHours()] = (hourCounts[occurredAt.getUTCHours()] ?? 0) + 1;
+      dayCounts[occurredAt.getUTCDay()] = (dayCounts[occurredAt.getUTCDay()] ?? 0) + 1;
     }
 
     const optimalHour = hourCounts.indexOf(Math.max(...hourCounts));
