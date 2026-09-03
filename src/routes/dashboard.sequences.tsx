@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical } from "lucide-react";
+import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/sequences")({
   head: () => ({ meta: [{ title: "Sequences — Continuum API" }] }),
@@ -17,6 +17,22 @@ export const Route = createFileRoute("/dashboard/sequences")({
 
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
 const DAY_SHORT: Record<string, string> = { monday: "Mon", tuesday: "Tue", wednesday: "Wed", thursday: "Thu", friday: "Fri", saturday: "Sat", sunday: "Sun" };
+
+interface FunnelStep {
+  step_id: string;
+  step_order: number;
+  subject: string;
+  delay_days: number;
+  sent: number;
+  opens: number;
+  clicks: number;
+  unsubscribes: number;
+  bounces: number;
+  open_rate: number;
+  click_rate: number;
+  unsubscribe_rate: number;
+  bounce_rate: number;
+}
 
 interface SequenceStep {
   id: string;
@@ -109,6 +125,11 @@ function SequencesPage() {
   const [editWindowFor, setEditWindowFor] = useState<string | null>(null); // seqId
   const [windowForm, setWindowForm] = useState({ sendDays: DEFAULT_DAYS as string[], sendStartHour: "8", sendEndHour: "17" });
   const [windowSaving, setWindowSaving] = useState(false);
+
+  // Funnel analytics
+  const [showFunnelFor, setShowFunnelFor] = useState<string | null>(null);
+  const [funnelData, setFunnelData] = useState<Record<string, FunnelStep[]>>({});
+  const [funnelLoading, setFunnelLoading] = useState<string | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -359,6 +380,28 @@ function SequencesPage() {
     } catch (e: unknown) { toast.error((e as Error).message); }
   };
 
+  const loadFunnel = async (seqId: string) => {
+    if (!primaryKey?.keyRaw || funnelData[seqId] !== undefined) return;
+    setFunnelLoading(seqId);
+    try {
+      const r = await api.withKey.get<{ steps: FunnelStep[] }>(`/v1/analytics/sequences/${seqId}/funnel`, primaryKey.keyRaw);
+      setFunnelData((prev) => ({ ...prev, [seqId]: r.steps ?? [] }));
+    } catch {
+      setFunnelData((prev) => ({ ...prev, [seqId]: [] }));
+    } finally {
+      setFunnelLoading(null);
+    }
+  };
+
+  const toggleFunnel = (seqId: string) => {
+    if (showFunnelFor === seqId) {
+      setShowFunnelFor(null);
+    } else {
+      setShowFunnelFor(seqId);
+      loadFunnel(seqId);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -527,8 +570,67 @@ function SequencesPage() {
                   <Button variant="ghost" size="sm" className="gap-1 h-7 text-xs" onClick={() => duplicate(seq.id)}>
                     <Copy className="h-3 w-3" /> Dupe
                   </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className={`gap-1 h-7 text-xs ${showFunnelFor === seq.id ? "bg-muted" : ""}`}
+                    onClick={() => toggleFunnel(seq.id)}
+                  >
+                    <BarChart2 className="h-3 w-3" /> Funnel
+                  </Button>
                 </div>
               </div>
+
+              {/* Funnel analytics panel */}
+              {showFunnelFor === seq.id && (
+                <div className="border-t border-border bg-muted/10 p-5 space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Step Funnel</p>
+                  {funnelLoading === seq.id ? (
+                    <p className="text-xs text-muted-foreground">Loading funnel…</p>
+                  ) : (funnelData[seq.id] ?? []).length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No data yet — enroll contacts and send some emails to see step-level metrics.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="grid gap-x-4 items-center text-xs text-muted-foreground px-1" style={{ gridTemplateColumns: "1.5rem 1fr 3rem 4rem 4rem 4rem" }}>
+                        <span>#</span>
+                        <span>Step</span>
+                        <span className="text-right">Sent</span>
+                        <span className="text-right">Opens</span>
+                        <span className="text-right">Clicks</span>
+                        <span className="text-right">Bounces</span>
+                      </div>
+                      {(funnelData[seq.id] ?? []).map((step) => (
+                        <div key={step.step_id} className="rounded-md border border-border bg-card p-3 space-y-2">
+                          <div className="grid gap-x-4 items-center" style={{ gridTemplateColumns: "1.5rem 1fr 3rem 4rem 4rem 4rem" }}>
+                            <span className="h-5 w-5 rounded-full bg-muted border border-border flex items-center justify-center text-xs font-semibold shrink-0">{step.step_order}</span>
+                            <p className="text-sm truncate">{step.subject}</p>
+                            <span className="text-sm font-mono tabular-nums text-right">{step.sent}</span>
+                            <span className="text-sm font-mono tabular-nums text-right">{(step.open_rate * 100).toFixed(1)}%</span>
+                            <span className="text-sm font-mono tabular-nums text-right">{(step.click_rate * 100).toFixed(1)}%</span>
+                            <span className={`text-sm font-mono tabular-nums text-right ${step.bounce_rate > 0.05 ? "text-[oklch(0.58_0.22_27)]" : ""}`}>{(step.bounce_rate * 100).toFixed(1)}%</span>
+                          </div>
+                          {step.sent > 0 && (
+                            <div className="space-y-1 pt-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground w-10 shrink-0">Opens</span>
+                                <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                                  <div className="h-full rounded-full bg-foreground/70 transition-all" style={{ width: `${Math.min(100, step.open_rate * 100)}%` }} />
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground w-10 shrink-0">Clicks</span>
+                                <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                                  <div className="h-full rounded-full bg-foreground/40 transition-all" style={{ width: `${Math.min(100, step.click_rate * 100)}%` }} />
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Steps + settings panel */}
               {expandedId === seq.id && (
