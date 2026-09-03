@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle } from "lucide-react";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
@@ -47,6 +47,8 @@ function CampaignsPage() {
   const [testSending, setTestSending] = useState(false);
   const [confirmCampaign, setConfirmCampaign] = useState<Campaign | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [preview, setPreview] = useState(false);
+  const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -248,7 +250,14 @@ function CampaignsPage() {
               value={form.htmlBody}
               onChange={(e) => setForm((f) => ({ ...f, htmlBody: e.target.value }))}
             />
-            <p className="text-xs text-muted-foreground">Use {"{{first_name}}"}, {"{{email}}"}, {"{{unsubscribe_url}}"} as personalization tokens.</p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Use {"{{first_name}}"}, {"{{email}}"}, {"{{unsubscribe_url}}"} as personalization tokens.</p>
+              {form.htmlBody && (
+                <button onClick={() => setPreview(true)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 shrink-0 ml-2">
+                  <Eye className="h-3 w-3" /> Preview
+                </button>
+              )}
+            </div>
           </div>
           <div className="space-y-1.5">
             <Label className="flex items-center gap-1.5"><Clock className="h-3.5 w-3.5 text-muted-foreground" /> Schedule send <span className="text-muted-foreground font-normal">(optional — leave blank to save as draft)</span></Label>
@@ -276,6 +285,53 @@ function CampaignsPage() {
               </>
             )}
             <Button variant="outline" onClick={() => { setCreating(false); setEditingCampaign(null); resetForm(); }}>Cancel</Button>
+          </div>
+        </div>
+      )}
+
+      {/* HTML preview modal */}
+      {preview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <div className="bg-card border border-border rounded-lg shadow-2xl flex flex-col w-full max-w-4xl h-[80vh]">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+              <div className="flex items-center gap-1">
+                <span className="text-sm font-medium mr-3">Email Preview</span>
+                <button
+                  onClick={() => setPreviewDevice("desktop")}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs ${previewDevice === "desktop" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  <Monitor className="h-3.5 w-3.5" /> Desktop
+                </button>
+                <button
+                  onClick={() => setPreviewDevice("mobile")}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs ${previewDevice === "mobile" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  <Smartphone className="h-3.5 w-3.5" /> Mobile
+                </button>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground truncate max-w-[300px]">Subject: {form.subject || "(no subject)"}</span>
+                <button onClick={() => setPreview(false)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto bg-[oklch(0.93_0.005_270)] flex items-start justify-center py-6">
+              <div
+                className={`bg-white shadow-lg transition-all ${previewDevice === "mobile" ? "w-[375px]" : "w-full max-w-[680px]"}`}
+                style={{ minHeight: "400px" }}
+              >
+                <iframe
+                  srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font-family:system-ui,sans-serif;font-size:15px;line-height:1.6;color:#111}a{color:#0070f3}</style></head><body>${form.htmlBody}</body></html>`}
+                  className="w-full border-0"
+                  style={{ minHeight: "400px", height: "100%" }}
+                  sandbox="allow-same-origin"
+                  title="Email preview"
+                  onLoad={(e) => {
+                    const iframe = e.currentTarget;
+                    iframe.style.height = (iframe.contentDocument?.body?.scrollHeight ?? 400) + "px";
+                  }}
+                />
+              </div>
+            </div>
           </div>
         </div>
       )}
