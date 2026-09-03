@@ -228,9 +228,14 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     // Update progress
     await prisma.campaign.update({ where: { id: campaignId }, data: { sentCount } });
 
-    // Rate limiting: 100ms between chunks to stay under SES limit
+    // Inter-chunk delay: honour drip rate if set, else 100ms to stay under SES burst limit.
+    // sendRatePerHour = 300 → max 300 emails/hr → 50-email chunk every 600s.
     if (i + CHUNK_SIZE < validRecipients.length) {
-      await new Promise(r => setTimeout(r, 100));
+      const rate = (campaign as unknown as { sendRatePerHour: number | null }).sendRatePerHour;
+      const delayMs = rate && rate > 0
+        ? Math.max(100, (CHUNK_SIZE / rate) * 3_600_000)
+        : 100;
+      await new Promise(r => setTimeout(r, delayMs));
     }
   }
 

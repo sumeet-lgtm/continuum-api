@@ -26,6 +26,7 @@ const createSchema = z.object({
   track_opens: z.boolean().default(true),
   track_clicks: z.boolean().default(true),
   scheduled_at: z.string().datetime().optional(),
+  send_rate_per_hour: z.number().int().min(10).max(50000).optional(),
 });
 
 export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
@@ -35,7 +36,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
     const apiKeyId = request.apiKey.id;
-    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at } = parsed.data;
+    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at, send_rate_per_hour } = parsed.data;
 
     const campaign = await prisma.campaign.create({
       data: {
@@ -46,6 +47,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
         listIds: list_ids, segmentIds: segment_ids ?? [], excludeListIds: exclude_list_ids ?? [],
         trackOpens: track_opens, trackClicks: track_clicks,
         scheduledAt: scheduled_at ? new Date(scheduled_at) : null,
+        ...(send_rate_per_hour !== undefined && { sendRatePerHour: send_rate_per_hour }),
         status: 'draft',
       },
       select: { id: true, name: true, subject: true, status: true, createdAt: true },
@@ -92,7 +94,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = createSchema.partial().safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at } = parsed.data;
+    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at, send_rate_per_hour } = parsed.data;
 
     const updated = await prisma.campaign.update({
       where: { id },
@@ -108,6 +110,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
         ...(track_opens !== undefined && { trackOpens: track_opens }),
         ...(track_clicks !== undefined && { trackClicks: track_clicks }),
         ...(scheduled_at !== undefined && { scheduledAt: scheduled_at ? new Date(scheduled_at) : null }),
+        ...(send_rate_per_hour !== undefined && { sendRatePerHour: send_rate_per_hour ?? null }),
       },
       select: { id: true, status: true, updatedAt: true },
     });

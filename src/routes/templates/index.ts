@@ -5,6 +5,7 @@ import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { compileMjml } from '../../lib/mjml.js';
+import { sendViaSes } from '../../lib/ses.js';
 
 const baseTemplateShape = {
   name: z.string().min(1).max(200),
@@ -231,6 +232,52 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       });
 
       return reply.status(200).send({ ...restored, restoredFromVersion: version.version });
+    },
+  );
+
+  // POST /v1/templates/:id/test-send — sends a real preview email to a specified address.
+  // Rate-limited to 10/hr per key to avoid abuse.
+  fastify.post(
+    '/templates/:id/test-send',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+
+      const body = request.body as Record<string, unknown>;
+      const to          = (typeof body.to === 'string' ? body.to : '').trim().toLowerCase();
+      const fromName    = typeof body.from_name === 'string' ? body.from_name.trim() : 'Test Send';
+      const fromEmail   = typeof body.from_email === 'string' ? body.from_email.trim() : '';
+      const variables   = (body.variables && typeof body.variables === 'object' && !Array.isArray(body.variables))
+        ? body.variables as Record<string, string>
+        : {};
+
+      if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw Errors.validationFailed([{ field: 'to', message: 'A valid recipient email is required.' }]);
+      if (!fromEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromEmail)) throw Errors.validationFailed([{ field: 'from_email', message: 'A valid sender email is required.' }]);
+
+      const template = await prisma.emailTemplate.findFirst({
+        where: { id, apiKeyId },
+        select: { subject: true, htmlBody: true, textBody: true },
+      });
+      if (!template) throw Errors.notFound('Template not found.');
+
+      // Replace {{ variable }} placeholders with supplied values (or a placeholder)
+      const render = (str: string) => str.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_: string, key: string) => String(variables[key] ?? `[${key}]`));
+
+      const renderedSubject = render(template.subject);
+      const renderedHtml    = render(template.htmlBody);
+      const renderedText    = template.textBody ? render(template.textBody) : undefined;
+
+      const from = `${fromName} <${fromEmail}>`;
+
+      try {
+        await sendViaSes({ to, from, subject: `[TEST] ${renderedSubject}`, htmlBody: renderedHtml, textBody: renderedText });
+      } catch (err: unknown) {
+        const msg = (err instanceof Error) ? err.message : 'Send failed';
+        throw Errors.internalError(msg);
+      }
+
+      return reply.status(200).send({ sent: true, to, subject: `[TEST] ${renderedSubject}` });
     },
   );
 
