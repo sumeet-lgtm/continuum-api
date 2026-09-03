@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Megaphone, Send, FlaskConical, X, Copy } from "lucide-react";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
@@ -42,6 +42,8 @@ function CampaignsPage() {
   const [testTarget, setTestTarget] = useState<string | null>(null);
   const [testEmail, setTestEmail] = useState("");
   const [testSending, setTestSending] = useState(false);
+  const [confirmCampaign, setConfirmCampaign] = useState<Campaign | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -87,12 +89,16 @@ function CampaignsPage() {
 
   const sendCampaign = async (id: string) => {
     if (!primaryKey?.keyRaw) return;
+    setConfirming(true);
     try {
       await api.withKey.post(`/v1/campaigns/${id}/send`, {}, primaryKey.keyRaw);
       toast.success("Campaign queued for sending");
       setCampaigns((c) => c.map((x) => x.id === id ? { ...x, status: "sending" } : x));
+      setConfirmCampaign(null);
     } catch (e: unknown) {
       toast.error((e as Error).message);
+    } finally {
+      setConfirming(false);
     }
   };
 
@@ -216,6 +222,60 @@ function CampaignsPage() {
         </div>
       )}
 
+      {/* Send confirmation modal */}
+      {confirmCampaign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="rounded-lg border border-border bg-card p-6 w-full max-w-md space-y-5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Confirm Send</h2>
+              <button onClick={() => setConfirmCampaign(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="rounded-md border border-border bg-muted/30 p-4 space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Subject</span>
+                <span className="font-medium max-w-[240px] truncate text-right">{confirmCampaign.subject}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">From</span>
+                <span className="font-medium">{confirmCampaign.fromName} &lt;{confirmCampaign.fromEmail}&gt;</span>
+              </div>
+              {confirmCampaign.scheduledAt && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Scheduled</span>
+                  <span className="font-medium">{new Date(confirmCampaign.scheduledAt).toLocaleString()}</span>
+                </div>
+              )}
+              <div className="border-t border-border pt-2 flex justify-between items-center">
+                <span className="text-muted-foreground flex items-center gap-1.5"><Users className="h-3.5 w-3.5" /> Recipients</span>
+                <span className="font-semibold tabular-nums text-base">{confirmCampaign.totalRecipients.toLocaleString()}</span>
+              </div>
+            </div>
+            {confirmCampaign.totalRecipients === 0 && (
+              <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                No recipients found. Make sure this campaign is linked to a mailing list with active subscribers.
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              This campaign will be sent immediately to{" "}
+              <strong>{confirmCampaign.totalRecipients.toLocaleString()} subscriber{confirmCampaign.totalRecipients !== 1 ? "s" : ""}</strong>.
+              This action cannot be undone.
+            </p>
+            <div className="flex gap-2">
+              <Button
+                onClick={() => sendCampaign(confirmCampaign.id)}
+                disabled={confirming || confirmCampaign.totalRecipients === 0}
+                className="gap-1.5"
+              >
+                <Send className="h-3.5 w-3.5" />
+                {confirming ? "Sending…" : `Send to ${confirmCampaign.totalRecipients.toLocaleString()} subscriber${confirmCampaign.totalRecipients !== 1 ? "s" : ""}`}
+              </Button>
+              <Button variant="outline" onClick={() => setConfirmCampaign(null)} disabled={confirming}>Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div className="rounded-lg border border-border bg-card divide-y divide-border overflow-hidden">
           {[...Array(5)].map((_, i) => (
@@ -273,7 +333,7 @@ function CampaignsPage() {
                           <Copy className="h-3 w-3" /> Dupe
                         </Button>
                         {c.status === "draft" && (
-                          <Button size="sm" variant="outline" className="gap-1 h-7 px-2 text-xs" onClick={() => sendCampaign(c.id)}>
+                          <Button size="sm" variant="outline" className="gap-1 h-7 px-2 text-xs" onClick={() => setConfirmCampaign(c)}>
                             <Send className="h-3 w-3" /> Send
                           </Button>
                         )}
