@@ -115,11 +115,26 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   let sentCount = 0;
 
   for (let i = 0; i < validRecipients.length; i += CHUNK_SIZE) {
-    // Check if campaign was cancelled mid-flight
-    const current = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { status: true } });
+    // Check if campaign was cancelled mid-flight or needs auto-pause for high bounce rate
+    const current = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { status: true, bounceCount: true, sentCount: true } });
     if (current?.status === 'cancelled') {
       logger.info({ campaignId }, 'Campaign cancelled mid-send');
       break;
+    }
+    // Auto-pause if bounce rate exceeds 5% and at least 50 sent — protects SES account health
+    if (current && current.sentCount >= 50) {
+      const liveBouncePct = current.bounceCount / current.sentCount;
+      if (liveBouncePct > 0.05) {
+        await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'paused_bounce' } });
+        logger.warn({ campaignId, bouncePct: liveBouncePct }, 'Campaign auto-paused: bounce rate exceeded 5%');
+        void dispatchWebhook({
+          apiKeyId,
+          event: 'campaign.paused_bounce',
+          eventId: buildEventId('campaign.paused_bounce', campaignId),
+          payload: { event: 'campaign.paused_bounce', campaign_id: campaignId, bounce_pct: liveBouncePct, apiVersion: '2' as const },
+        }).catch(() => {});
+        break;
+      }
     }
 
     let chunk = validRecipients.slice(i, i + CHUNK_SIZE);

@@ -21,7 +21,8 @@ export type WebhookEventV2 =
   | 'email.send_failed'
   // Campaign events
   | 'campaign.sent'
-  | 'campaign.failed';
+  | 'campaign.failed'
+  | 'campaign.paused_bounce';
 
 // Legacy aliases (Phase 1-4 code paths still emit these)
 export type WebhookEventLegacy =
@@ -44,6 +45,7 @@ export const ALL_WEBHOOK_EVENTS: WebhookEvent[] = [
   'email.send_failed',
   'campaign.sent',
   'campaign.failed',
+  'campaign.paused_bounce',
   // Legacy aliases
   'verification_complete',
   'bulk_job_complete',
@@ -76,6 +78,7 @@ export type WebhookEventPayload =
   | EmailSendFailedPayload
   | CampaignSentPayload
   | CampaignFailedPayload
+  | CampaignPausedBouncePayload
   // Legacy aliases
   | VerificationCompletePayload
   | BulkJobCompletePayload
@@ -284,6 +287,14 @@ export interface CampaignFailedPayload {
   name:        string;
   subject:     string;
   error:       string;
+  apiVersion:  '2';
+}
+
+/** campaign.paused_bounce */
+export interface CampaignPausedBouncePayload {
+  event:       'campaign.paused_bounce';
+  campaign_id: string;
+  bounce_pct:  number;
   apiVersion:  '2';
 }
 
