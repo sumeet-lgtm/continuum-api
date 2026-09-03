@@ -159,6 +159,26 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.status(200).send({ cancelled: true, id });
   });
 
+  // POST /v1/campaigns/:id/resume
+  // Allows manually resuming a campaign that was auto-paused due to high bounce rate.
+  // Requires the user to explicitly confirm intent — this re-queues the campaign
+  // worker to continue sending to remaining pending recipients.
+  fastify.post('/campaigns/:id/resume', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
+    if (!campaign) throw Errors.notFound('Campaign not found.');
+    if (campaign.status !== 'paused_bounce') throw Errors.forbidden('Only paused_bounce campaigns can be resumed via this endpoint.');
+
+    // Count how many recipients are still pending (not yet sent)
+    const pendingCount = await prisma.campaignRecipient.count({ where: { campaignId: id, status: 'pending' } });
+
+    await prisma.campaign.update({ where: { id }, data: { status: 'sending' } });
+    await campaignQueue.add('send-campaign', { campaignId: id, apiKeyId }, { jobId: `campaign-${id}-resume-${Date.now()}` });
+
+    return reply.status(200).send({ resumed: true, id, pending_recipients: pendingCount });
+  });
+
   // POST /v1/campaigns/:id/duplicate
   fastify.post('/campaigns/:id/duplicate', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
