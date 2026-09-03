@@ -101,12 +101,66 @@ async function revokeExpiredKeys(): Promise<void> {
   }
 }
 
+// ─── A/B test auto-winner ─────────────────────────────────────────────────────
+
+async function runABWinnerPick(): Promise<void> {
+  const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
+
+  const campaigns = await prisma.campaign.findMany({
+    where: {
+      status: 'sent',
+      subjectB: { not: null },
+      sentAt: { lte: fourHoursAgo },
+    },
+    select: { id: true, apiKeyId: true, openCount: true, openCountB: true },
+  });
+
+  let picked = 0;
+  for (const c of campaigns) {
+    // Skip if already auto-picked (check audit log)
+    const existing = await prisma.auditLog.findFirst({
+      where: { action: 'campaign.ab_winner_auto_picked', apiKeyId: c.apiKeyId },
+      select: { id: true, targets: true },
+    });
+    if (existing && JSON.stringify(existing.targets).includes(c.id)) continue;
+
+    // Need at least 20 total opens before picking
+    const totalOpens = c.openCount + c.openCountB;
+    if (totalOpens < 20) continue;
+
+    const winner: 'a' | 'b' = c.openCount >= c.openCountB ? 'a' : 'b';
+    const loser:  'a' | 'b' = winner === 'a' ? 'b' : 'a';
+
+    // Flip any remaining pending loser recipients to winner variant
+    await prisma.campaignRecipient.updateMany({
+      where: { campaignId: c.id, variant: loser, status: 'pending' },
+      data:  { variant: winner },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        apiKeyId:   c.apiKeyId,
+        action:     'campaign.ab_winner_auto_picked',
+        actorId:    'system',
+        actorEmail: 'system@continuumapi.com',
+        targets:    [{ type: 'campaign', id: c.id, name: `auto winner: ${winner.toUpperCase()}` }],
+      },
+    }).catch(() => {});
+
+    picked++;
+    logger.info({ campaignId: c.id, winner, openCount: c.openCount, openCountB: c.openCountB }, 'A/B winner auto-picked by daily checks');
+  }
+
+  if (picked > 0) logger.info({ picked }, 'A/B auto-winner picks completed');
+}
+
 // ─── Daily job handler ────────────────────────────────────────────────────────
 
 async function runDailyChecks(_job: Job): Promise<void> {
   logger.info('Daily checks starting');
   await revokeExpiredKeys();
   await runKeyExpiryWarnings();
+  await runABWinnerPick();
   logger.info('Daily checks complete');
 }
 

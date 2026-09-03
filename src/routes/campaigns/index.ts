@@ -27,6 +27,10 @@ const createSchema = z.object({
   track_clicks: z.boolean().default(true),
   scheduled_at: z.string().datetime().optional(),
   send_rate_per_hour: z.number().int().min(10).max(50000).optional(),
+  send_days: z.array(z.enum(['monday','tuesday','wednesday','thursday','friday','saturday','sunday'])).optional(),
+  send_start_hour: z.number().int().min(0).max(23).optional(),
+  send_end_hour: z.number().int().min(0).max(23).optional(),
+  timezone: z.string().max(50).optional(),
 });
 
 export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
@@ -36,7 +40,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
     const apiKeyId = request.apiKey.id;
-    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at, send_rate_per_hour } = parsed.data;
+    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at, send_rate_per_hour, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
 
     const campaign = await prisma.campaign.create({
       data: {
@@ -48,6 +52,10 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
         trackOpens: track_opens, trackClicks: track_clicks,
         scheduledAt: scheduled_at ? new Date(scheduled_at) : null,
         ...(send_rate_per_hour !== undefined && { sendRatePerHour: send_rate_per_hour }),
+        ...(send_days !== undefined && { sendDays: send_days }),
+        ...(send_start_hour !== undefined && { sendStartHour: send_start_hour }),
+        ...(send_end_hour !== undefined && { sendEndHour: send_end_hour }),
+        ...(timezone !== undefined && { timezone }),
         status: 'draft',
       },
       select: { id: true, name: true, subject: true, status: true, createdAt: true },
@@ -94,7 +102,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = createSchema.partial().safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at, send_rate_per_hour } = parsed.data;
+    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at, send_rate_per_hour, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
 
     const updated = await prisma.campaign.update({
       where: { id },
@@ -111,6 +119,10 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
         ...(track_clicks !== undefined && { trackClicks: track_clicks }),
         ...(scheduled_at !== undefined && { scheduledAt: scheduled_at ? new Date(scheduled_at) : null }),
         ...(send_rate_per_hour !== undefined && { sendRatePerHour: send_rate_per_hour ?? null }),
+        ...(send_days !== undefined && { sendDays: send_days }),
+        ...(send_start_hour !== undefined && { sendStartHour: send_start_hour }),
+        ...(send_end_hour !== undefined && { sendEndHour: send_end_hour }),
+        ...(timezone !== undefined && { timezone }),
       },
       select: { id: true, status: true, updatedAt: true },
     });

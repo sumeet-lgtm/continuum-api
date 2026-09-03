@@ -13,6 +13,22 @@ interface CampaignJobData {
   apiKeyId: string;
 }
 
+function isInSendWindow(campaign: { sendDays: string[]; sendStartHour: number; sendEndHour: number; timezone: string }): boolean {
+  const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  try {
+    const tz = campaign.timezone || 'UTC';
+    const nowInTz = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
+    const day = DAY_NAMES[nowInTz.getDay()];
+    const hour = nowInTz.getHours();
+    const days = campaign.sendDays as string[];
+    // No window configured = always in window
+    if (!days || days.length === 0) return true;
+    return days.includes(day) && hour >= campaign.sendStartHour && hour < campaign.sendEndHour;
+  } catch {
+    return true; // invalid timezone → don't block
+  }
+}
+
 export async function processCampaign(job: Job<CampaignJobData>): Promise<void> {
   const { campaignId, apiKeyId } = job.data;
 
@@ -251,6 +267,23 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
         ? Math.max(100, (CHUNK_SIZE / rate) * 3_600_000)
         : 100;
       await new Promise(r => setTimeout(r, delayMs));
+
+      // Respect send window — if outside allowed days/hours, wait up to 15min then recheck.
+      // This blocks the worker thread, which is acceptable: a campaign that chose a send window
+      // can occupy a slot during off-hours. Worker concurrency handles other campaigns.
+      const sendDays = campaign.sendDays as string[];
+      if (sendDays && sendDays.length > 0) {
+        while (!isInSendWindow(campaign)) {
+          logger.info({ campaignId, timezone: campaign.timezone }, 'Campaign outside send window — waiting 15min');
+          await new Promise(r => setTimeout(r, 15 * 60 * 1000));
+          // Re-check cancellation
+          const recheck = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { status: true } });
+          if (recheck?.status === 'cancelled') {
+            logger.info({ campaignId }, 'Campaign cancelled while waiting for send window');
+            return;
+          }
+        }
+      }
     }
   }
 
