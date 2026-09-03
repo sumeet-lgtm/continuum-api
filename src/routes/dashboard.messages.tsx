@@ -75,6 +75,9 @@ function MessagesPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [toFilter, setToFilter] = useState("");
   const [toInput, setToInput] = useState("");
+  const [subjectFilter, setSubjectFilter] = useState("");
+  const [subjectInput, setSubjectInput] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
 
   // Detail panel
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -98,6 +101,8 @@ function MessagesPage() {
     const params = new URLSearchParams({ page: String(page), limit: String(LIMIT) });
     if (statusFilter) params.set("status", statusFilter);
     if (toFilter) params.set("to", toFilter);
+    if (subjectFilter) params.set("subject", subjectFilter);
+    if (tagFilter) params.set("tag", tagFilter);
     fetch(`https://api.continuumapi.com/v1/messages?${params}`, {
       headers: { "X-API-Key": primaryKey.keyRaw! },
     })
@@ -109,7 +114,7 @@ function MessagesPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [primaryKey, page, statusFilter, toFilter]);
+  }, [primaryKey, page, statusFilter, toFilter, subjectFilter, tagFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -186,6 +191,8 @@ function MessagesPage() {
       const params = new URLSearchParams({ page: "1", limit: "1000" });
       if (statusFilter) params.set("status", statusFilter);
       if (toFilter) params.set("to", toFilter);
+      if (subjectFilter) params.set("subject", subjectFilter);
+      if (tagFilter) params.set("tag", tagFilter);
       const res = await fetch(`https://api.continuumapi.com/v1/messages?${params}`, {
         headers: { "X-API-Key": primaryKey.keyRaw! },
       });
@@ -212,6 +219,7 @@ function MessagesPage() {
   };
 
   const applyToFilter = () => { setToFilter(toInput.trim()); setPage(1); };
+  const applySubjectFilter = () => { setSubjectFilter(subjectInput.trim()); setPage(1); };
 
   const totalPages = Math.ceil(total / LIMIT);
 
@@ -291,7 +299,7 @@ function MessagesPage() {
         <div className="flex gap-1.5">
           <Input
             placeholder="Filter by recipient email"
-            className="h-8 text-sm w-64"
+            className="h-8 text-sm w-52"
             value={toInput}
             onChange={(e) => setToInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && applyToFilter()}
@@ -302,6 +310,35 @@ function MessagesPage() {
             </Button>
           ) : (
             <Button size="sm" variant="outline" className="h-8 px-3 text-xs" onClick={applyToFilter}>Search</Button>
+          )}
+        </div>
+        <div className="flex gap-1.5">
+          <Input
+            placeholder="Filter by subject"
+            className="h-8 text-sm w-52"
+            value={subjectInput}
+            onChange={(e) => setSubjectInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && applySubjectFilter()}
+          />
+          {subjectFilter ? (
+            <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => { setSubjectFilter(""); setSubjectInput(""); setPage(1); }}>
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" className="h-8 px-3 text-xs" onClick={applySubjectFilter}>Search</Button>
+          )}
+        </div>
+        <div className="flex gap-1.5">
+          <Input
+            placeholder="Filter by tag"
+            className="h-8 text-sm w-36"
+            value={tagFilter}
+            onChange={(e) => { setTagFilter(e.target.value); setPage(1); }}
+          />
+          {tagFilter && (
+            <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => { setTagFilter(""); setPage(1); }}>
+              <X className="h-3.5 w-3.5" />
+            </Button>
           )}
         </div>
       </div>
