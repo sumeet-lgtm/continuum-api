@@ -326,6 +326,70 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     });
   });
 
+  // GET /v1/contacts/:email/timeline — chronological event log for a single contact.
+  // Returns up to 100 most-recent events spanning sends, opens, clicks,
+  // bounces, complaints, list changes, and suppression.
+  fastify.get('/contacts/:email/timeline', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { email: rawEmail } = request.params as { email: string };
+    const email = decodeURIComponent(rawEmail).toLowerCase();
+    const apiKeyId = request.apiKey.id;
+    const q = request.query as { limit?: string };
+    const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
+
+    const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
+    if (!contact) throw Errors.notFound('Contact not found.');
+
+    const [sends, trackingEvents, listChanges, suppression] = await Promise.all([
+      prisma.sendMessage.findMany({
+        where: { apiKeyId, to: email },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        select: { id: true, subject: true, status: true, createdAt: true, sentAt: true, templateId: true },
+      }),
+      prisma.trackingEvent.findMany({
+        where: { email, sendMessage: { apiKeyId } },
+        orderBy: { occurredAt: 'desc' },
+        take: limit,
+        select: { id: true, type: true, linkUrl: true, occurredAt: true, sendMessageId: true },
+      }),
+      prisma.contactListMembership.findMany({
+        where: { contact: { apiKeyId, email } },
+        orderBy: { subscribedAt: 'desc' },
+        select: { status: true, subscribedAt: true, unsubscribedAt: true, list: { select: { id: true, name: true } } },
+      }),
+      prisma.suppression.findFirst({ where: { email }, select: { reason: true, createdAt: true } }),
+    ]);
+
+    // Merge events into a unified timeline
+    const events: Array<{ type: string; timestamp: string; data: Record<string, unknown> }> = [];
+
+    for (const s of sends) {
+      events.push({ type: 'email_sent', timestamp: (s.sentAt ?? s.createdAt).toISOString(), data: { send_id: s.id, subject: s.subject, status: s.status, template_id: s.templateId } });
+      if (s.status === 'bounced') events.push({ type: 'email_bounced', timestamp: (s.sentAt ?? s.createdAt).toISOString(), data: { send_id: s.id, subject: s.subject } });
+      if (s.status === 'complained') events.push({ type: 'email_complained', timestamp: (s.sentAt ?? s.createdAt).toISOString(), data: { send_id: s.id, subject: s.subject } });
+    }
+
+    for (const ev of trackingEvents) {
+      const t = ev.type === 'open' ? 'email_opened' : ev.type === 'click' ? 'email_clicked' : ev.type === 'unsubscribe' ? 'unsubscribed' : ev.type;
+      events.push({ type: t, timestamp: ev.occurredAt.toISOString(), data: { send_id: ev.sendMessageId, ...(ev.linkUrl ? { url: ev.linkUrl } : {}) } });
+    }
+
+    for (const m of listChanges) {
+      if (m.subscribedAt) events.push({ type: 'list_subscribed', timestamp: m.subscribedAt.toISOString(), data: { list_id: m.list.id, list_name: m.list.name } });
+      if (m.unsubscribedAt) events.push({ type: 'list_unsubscribed', timestamp: m.unsubscribedAt.toISOString(), data: { list_id: m.list.id, list_name: m.list.name } });
+    }
+
+    if (suppression) {
+      events.push({ type: 'suppressed', timestamp: suppression.createdAt.toISOString(), data: { reason: suppression.reason } });
+    }
+
+    // Sort by timestamp desc and cap at limit
+    events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const trimmed = events.slice(0, limit);
+
+    return reply.send({ email, total: trimmed.length, events: trimmed });
+  });
+
   // GET /v1/confirm?token=xxx — double opt-in confirmation (no auth required — email link)
   fastify.get('/confirm', { preHandler: [requireIpRateLimit('confirm', 60)] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const q = request.query as { token?: string };

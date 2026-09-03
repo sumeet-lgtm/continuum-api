@@ -537,7 +537,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const msgToStep = new Map(stepSendIds.map(m => [m.id, m.sequenceStepId!]));
       const eventByStep = new Map<string, { opens: number; clicks: number; unsubscribes: number }>();
       for (const ev of events) {
-        const stepId = msgToStep.get(ev.sendMessageId);
+        const stepId = ev.sendMessageId ? msgToStep.get(ev.sendMessageId) : undefined;
         if (!stepId) continue;
         if (!eventByStep.has(stepId)) eventByStep.set(stepId, { opens: 0, clicks: 0, unsubscribes: 0 });
         const e = eventByStep.get(stepId)!;
