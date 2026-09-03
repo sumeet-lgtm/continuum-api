@@ -45,6 +45,7 @@ import {
   AlertTriangle,
   Info,
   X,
+  Calendar,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
@@ -388,6 +389,15 @@ function DashboardLayout() {
           {NAV.map((item) => renderNavItem(item))}
         </nav>
         <div className="border-t border-border p-3 shrink-0">
+          <a
+            href="https://cal.com/sumeet-sutar-ecfqg3/continuum-api-email-infrastructure-consultation"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-background hover:text-foreground transition-colors mb-0.5"
+          >
+            <Calendar className="h-4 w-4 shrink-0" />
+            Talk to an expert
+          </a>
           <div className="px-2 py-1.5">
             <p className="text-xs font-medium truncate">{displayName}</p>
             <p className="text-xs text-muted-foreground truncate">{user.email}</p>
@@ -427,6 +437,15 @@ function DashboardLayout() {
             {NAV.map((item) => renderNavItem(item))}
           </nav>
           <div className="border-t border-border mx-3 pt-3 pb-6">
+            <a
+              href="https://cal.com/sumeet-sutar-ecfqg3/continuum-api-email-infrastructure-consultation"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-background hover:text-foreground transition-colors mb-1"
+            >
+              <Calendar className="h-4 w-4 shrink-0" />
+              Talk to an expert
+            </a>
             <div className="px-2 py-1.5 mb-1">
               <p className="text-xs font-medium truncate">{displayName}</p>
               <p className="text-xs text-muted-foreground truncate">{user.email}</p>
