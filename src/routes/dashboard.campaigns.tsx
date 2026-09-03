@@ -60,7 +60,7 @@ function CampaignsPage() {
   const [domains, setDomains] = useState<SendingDomain[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", subjectB: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "", sendRatePerHour: "" });
+  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", subjectB: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "", sendRatePerHour: "", sendDays: ["monday","tuesday","wednesday","thursday","friday"] as string[], sendStartHour: "8", sendEndHour: "17", timezone: "UTC" });
   const [saving, setSaving] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [testTarget, setTestTarget] = useState<string | null>(null);
@@ -113,7 +113,7 @@ function CampaignsPage() {
 
   useEffect(() => { load(); }, [primaryKey]);
 
-  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", subjectB: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "", sendRatePerHour: "" });
+  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", subjectB: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "", sendRatePerHour: "", sendDays: ["monday","tuesday","wednesday","thursday","friday"] as string[], sendStartHour: "8", sendEndHour: "17", timezone: "UTC" });
 
   const openHealth = async (c: Campaign) => {
     if (!primaryKey?.keyRaw) return;
@@ -234,6 +234,10 @@ function CampaignsPage() {
       };
       if (!asDraft && form.scheduledAt) payload.scheduled_at = new Date(form.scheduledAt).toISOString();
       if (form.sendRatePerHour) payload.send_rate_per_hour = parseInt(form.sendRatePerHour, 10);
+      if (form.sendDays.length > 0) payload.send_days = form.sendDays;
+      payload.send_start_hour = parseInt(form.sendStartHour, 10);
+      payload.send_end_hour = parseInt(form.sendEndHour, 10);
+      payload.timezone = form.timezone;
       const campaign = await api.withKey.post<{ id: string }>("/v1/campaigns", payload, primaryKey.keyRaw);
       if (!asDraft && !form.scheduledAt) {
         await api.withKey.post(`/v1/campaigns/${campaign.id}/send`, {}, primaryKey.keyRaw);
@@ -273,6 +277,10 @@ function CampaignsPage() {
         track_clicks: form.trackClicks,
         ...(form.scheduledAt ? { scheduled_at: new Date(form.scheduledAt).toISOString() } : {}),
         ...(form.sendRatePerHour ? { send_rate_per_hour: parseInt(form.sendRatePerHour, 10) } : {}),
+        send_days: form.sendDays,
+        send_start_hour: parseInt(form.sendStartHour, 10),
+        send_end_hour: parseInt(form.sendEndHour, 10),
+        timezone: form.timezone,
       }, primaryKey.keyRaw);
       toast.success("Campaign updated");
       setEditingCampaign(null);
@@ -529,6 +537,75 @@ function CampaignsPage() {
             {form.sendRatePerHour && parseInt(form.sendRatePerHour, 10) > 0 && (
               <p className="text-xs text-muted-foreground">At this rate, a 50-recipient chunk sends every {Math.round((50 / parseInt(form.sendRatePerHour, 10)) * 60)} min.</p>
             )}
+          </div>
+          <div className="space-y-2.5">
+            <div>
+              <Label>Send Window <span className="text-muted-foreground font-normal">(optional)</span></Label>
+              <p className="text-xs text-muted-foreground mt-0.5">Restrict sends to specific days and hours</p>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {(["monday","tuesday","wednesday","thursday","friday","saturday","sunday"] as const).map((day) => {
+                const label = day.charAt(0).toUpperCase() + day.slice(1, 3);
+                const active = form.sendDays.includes(day);
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, sendDays: active ? f.sendDays.filter((d) => d !== day) : [...f.sendDays, day] }))}
+                    className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${active ? "bg-foreground text-background" : "bg-muted text-muted-foreground hover:text-foreground"}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">From hour</p>
+                <select
+                  className="rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={form.sendStartHour}
+                  onChange={(e) => setForm((f) => ({ ...f, sendStartHour: e.target.value }))}
+                >
+                  {Array.from({ length: 24 }, (_, h) => {
+                    const label = h === 0 ? "12am" : h < 12 ? `${h}am` : h === 12 ? "12pm" : `${h - 12}pm`;
+                    return <option key={h} value={String(h)}>{label}</option>;
+                  })}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">To hour</p>
+                <select
+                  className="rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={form.sendEndHour}
+                  onChange={(e) => setForm((f) => ({ ...f, sendEndHour: e.target.value }))}
+                >
+                  {Array.from({ length: 24 }, (_, h) => {
+                    const label = h === 0 ? "12am" : h < 12 ? `${h}am` : h === 12 ? "12pm" : `${h - 12}pm`;
+                    return <option key={h} value={String(h)}>{label}</option>;
+                  })}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">Timezone</p>
+                <select
+                  className="rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={form.timezone}
+                  onChange={(e) => setForm((f) => ({ ...f, timezone: e.target.value }))}
+                >
+                  <option value="UTC">UTC</option>
+                  <option value="America/New_York">America/New_York</option>
+                  <option value="America/Chicago">America/Chicago</option>
+                  <option value="America/Denver">America/Denver</option>
+                  <option value="America/Los_Angeles">America/Los_Angeles</option>
+                  <option value="Europe/London">Europe/London</option>
+                  <option value="Europe/Paris">Europe/Paris</option>
+                  <option value="Asia/Kolkata">Asia/Kolkata</option>
+                  <option value="Asia/Tokyo">Asia/Tokyo</option>
+                  <option value="Australia/Sydney">Australia/Sydney</option>
+                </select>
+              </div>
+            </div>
           </div>
           <div className="flex gap-2 flex-wrap">
             {editingCampaign ? (
@@ -799,7 +876,7 @@ function CampaignsPage() {
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => {
                             setEditingCampaign(c);
                             setCreating(false);
-                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, subjectB: c.subjectB ?? "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: c.trackOpens, trackClicks: c.trackClicks, scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "", sendRatePerHour: (c as Campaign & { sendRatePerHour?: number | null }).sendRatePerHour ? String((c as Campaign & { sendRatePerHour?: number | null }).sendRatePerHour) : "" });
+                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, subjectB: c.subjectB ?? "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: c.trackOpens, trackClicks: c.trackClicks, scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "", sendRatePerHour: (c as Campaign & { sendRatePerHour?: number | null }).sendRatePerHour ? String((c as Campaign & { sendRatePerHour?: number | null }).sendRatePerHour) : "", sendDays: (c as Campaign & { sendDays?: string[] }).sendDays ?? ["monday","tuesday","wednesday","thursday","friday"], sendStartHour: String((c as Campaign & { sendStartHour?: number | null }).sendStartHour ?? 8), sendEndHour: String((c as Campaign & { sendEndHour?: number | null }).sendEndHour ?? 17), timezone: (c as Campaign & { timezone?: string }).timezone ?? "UTC" });
                           }}>
                             <Edit2 className="h-3 w-3" /> Edit
                           </Button>
