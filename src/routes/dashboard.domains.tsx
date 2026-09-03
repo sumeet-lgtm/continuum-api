@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, RefreshCw, ServerCog, CheckCircle2, XCircle, Clock, ShieldCheck, X, Copy, Check } from "lucide-react";
+import { Plus, RefreshCw, ServerCog, CheckCircle2, XCircle, Clock, ShieldCheck, X, Copy, Check, KeyRound, AlertTriangle } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/domains")({
   head: () => ({ meta: [{ title: "Sending Domains — Continuum API" }] }),
@@ -59,6 +59,8 @@ function DomainsPage() {
   const [healthLoading, setHealthLoading] = useState(false);
   const [newDnsRecords, setNewDnsRecords] = useState<DnsRecords | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [rotatingId, setRotatingId] = useState<string | null>(null);
+  const [rotateDnsRecord, setRotateDnsRecord] = useState<{ type: string; host: string; value: string } | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -106,6 +108,27 @@ function DomainsPage() {
       load();
     } catch (e: unknown) {
       toast.error((e as Error).message);
+    }
+  };
+
+  const rotateDkim = async (domain: Domain) => {
+    if (!primaryKey?.keyRaw) return;
+    if (!confirm(`Rotate DKIM keys for ${domain.name}?\n\nA new key pair will be generated. You'll need to update the DNS TXT record and re-verify the domain. Email sending continues with the old key until re-verified.`)) return;
+    setRotatingId(domain.id);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/domains/${domain.id}/rotate-dkim`, {
+        method: "POST",
+        headers: { "X-API-Key": primaryKey.keyRaw },
+      });
+      const data = await res.json() as { dnsRecord: { type: string; host: string; value: string }; message: string };
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? "Failed");
+      setRotateDnsRecord(data.dnsRecord);
+      toast.success("DKIM keys rotated — update DNS to complete");
+      load();
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setRotatingId(null);
     }
   };
 
@@ -297,11 +320,19 @@ function DomainsPage() {
                   <td className="px-5 py-3 text-muted-foreground">{new Date(d.createdAt).toLocaleDateString()}</td>
                   <td className="px-5 py-3">
                     <div className="flex gap-1">
-                      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1" onClick={() => checkHealth(d)}>
+                      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1" title="Domain health check" onClick={() => checkHealth(d)}>
                         <ShieldCheck className="h-3 w-3" /> Health
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => recheck(d.id)}>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Re-verify DNS" onClick={() => recheck(d.id)}>
                         <RefreshCw className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost" size="icon" className="h-7 w-7"
+                        title="Rotate DKIM keys"
+                        onClick={() => void rotateDkim(d)}
+                        disabled={rotatingId === d.id}
+                      >
+                        <KeyRound className={`h-3.5 w-3.5 ${rotatingId === d.id ? "animate-spin opacity-50" : ""}`} />
                       </Button>
                     </div>
                   </td>
@@ -309,6 +340,54 @@ function DomainsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* DKIM rotation result */}
+      {rotateDnsRecord && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="rounded-lg border border-border bg-card w-full max-w-lg shadow-xl space-y-4 p-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold flex items-center gap-2">
+                <KeyRound className="h-4 w-4" /> DKIM Keys Rotated
+              </h2>
+              <button onClick={() => setRotateDnsRecord(null)} className="text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="rounded-md bg-[oklch(0.65_0.16_75)]/10 border border-[oklch(0.65_0.16_75)]/30 px-4 py-3 flex gap-3">
+              <AlertTriangle className="h-4 w-4 text-[oklch(0.65_0.16_75)] shrink-0 mt-0.5" />
+              <p className="text-sm text-[oklch(0.65_0.16_75)]">
+                Update the DNS record below, then click Re-verify DNS to complete rotation. Email signing continues with the old key until then.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">New DNS TXT Record</p>
+              <div className="rounded-md border border-border overflow-hidden text-xs font-mono">
+                <div className="px-3 py-2 border-b border-border bg-muted/40 flex items-center justify-between">
+                  <span className="text-muted-foreground">Host</span>
+                  <button
+                    onClick={() => { void navigator.clipboard.writeText(rotateDnsRecord.host); toast.success("Host copied"); }}
+                    className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                  >
+                    <Copy className="h-3 w-3" /> Copy
+                  </button>
+                </div>
+                <div className="px-3 py-2 break-all">{rotateDnsRecord.host}</div>
+                <div className="px-3 py-2 border-t border-border bg-muted/40 flex items-center justify-between">
+                  <span className="text-muted-foreground">Value</span>
+                  <button
+                    onClick={() => { void navigator.clipboard.writeText(rotateDnsRecord.value); toast.success("Value copied"); }}
+                    className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                  >
+                    <Copy className="h-3 w-3" /> Copy
+                  </button>
+                </div>
+                <div className="px-3 py-2 break-all">{rotateDnsRecord.value}</div>
+              </div>
+            </div>
+            <Button size="sm" onClick={() => setRotateDnsRecord(null)}>Done</Button>
+          </div>
         </div>
       )}
     </div>
