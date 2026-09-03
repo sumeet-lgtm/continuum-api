@@ -31,15 +31,17 @@ interface Campaign {
 
 interface MailingList { id: string; name: string; }
 interface EmailTemplate { id: string; name: string; subject: string; htmlBody: string; }
+interface Segment { id: string; name: string; }
 
 function CampaignsPage() {
   const { primaryKey } = useAuth();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [lists, setLists] = useState<MailingList[]>([]);
+  const [segments, setSegments] = useState<Segment[]>([]);
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "", scheduledAt: "" });
+  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "", segmentId: "", scheduledAt: "" });
   const [saving, setSaving] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [testTarget, setTestTarget] = useState<string | null>(null);
@@ -65,11 +67,15 @@ function CampaignsPage() {
       .get<{ data: EmailTemplate[] }>("/v1/templates?limit=50", primaryKey.keyRaw)
       .then((r) => setTemplates(r.data ?? []))
       .catch(() => {});
+    api.withKey
+      .get<{ data: Segment[] }>("/v1/segments", primaryKey.keyRaw)
+      .then((r) => setSegments(r.data ?? []))
+      .catch(() => {});
   };
 
   useEffect(() => { load(); }, [primaryKey]);
 
-  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "", scheduledAt: "" });
+  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", subject: "", htmlBody: "", listId: "", segmentId: "", scheduledAt: "" });
 
   const create = async (asDraft = true) => {
     if (!primaryKey?.keyRaw) return;
@@ -86,6 +92,7 @@ function CampaignsPage() {
         subject: form.subject,
         html_body: form.htmlBody,
         list_ids: form.listId ? [form.listId] : [],
+        segment_ids: form.segmentId ? [form.segmentId] : [],
       };
       if (!asDraft && form.scheduledAt) payload.scheduled_at = new Date(form.scheduledAt).toISOString();
       const campaign = await api.withKey.post<{ id: string }>("/v1/campaigns", payload, primaryKey.keyRaw);
@@ -223,6 +230,19 @@ function CampaignsPage() {
               >
                 <option value="">— choose a list —</option>
                 {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
+          )}
+          {segments.length > 0 && !editingCampaign && (
+            <div className="space-y-1.5">
+              <Label>Filter by segment <span className="text-muted-foreground font-normal">(optional — narrows the list to matching contacts)</span></Label>
+              <select
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={form.segmentId}
+                onChange={(e) => setForm((f) => ({ ...f, segmentId: e.target.value }))}
+              >
+                <option value="">— all subscribers in the list —</option>
+                {segments.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </div>
           )}
@@ -501,7 +521,7 @@ function CampaignsPage() {
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => {
                             setEditingCampaign(c);
                             setCreating(false);
-                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, subject: c.subject, htmlBody: "", listId: "", scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
+                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, subject: c.subject, htmlBody: "", listId: "", segmentId: "", scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
                           }}>
                             <Edit2 className="h-3 w-3" /> Edit
                           </Button>
