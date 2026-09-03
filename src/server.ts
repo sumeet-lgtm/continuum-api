@@ -45,6 +45,8 @@ import { campaignRoutes } from './routes/campaigns/index.js';
 import { mailboxRoutes } from './routes/mailboxes/index.js';
 import { sequenceRoutes } from './routes/sequences/index.js';
 import { leadRoutes } from './routes/leads/index.js';
+import { accountsRoutes } from './routes/accounts/index.js';
+import { brandRoutes } from './routes/brand/index.js';
 import { finderRoutes } from './routes/finder/index.js';
 import { inboxRoutes } from './routes/inbox/index.js';
 import { inboxTestRoutes } from './routes/inbox-test/index.js';
@@ -200,6 +202,8 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(mailboxRoutes, { prefix: '/v1' });
   await app.register(sequenceRoutes, { prefix: '/v1' });
   await app.register(leadRoutes, { prefix: '/v1' });
+  await app.register(accountsRoutes, { prefix: '/v1' });
+  await app.register(brandRoutes, { prefix: '/v1' });
   await app.register(finderRoutes, { prefix: '/v1' });
   await app.register(inboxRoutes, { prefix: '/v1' });
   await app.register(inboxTestRoutes, { prefix: '/v1' });

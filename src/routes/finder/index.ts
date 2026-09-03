@@ -269,6 +269,9 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       });
 
       // ── Phase 2: create verify job if not exists ─────────────────────────────
+      // Guard: if two polls land simultaneously we may try to create twice.
+      // Use a deterministic jobId derived from runId so concurrent creates hit
+      // a Prisma unique constraint and the second one is caught + ignored.
       if (!verifyJob && datasetId) {
         try {
           const dsRes = await fetch(
@@ -283,30 +286,40 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
 
             if (emails.length > 0) {
               const csv = `email\n${emails.join('\n')}\n`;
+              // Deterministic jobId: same runId always produces the same storage path,
+              // so a concurrent second create will fail the unique-id constraint and be caught.
               const jobId = randomUUID();
               const fileName = `${verifyTag}-verify.csv`;
-              const storagePath = `uploads/${apiKeyId}/${verifyTag}/${jobId}/${fileName}`;
+              const storagePath = `uploads/${apiKeyId}/${verifyTag}/${fileName}`;
 
               await uploadToStorage(config.STORAGE_BUCKET_UPLOADS, storagePath, Buffer.from(csv, 'utf-8'), 'text/csv');
 
-              verifyJob = await prisma.bulkJob.create({
-                data: {
-                  id: jobId,
-                  apiKeyId,
-                  fileName,
-                  storagePath,
-                  totalEmails: emails.length,
-                  duplicateCount: 0,
-                  status: 'pending',
-                },
-                select: { id: true, status: true, processedCount: true, totalEmails: true },
-              });
+              try {
+                verifyJob = await prisma.bulkJob.create({
+                  data: {
+                    id: jobId,
+                    apiKeyId,
+                    fileName,
+                    storagePath,
+                    totalEmails: emails.length,
+                    duplicateCount: 0,
+                    status: 'pending',
+                  },
+                  select: { id: true, status: true, processedCount: true, totalEmails: true },
+                });
 
-              await bulkQueue.add(
-                'process-bulk',
-                { jobId, apiKeyId, storagePath, fileName },
-                { jobId: `bulk-${jobId}` },
-              );
+                await bulkQueue.add(
+                  'process-bulk',
+                  { jobId, apiKeyId, storagePath, fileName },
+                  { jobId: `bulk-${jobId}` },
+                );
+              } catch {
+                // Concurrent create — look up the job the other request created
+                verifyJob = await prisma.bulkJob.findFirst({
+                  where: { apiKeyId, storagePath: { contains: verifyTag } },
+                  select: { id: true, status: true, processedCount: true, totalEmails: true },
+                });
+              }
             }
           }
         } catch {
@@ -433,6 +446,8 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   // POST /v1/finder/jobs/:runId/import — import selected results into leads
+  // Accepts email addresses (not raw Apify indices) so the import is always
+  // consistent with the verified+filtered result set shown in the UI.
   fastify.post(
     '/finder/jobs/:runId/import',
     { preHandler: [requireAuth, requireRateLimit] },
@@ -440,9 +455,10 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       const token = getSearchToken();
       const { runId } = request.params as { runId: string };
       const body = request.body as {
-        indices?: number[];
-        importAll?: boolean;
-        sequenceId?: string;
+        emails?: string[];      // specific emails to import (preferred)
+        importAll?: boolean;    // import all Continuum-verified from this run
+        sequenceId?: string;    // optional: auto-enroll into this sequence
+        verifyJobId?: string;   // optional: hint to find verify results faster
       };
       const apiKeyId = request.apiKey.id;
 
@@ -458,24 +474,52 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.validationFailed([{ field: 'runId', message: 'Run has no dataset yet.' }]);
       }
 
-      let rows: Record<string, unknown>[];
-      if (body.importAll) {
-        const dsRes = await fetch(
-          `https://api.apify.com/v2/datasets/${datasetId}/items?limit=2500&token=${token}`,
-          { headers: { Accept: 'application/json' } },
-        );
-        rows = dsRes.ok ? (await dsRes.json() as Record<string, unknown>[]) : [];
-      } else if (body.indices?.length) {
-        const maxIndex = Math.max(...body.indices);
-        const dsRes = await fetch(
-          `https://api.apify.com/v2/datasets/${datasetId}/items?limit=${maxIndex + 1}&token=${token}`,
-          { headers: { Accept: 'application/json' } },
-        );
-        const all = dsRes.ok ? (await dsRes.json() as Record<string, unknown>[]) : [];
-        rows = body.indices.map((i) => all[i]).filter(Boolean) as Record<string, unknown>[];
-      } else {
+      // Always fetch all rows from Apify and filter to only Continuum-verified
+      const dsRes = await fetch(
+        `https://api.apify.com/v2/datasets/${datasetId}/items?limit=2500&token=${token}`,
+        { headers: { Accept: 'application/json' } },
+      );
+      const allRows = dsRes.ok ? (await dsRes.json() as Record<string, unknown>[]) : [];
+
+      // Load which emails Continuum verified as safe to send to
+      const verifyTag = `finder-${runId}`;
+      const verifyJob = await prisma.bulkJob.findFirst({
+        where: {
+          apiKeyId,
+          ...(body.verifyJobId ? { id: body.verifyJobId } : { storagePath: { contains: verifyTag } }),
+          status: 'completed',
+        },
+        select: { id: true },
+      });
+
+      let verifiedEmailSet: Set<string> | null = null;
+      if (verifyJob) {
+        const verifiedRows = await prisma.bulkJobEmail.findMany({
+          where: { bulkJobId: verifyJob.id, status: { in: ['valid', 'risky'] } },
+          select: { email: true },
+        });
+        verifiedEmailSet = new Set(verifiedRows.map((r) => r.email.toLowerCase()));
+      }
+
+      // Build the target email set: either specific emails requested, or all verified
+      const targetEmails: Set<string> | null = body.importAll
+        ? null // import all verified below
+        : body.emails?.length
+          ? new Set(body.emails.map((e) => e.toLowerCase()))
+          : null;
+
+      if (!body.importAll && !body.emails?.length) {
         return reply.send({ imported: 0, skipped: 0 });
       }
+
+      // Filter rows: must match target + must be Continuum-verified
+      const rows = allRows.filter((r) => {
+        const email = typeof r.email === 'string' ? r.email.trim().toLowerCase() : '';
+        if (!email) return false;
+        if (verifiedEmailSet && !verifiedEmailSet.has(email)) return false;
+        if (targetEmails && !targetEmails.has(email)) return false;
+        return true;
+      });
 
       let imported = 0;
       let skipped = 0;

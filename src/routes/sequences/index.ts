@@ -214,6 +214,8 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
     if (!seq) throw Errors.notFound('Sequence not found.');
 
+    const body = request.body as { emails?: string[]; list_id?: string; variables?: Record<string, string>; force_move?: boolean };
+
     let emails: string[] = parsed.data.emails ?? [];
 
     if (parsed.data.list_id) {
@@ -228,16 +230,38 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const nextSendAt = firstStep ? new Date() : null;
 
     let enrolled = 0;
+    const conflicts: Array<{ email: string; conflictSequenceId: string; conflictSequenceName: string }> = [];
+
     for (const email of emails) {
       const existing = await prisma.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: id, email } } });
       if (existing) continue;
+
+      // Cross-sequence exclusivity: one active sequence per lead
+      if (!body.force_move) {
+        const conflict = await prisma.sequenceEnrollment.findFirst({
+          where: { email, status: 'active', NOT: { sequenceId: id } },
+          select: { sequenceId: true, sequence: { select: { name: true } } },
+        });
+        if (conflict) {
+          conflicts.push({ email, conflictSequenceId: conflict.sequenceId, conflictSequenceName: conflict.sequence?.name ?? conflict.sequenceId });
+          continue;
+        }
+      }
+      if (body.force_move) {
+        // Deactivate any other active enrollment so this one becomes the sole active sequence
+        await prisma.sequenceEnrollment.updateMany({
+          where: { email, status: 'active', NOT: { sequenceId: id } },
+          data: { status: 'paused' },
+        });
+      }
+
       await prisma.sequenceEnrollment.create({
         data: { sequenceId: id, email, variables: parsed.data.variables ?? {}, nextSendAt, status: 'active', currentStep: 0 },
       });
       enrolled++;
     }
 
-    return reply.status(200).send({ enrolled, total: emails.length });
+    return reply.status(200).send({ enrolled, total: emails.length, conflicts });
   });
 
   // GET /v1/sequences/:id/contacts — enrollment status
@@ -490,5 +514,45 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     });
 
     return reply.status(201).send({ enrolled: true, enrollment: subEnrollment });
+  });
+
+  // GET /v1/sequences/:id/stats
+  fastify.get('/sequences/:id/stats', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
+    if (!seq) throw Errors.notFound('Sequence not found.');
+
+    const steps = await prisma.sequenceStep.findMany({ where: { sequenceId: id }, select: { id: true } });
+    const stepIds = steps.map(s => s.id);
+
+    const [enrollmentGroups, sentCount, openCount, clickCount, replyCount] = await Promise.all([
+      prisma.sequenceEnrollment.groupBy({ by: ['status'], where: { sequenceId: id }, _count: { _all: true } }),
+      stepIds.length > 0 ? prisma.sendMessage.count({ where: { sequenceStepId: { in: stepIds } } }) : Promise.resolve(0),
+      stepIds.length > 0 ? prisma.trackingEvent.count({ where: { type: 'open', sendMessage: { sequenceStepId: { in: stepIds } } } }) : Promise.resolve(0),
+      stepIds.length > 0 ? prisma.trackingEvent.count({ where: { type: 'click', sendMessage: { sequenceStepId: { in: stepIds } } } }) : Promise.resolve(0),
+      prisma.replyEvent.count({ where: { enrollment: { sequenceId: id } } }),
+    ]);
+
+    const byStatus: Record<string, number> = {};
+    for (const g of enrollmentGroups) byStatus[g.status] = g._count._all;
+    const totalEnrolled = Object.values(byStatus).reduce((a, b) => a + b, 0);
+
+    return reply.status(200).send({
+      totalEnrolled,
+      active: byStatus['active'] ?? 0,
+      completed: byStatus['completed'] ?? 0,
+      replied: byStatus['replied'] ?? 0,
+      bounced: byStatus['bounced'] ?? 0,
+      unsubscribed: byStatus['unsubscribed'] ?? 0,
+      paused: byStatus['paused'] ?? 0,
+      sent: sentCount,
+      opened: openCount,
+      clicked: clickCount,
+      replies: replyCount,
+      openRate: sentCount > 0 ? Math.round((openCount / sentCount) * 100) : 0,
+      clickRate: sentCount > 0 ? Math.round((clickCount / sentCount) * 100) : 0,
+      replyRate: totalEnrolled > 0 ? Math.round((replyCount / totalEnrolled) * 100) : 0,
+    });
   });
 }

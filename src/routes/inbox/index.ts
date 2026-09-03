@@ -24,7 +24,14 @@ export async function inboxRoutes(fastify: FastifyInstance): Promise<void> {
         orderBy: { receivedAt: 'desc' },
         skip: (page - 1) * limit, take: limit,
         include: {
-          enrollment: { select: { sequenceId: true, email: true, status: true } },
+          enrollment: {
+            select: {
+              sequenceId: true,
+              email: true,
+              status: true,
+              sequence: { select: { id: true, name: true } },
+            },
+          },
         },
       }),
       prisma.replyEvent.count({ where: where as never }),
@@ -51,13 +58,19 @@ export async function inboxRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.patch('/inbox/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const body = request.body as { lead_status?: string };
+    const body = request.body as { lead_status?: string; status?: string; is_read?: boolean };
 
     const mailboxIds = (await prisma.mailbox.findMany({ where: { apiKeyId }, select: { id: true } })).map(m => m.id);
     const event = await prisma.replyEvent.findFirst({ where: { id, mailboxId: { in: mailboxIds } } });
     if (!event) throw Errors.notFound('Reply not found.');
 
-    // Update lead status if enrollment has an email
+    const updates: Record<string, unknown> = {};
+    if (body.status) updates['status'] = body.status;
+    if (body.is_read !== undefined) updates['isRead'] = body.is_read;
+    if (Object.keys(updates).length) {
+      await prisma.replyEvent.update({ where: { id }, data: updates as never });
+    }
+
     if (body.lead_status && event.fromEmail) {
       await prisma.lead.updateMany({
         where: { apiKeyId, email: event.fromEmail.toLowerCase() },

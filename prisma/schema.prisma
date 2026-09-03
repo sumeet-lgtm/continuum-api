@@ -147,6 +147,7 @@ model ApiKey {
   mailboxes      Mailbox[]
   sequences      Sequence[]
   leads          Lead[]
+  accounts       Account[]
   inboxTests     InboxTest[]
   automations    Automation[]
   requestLogs    ApiRequestLog[]
@@ -964,6 +965,7 @@ model Lead {
   lastName       String?
   company        String?
   title          String?
+  tags           String[]  @default([])
   customVars     Json?
   status         String    @default("active") // active|interested|not_interested|replied|unsubscribed|bounced|do_not_contact
   repliedAt      DateTime?
@@ -971,11 +973,40 @@ model Lead {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+  accountId  String?
+  account    Account? @relation(fields: [accountId], references: [id])
+  apiKey     ApiKey   @relation(fields: [apiKeyId], references: [id])
 
   @@unique([apiKeyId, email])
   @@index([apiKeyId, status])
+  @@index([accountId])
   @@map("leads")
+}
+
+// ─── Accounts (company entities that group multiple leads) ────────────────────
+
+model Account {
+  id          String   @id @default(cuid())
+  apiKeyId    String
+  name        String
+  domain      String?
+  industry    String?
+  employees   Int?
+  revenue     String?
+  website     String?
+  linkedin    String?
+  city        String?
+  country     String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+  leads  Lead[]
+
+  @@unique([apiKeyId, domain])
+  @@index([apiKeyId])
+  @@map("accounts")
 }
 
 // ─── Reply Events (IMAP-detected replies) ────────────────────────────────────

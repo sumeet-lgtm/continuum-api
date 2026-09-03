@@ -54,6 +54,7 @@ const leadSchema = z.object({
   last_name: z.string().max(100).optional(),
   company: z.string().max(200).optional(),
   title: z.string().max(200).optional(),
+  tags: z.array(z.string().max(50)).max(20).optional(),
   custom_variables: z.record(z.unknown()).optional(),
   sequence_id: z.string().optional(),
 });
@@ -67,19 +68,20 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
     const apiKeyId = request.apiKey.id;
-    const { email, first_name, last_name, company, title, custom_variables, sequence_id } = parsed.data;
+    const { email, first_name, last_name, company, title, tags, custom_variables, sequence_id } = parsed.data;
 
     const lead = await prisma.lead.upsert({
       where: { apiKeyId_email: { apiKeyId, email } },
-      create: { apiKeyId, email, firstName: first_name ?? null, lastName: last_name ?? null, company: company ?? null, title: title ?? null, customVars: (custom_variables ?? {}) as Prisma.InputJsonValue },
+      create: { apiKeyId, email, firstName: first_name ?? null, lastName: last_name ?? null, company: company ?? null, title: title ?? null, tags: tags ?? [], customVars: (custom_variables ?? {}) as Prisma.InputJsonValue },
       update: {
         ...(first_name !== undefined ? { firstName: first_name } : {}),
         ...(last_name !== undefined ? { lastName: last_name } : {}),
         ...(company !== undefined ? { company } : {}),
         ...(title !== undefined ? { title } : {}),
+        ...(tags !== undefined ? { tags } : {}),
         ...(custom_variables !== undefined ? { customVars: custom_variables as Prisma.InputJsonValue } : {}),
       },
-      select: { id: true, email: true, firstName: true, lastName: true, company: true, status: true, createdAt: true },
+      select: { id: true, email: true, firstName: true, lastName: true, company: true, tags: true, status: true, createdAt: true },
     });
 
     // Auto-enroll in sequence if provided
@@ -126,20 +128,21 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /v1/leads
   fastify.get('/leads', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const apiKeyId = request.apiKey.id;
-    const q = request.query as { status?: string; sequence_id?: string; email?: string; page?: string; limit?: string };
+    const q = request.query as { status?: string; sequence_id?: string; email?: string; page?: string; limit?: string; tag?: string };
     const page = Math.max(1, parseInt(q.page ?? '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
     const where: Record<string, unknown> = { apiKeyId };
     if (q.status) where['status'] = q.status;
     if (q.email) where['email'] = { contains: q.email.toLowerCase(), mode: 'insensitive' };
+    if (q.tag) where['tags'] = { has: q.tag };
 
     const [items, total] = await Promise.all([
       prisma.lead.findMany({
         where: where as never,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit, take: limit,
-        select: { id: true, email: true, firstName: true, lastName: true, company: true, title: true, status: true, createdAt: true },
+        select: { id: true, email: true, firstName: true, lastName: true, company: true, title: true, tags: true, status: true, createdAt: true },
       }),
       prisma.lead.count({ where: where as never }),
     ]);
@@ -150,9 +153,63 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/leads/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const lead = await prisma.lead.findFirst({ where: { id, apiKeyId } });
+    const lead = await prisma.lead.findFirst({
+      where: { id, apiKeyId },
+      select: { id: true, email: true, firstName: true, lastName: true, company: true, title: true, tags: true, status: true, customVars: true, repliedAt: true, unsubscribedAt: true, createdAt: true, updatedAt: true },
+    });
     if (!lead) throw Errors.notFound('Lead not found.');
     return reply.status(200).send(lead);
+  });
+
+  // GET /v1/leads/:id/activity — timeline of all touches for a lead
+  fastify.get('/leads/:id/activity', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const lead = await prisma.lead.findFirst({ where: { id, apiKeyId } });
+    if (!lead) throw Errors.notFound('Lead not found.');
+
+    const [sends, replyEvents, enrollments] = await Promise.all([
+      prisma.sendMessage.findMany({
+        where: { to: lead.email, apiKeyId },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+        select: {
+          id: true, subject: true, status: true, createdAt: true, sentAt: true, sequenceStepId: true,
+          trackingEvents: { select: { id: true, type: true, linkUrl: true, occurredAt: true }, orderBy: { occurredAt: 'asc' } },
+        },
+      }),
+      prisma.replyEvent.findMany({
+        where: { fromEmail: lead.email },
+        orderBy: { receivedAt: 'desc' },
+        take: 50,
+        select: { id: true, subject: true, bodySnippet: true, status: true, receivedAt: true, enrollmentId: true },
+      }),
+      prisma.sequenceEnrollment.findMany({
+        where: { email: lead.email },
+        orderBy: { enrolledAt: 'desc' },
+        select: {
+          id: true, sequenceId: true, status: true, currentStep: true, nextSendAt: true, enrolledAt: true, completedAt: true, repliedAt: true,
+          sequence: { select: { id: true, name: true } },
+        },
+      }),
+    ]);
+
+    // Build unified timeline
+    const timeline: Array<{ type: string; occurredAt: string; data: Record<string, unknown> }> = [];
+
+    for (const send of sends) {
+      timeline.push({ type: 'sent', occurredAt: (send.sentAt ?? send.createdAt).toISOString(), data: { id: send.id, subject: send.subject, status: send.status } });
+      for (const ev of send.trackingEvents) {
+        timeline.push({ type: ev.type, occurredAt: ev.occurredAt.toISOString(), data: { sendMessageId: send.id, subject: send.subject, linkUrl: ev.linkUrl ?? null } });
+      }
+    }
+    for (const r of replyEvents) {
+      timeline.push({ type: 'replied', occurredAt: r.receivedAt.toISOString(), data: { id: r.id, subject: r.subject, bodySnippet: r.bodySnippet, status: r.status } });
+    }
+
+    timeline.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+
+    return reply.status(200).send({ lead, timeline, enrollments });
   });
 
   // PATCH /v1/leads/:id
@@ -196,6 +253,18 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
         ...(body.status === 'replied' && { repliedAt: new Date() }),
       },
     });
+    return reply.status(200).send(updated);
+  });
+
+  // PATCH /v1/leads/:id/tags
+  fastify.patch('/leads/:id/tags', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const body = request.body as { tags?: string[] };
+    if (!Array.isArray(body.tags)) throw Errors.validationFailed([{ field: 'tags', message: 'tags must be an array' }]);
+    const lead = await prisma.lead.findFirst({ where: { id, apiKeyId } });
+    if (!lead) throw Errors.notFound('Lead not found.');
+    const updated = await prisma.lead.update({ where: { id }, data: { tags: body.tags.slice(0, 20).map(t => t.trim()).filter(Boolean) } });
     return reply.status(200).send(updated);
   });
 
