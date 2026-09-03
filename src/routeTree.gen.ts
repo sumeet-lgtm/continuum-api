@@ -36,6 +36,7 @@ import { Route as DashboardDomainsRouteImport } from './routes/dashboard.domains
 import { Route as DashboardInboxRouteImport } from './routes/dashboard.inbox'
 import { Route as DashboardInboxTestRouteImport } from './routes/dashboard.inbox-test'
 import { Route as DashboardIpRouteImport } from './routes/dashboard.ip'
+import { Route as DashboardFinderRouteImport } from './routes/dashboard.finder'
 import { Route as DashboardLeadsRouteImport } from './routes/dashboard.leads'
 import { Route as DashboardListsRouteImport } from './routes/dashboard.lists'
 import { Route as DashboardLogsRouteImport } from './routes/dashboard.logs'
@@ -194,6 +195,11 @@ const DashboardIpRoute = DashboardIpRouteImport.update({
   path: '/ip',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardFinderRoute = DashboardFinderRouteImport.update({
+  id: '/finder',
+  path: '/finder',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardLeadsRoute = DashboardLeadsRouteImport.update({
   id: '/leads',
   path: '/leads',
@@ -333,6 +339,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
   '/dashboard/ip': typeof DashboardIpRoute
+  '/dashboard/finder': typeof DashboardFinderRoute
   '/dashboard/leads': typeof DashboardLeadsRoute
   '/dashboard/lists': typeof DashboardListsRoute
   '/dashboard/logs': typeof DashboardLogsRoute
@@ -383,6 +390,7 @@ export interface FileRoutesByTo {
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
   '/dashboard/ip': typeof DashboardIpRoute
+  '/dashboard/finder': typeof DashboardFinderRoute
   '/dashboard/leads': typeof DashboardLeadsRoute
   '/dashboard/lists': typeof DashboardListsRoute
   '/dashboard/logs': typeof DashboardLogsRoute
@@ -435,6 +443,7 @@ export interface FileRoutesById {
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
   '/dashboard/ip': typeof DashboardIpRoute
+  '/dashboard/finder': typeof DashboardFinderRoute
   '/dashboard/leads': typeof DashboardLeadsRoute
   '/dashboard/lists': typeof DashboardListsRoute
   '/dashboard/logs': typeof DashboardLogsRoute
@@ -488,6 +497,7 @@ export interface FileRouteTypes {
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
     | '/dashboard/ip'
+    | '/dashboard/finder'
     | '/dashboard/leads'
     | '/dashboard/lists'
     | '/dashboard/logs'
@@ -538,6 +548,7 @@ export interface FileRouteTypes {
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
     | '/dashboard/ip'
+    | '/dashboard/finder'
     | '/dashboard/leads'
     | '/dashboard/lists'
     | '/dashboard/logs'
@@ -589,6 +600,7 @@ export interface FileRouteTypes {
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
     | '/dashboard/ip'
+    | '/dashboard/finder'
     | '/dashboard/leads'
     | '/dashboard/lists'
     | '/dashboard/logs'
@@ -815,6 +827,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardIpRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/finder': {
+      id: '/dashboard/finder'
+      path: '/finder'
+      fullPath: '/dashboard/finder'
+      preLoaderRoute: typeof DashboardFinderRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/leads': {
       id: '/dashboard/leads'
       path: '/leads'
@@ -992,6 +1011,7 @@ interface DashboardRouteChildren {
   DashboardInboxRoute: typeof DashboardInboxRoute
   DashboardInboxTestRoute: typeof DashboardInboxTestRoute
   DashboardIpRoute: typeof DashboardIpRoute
+  DashboardFinderRoute: typeof DashboardFinderRoute
   DashboardLeadsRoute: typeof DashboardLeadsRoute
   DashboardListsRoute: typeof DashboardListsRoute
   DashboardLogsRoute: typeof DashboardLogsRoute
@@ -1036,6 +1056,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardInboxRoute: DashboardInboxRoute,
   DashboardInboxTestRoute: DashboardInboxTestRoute,
   DashboardIpRoute: DashboardIpRoute,
+  DashboardFinderRoute: DashboardFinderRoute,
   DashboardLeadsRoute: DashboardLeadsRoute,
   DashboardListsRoute: DashboardListsRoute,
   DashboardLogsRoute: DashboardLogsRoute,

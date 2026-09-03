@@ -257,6 +257,7 @@ const NAV: NavItem[] = [
     children: [
       { to: "/dashboard/sequences", label: "All Sequences", icon: GitBranch, exact: true },
       { to: "/dashboard/leads", label: "Leads", icon: Users },
+      { to: "/dashboard/finder", label: "Find People", icon: Search },
       { to: "/dashboard/mailboxes", label: "Mailboxes", icon: Send },
       { to: "/dashboard/inbox", label: "Unified Inbox", icon: Inbox },
       { to: "/dashboard/inbox-test", label: "Inbox Placement", icon: FlaskConical },
