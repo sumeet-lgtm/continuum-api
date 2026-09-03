@@ -305,7 +305,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
         goal: z.string().min(5).max(500),
         tone: z.enum(['professional', 'casual', 'friendly', 'direct']).default('professional'),
         num_steps: z.number().int().min(2).max(10).default(5),
-        allowed_step_types: z.array(z.enum(['email', 'call', 'linkedin', 'task'])).default(['email', 'call', 'linkedin']),
+        allowed_step_types: z.array(z.enum(['email', 'linkedin', 'task'])).default(['email', 'linkedin', 'task']),
         sender_name: z.string().optional(),
         sender_company: z.string().optional(),
         sender_product: z.string().optional(),

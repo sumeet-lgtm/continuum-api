@@ -34,7 +34,7 @@ const subsequenceSchema = z.object({
 });
 
 const stepSchema = z.object({
-  type: z.enum(['email', 'call', 'linkedin', 'task']).default('email'),
+  type: z.enum(['email', 'linkedin', 'task']).default('email'),
   delay_days: z.coerce.number().int().min(0).max(365),
   delay_hours: z.coerce.number().int().min(0).max(23).default(0),
   subject: z.string().max(500).optional(),
