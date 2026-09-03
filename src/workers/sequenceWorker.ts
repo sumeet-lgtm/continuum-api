@@ -363,6 +363,11 @@ export function startSequenceWorker(): Worker {
     logger.error({ err, jobId: job?.id }, 'Sequence tick failed');
   });
 
+  // Required: without this, BullMQ 'error' events become uncaughtExceptions.
+  worker.on('error', (err) => {
+    logger.error({ err }, 'Sequence worker error (non-fatal)');
+  });
+
   return worker;
 }
 

@@ -272,6 +272,10 @@ export function startWarmupWorker(): Worker {
     logger.error({ err, jobId: job?.id }, 'Warmup tick failed');
   });
 
+  worker.on('error', (err) => {
+    logger.error({ err }, 'Warmup worker error (non-fatal)');
+  });
+
   return worker;
 }
 

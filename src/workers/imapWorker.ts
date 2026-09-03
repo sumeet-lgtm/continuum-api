@@ -267,6 +267,10 @@ export function startImapWorker(): Worker {
     logger.error({ err, jobId: job?.id }, 'IMAP tick failed');
   });
 
+  worker.on('error', (err) => {
+    logger.error({ err }, 'IMAP worker error (non-fatal)');
+  });
+
   return worker;
 }
 

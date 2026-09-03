@@ -355,5 +355,11 @@ export function startCampaignWorker(): Worker {
     logger.error({ err, jobId: job?.id }, 'Campaign job failed');
   });
 
+  // Required: without this, BullMQ 'error' events (Redis blips, stalled-job
+  // check failures) become uncaughtExceptions that kill the whole process.
+  worker.on('error', (err) => {
+    logger.error({ err }, 'Campaign worker error (non-fatal)');
+  });
+
   return worker;
 }
