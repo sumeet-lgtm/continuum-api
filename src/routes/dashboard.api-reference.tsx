@@ -559,13 +559,31 @@ print(f"Imported: {result.imported}")
         params: [{ name: "id", type: "string", required: true, description: "Campaign ID." }],
         body: [
           { name: "subject", type: "string", description: "New subject line." },
+          { name: "subject_b", type: "string", description: "Variant B subject for A/B testing (50/50 split)." },
           { name: "html_body", type: "string", description: "New HTML body." },
           { name: "text_body", type: "string", description: "New plain-text body." },
           { name: "reply_to", type: "string", description: "New reply-to address." },
           { name: "track_opens", type: "boolean", description: "Toggle open tracking." },
           { name: "track_clicks", type: "boolean", description: "Toggle click tracking." },
           { name: "scheduled_at", type: "ISO 8601", description: "Reschedule send time." },
+          { name: "send_rate_per_hour", type: "number", description: "Drip rate limit (10–50000 emails/hr). Omit for unlimited." },
         ],
+      },
+      {
+        method: "POST",
+        path: "/v1/campaigns/:id/retarget",
+        summary: "Create a follow-up campaign targeting non-openers of a sent campaign.",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Source campaign ID." }],
+        response: `{ "campaign_id": "c_abc", "non_openers": 412, "total_sent": 1000 }`,
+      },
+      {
+        method: "GET",
+        path: "/v1/campaigns/:id/health",
+        summary: "Real-time deliverability health score (0–100) with bounce, complaint, and delivery signal flags.",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Campaign ID." }],
+        response: `{ "health_score": 87, "signals": [{ "type": "good", "message": "..." }], "metrics": { "sent": 1000, "bounced": 12, "complained": 1 } }`,
       },
     ],
   },
@@ -634,6 +652,20 @@ print(f"Imported: {result.imported}")
           { name: "versionId", type: "string", required: true, description: "Version ID to restore." },
         ],
       },
+      {
+        method: "POST",
+        path: "/v1/templates/:id/test-send",
+        summary: "Send a live preview email of the template to any address. Replaces {{ variable }} placeholders with supplied values.",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Template ID." }],
+        body: [
+          { name: "to", type: "string", required: true, description: "Recipient email for the test." },
+          { name: "from_name", type: "string", required: true, description: "Sender display name." },
+          { name: "from_email", type: "string", required: true, description: "Sender email address." },
+          { name: "variables", type: "object", description: "Key/value map to fill template placeholders." },
+        ],
+        response: `{ "sent": true, "to": "you@example.com", "subject": "[TEST] Welcome aboard!" }`,
+      },
     ],
   },
   {
@@ -690,6 +722,32 @@ print(f"Imported: {result.imported}")
           { name: "limit", type: "number", description: "Page size (default 50)." },
           { name: "cursor", type: "string", description: "Pagination cursor." },
         ],
+      },
+      {
+        method: "GET",
+        path: "/v1/contacts/:email/timeline",
+        summary: "Chronological activity log for a single contact — sends, opens, clicks, bounces, list changes, and suppressions.",
+        auth: "apikey",
+        params: [
+          { name: "email", type: "string", required: true, description: "URL-encoded email address." },
+          { name: "limit", type: "number", description: "Max events to return (1–100, default 50)." },
+        ],
+        response: `{
+  "email": "alice@example.com",
+  "total": 12,
+  "events": [
+    { "type": "email_opened", "timestamp": "2026-09-01T09:22:00Z", "data": { "send_id": "msg_abc" } },
+    { "type": "email_sent", "timestamp": "2026-09-01T08:00:00Z", "data": { "send_id": "msg_abc", "subject": "Welcome!" } }
+  ]
+}`,
+      },
+      {
+        method: "GET",
+        path: "/v1/contacts/:email/engagement",
+        summary: "Engagement score (0–100) and tier (highly_engaged / engaged / low_engagement / inactive) for a contact.",
+        auth: "apikey",
+        params: [{ name: "email", type: "string", required: true, description: "URL-encoded email address." }],
+        response: `{ "email": "alice@example.com", "engagement_score": 78, "tier": "highly_engaged" }`,
       },
       {
         method: "PATCH",
