@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Users, Upload, X, FileText, Loader2 } from "lucide-react";
+import { Plus, Users, Upload, X, FileText, Loader2, Search, Sparkles } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/leads")({
   head: () => ({ meta: [{ title: "Leads — Continuum API" }] }),
@@ -22,6 +22,7 @@ interface Lead {
   company: string | null;
   title: string | null;
   status: string;
+  tags: string[];
   createdAt: string;
 }
 
@@ -71,6 +72,7 @@ function rowToLead(row: Record<string, string>) {
 
 function LeadsPage() {
   const { primaryKey } = useAuth();
+  const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -81,6 +83,20 @@ function LeadsPage() {
   const [importPreview, setImportPreview] = useState<Record<string, string>[] | null>(null);
   const [importFile, setImportFile] = useState<string>("");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // AI Enrichment (Clay-like)
+  const [enrichOpen, setEnrichOpen] = useState(false);
+  const [enrichSelected, setEnrichSelected] = useState<string[]>([]);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichResult, setEnrichResult] = useState<{ enriched: number; failed: number } | null>(null);
+
+  // Lead Finder (dataset import)
+  const [finderOpen, setFinderOpen] = useState(false);
+  const [finderDatasetId, setFinderDatasetId] = useState("");
+  const [finderPreview, setFinderPreview] = useState<Array<{ email?: string; first_name?: string; last_name?: string; company?: string; title?: string }> | null>(null);
+  const [finderTotal, setFinderTotal] = useState<number | null>(null);
+  const [finderPreviewing, setFinderPreviewing] = useState(false);
+  const [finderImporting, setFinderImporting] = useState(false);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -159,6 +175,75 @@ function LeadsPage() {
     }
   };
 
+  const previewDataset = async () => {
+    if (!primaryKey?.keyRaw || !finderDatasetId.trim()) return;
+    setFinderPreviewing(true);
+    setFinderPreview(null);
+    setFinderTotal(null);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/leads/import/apify/preview?datasetId=${encodeURIComponent(finderDatasetId.trim())}`, {
+        headers: { "X-API-Key": primaryKey.keyRaw },
+      });
+      const data = await res.json().catch(() => ({})) as { preview?: typeof finderPreview; total?: number; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setFinderPreview(data.preview ?? []);
+      setFinderTotal(data.total ?? null);
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setFinderPreviewing(false);
+    }
+  };
+
+  const runFinderImport = async () => {
+    if (!primaryKey?.keyRaw || !finderDatasetId.trim()) return;
+    setFinderImporting(true);
+    try {
+      const res = await fetch("https://api.continuumapi.com/v1/leads/import/apify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
+        body: JSON.stringify({ datasetId: finderDatasetId.trim(), limit: 50000 }),
+      });
+      const data = await res.json().catch(() => ({})) as { imported?: number; skipped?: number; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      toast.success(`${(data.imported ?? 0).toLocaleString()} leads imported${data.skipped ? ` (${data.skipped} skipped — no email)` : ""}`);
+      setFinderOpen(false);
+      setFinderDatasetId("");
+      setFinderPreview(null);
+      setFinderTotal(null);
+      load();
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setFinderImporting(false);
+    }
+  };
+
+  const runEnrich = async () => {
+    if (!primaryKey?.keyRaw) return;
+    setEnriching(true);
+    setEnrichResult(null);
+    try {
+      const body = enrichSelected.length > 0
+        ? { leadIds: enrichSelected }
+        : { all: true };
+      const res = await fetch("https://api.continuumapi.com/v1/leads/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({})) as { enriched?: number; failed?: number; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setEnrichResult({ enriched: data.enriched ?? 0, failed: data.failed ?? 0 });
+      toast.success(`${data.enriched ?? 0} leads enriched with AI personalization`);
+      load();
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setEnriching(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -168,12 +253,130 @@ function LeadsPage() {
         </header>
         <div className="flex gap-2">
           <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFileSelect} />
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setFinderOpen((o) => !o); setFinderPreview(null); }}>
+            <Search className="h-4 w-4" /> Find Leads
+          </Button>
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setEnrichOpen((o) => !o); setEnrichResult(null); }}>
+            <Sparkles className="h-4 w-4" /> Enrich with AI
+          </Button>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => fileRef.current?.click()}>
             <Upload className="h-4 w-4" /> Import CSV
           </Button>
           <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}><Plus className="h-4 w-4" /> Add Lead</Button>
         </div>
       </div>
+
+      {enrichOpen && (
+        <div className="rounded-lg border border-border bg-card p-5 space-y-4 max-w-2xl">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold flex items-center gap-1.5"><Sparkles className="h-4 w-4 text-violet-500" />Enrich with AI</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Generates <code className="bg-muted px-1 rounded">{"{{icebreaker}}"}</code>, <code className="bg-muted px-1 rounded">{"{{company_description}}"}</code>, and <code className="bg-muted px-1 rounded">{"{{pain_point}}"}</code> for each lead. Use these variables in your sequence email templates.
+              </p>
+            </div>
+            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => { setEnrichOpen(false); setEnrichSelected([]); setEnrichResult(null); }}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-xs space-y-1.5">
+            <p className="font-medium text-foreground">What gets generated per lead:</p>
+            <p><span className="font-mono text-violet-600 dark:text-violet-400">{"{{icebreaker}}"}</span> — A personalised opening line referencing their role or company</p>
+            <p><span className="font-mono text-violet-600 dark:text-violet-400">{"{{company_description}}"}</span> — What the company likely does in one sentence</p>
+            <p><span className="font-mono text-violet-600 dark:text-violet-400">{"{{pain_point}}"}</span> — A specific challenge common to their role</p>
+          </div>
+
+          {enrichResult && (
+            <div className="rounded-md bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 px-3 py-2 text-sm text-green-800 dark:text-green-300">
+              ✓ {enrichResult.enriched} leads enriched{enrichResult.failed > 0 ? ` · ${enrichResult.failed} failed` : ""}.
+              Use <code className="bg-green-100 dark:bg-green-900 px-1 rounded">{"{{icebreaker}}"}</code> etc. in your sequence step templates.
+            </div>
+          )}
+
+          <div className="flex items-center gap-3">
+            <Button onClick={runEnrich} disabled={enriching} className="gap-1.5">
+              {enriching
+                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Enriching…</>
+                : <><Sparkles className="h-3.5 w-3.5" /> Enrich {enrichSelected.length > 0 ? `${enrichSelected.length} selected` : "all"} leads (up to 50)</>}
+            </Button>
+            {enrichSelected.length > 0 && (
+              <Button variant="ghost" size="sm" className="text-xs" onClick={() => setEnrichSelected([])}>Clear selection</Button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">Processes up to 50 leads per run. Existing variables are preserved.</p>
+        </div>
+      )}
+
+      {finderOpen && (
+        <div className="rounded-lg border border-border bg-card p-5 space-y-4 max-w-3xl">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Find Leads</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">Paste a dataset ID from your lead source. All rows with an email column are imported.</p>
+            </div>
+            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => { setFinderOpen(false); setFinderPreview(null); setFinderDatasetId(""); }}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="flex gap-2">
+            <Input
+              className="font-mono text-sm"
+              placeholder="Dataset ID (e.g. abc123XYZ)"
+              value={finderDatasetId}
+              onChange={(e) => { setFinderDatasetId(e.target.value); setFinderPreview(null); }}
+              onKeyDown={(e) => e.key === "Enter" && previewDataset()}
+            />
+            <Button variant="outline" onClick={previewDataset} disabled={finderPreviewing || !finderDatasetId.trim()}>
+              {finderPreviewing ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />Checking…</> : "Preview"}
+            </Button>
+          </div>
+
+          {finderPreview && (
+            <>
+              {finderPreview.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No rows with an email column found in this dataset.</p>
+              ) : (
+                <>
+                  <div className="rounded-md border border-border overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-muted/40 text-muted-foreground border-b border-border">
+                          <th className="px-3 py-2 text-left font-medium">Email</th>
+                          <th className="px-3 py-2 text-left font-medium">Name</th>
+                          <th className="px-3 py-2 text-left font-medium">Company</th>
+                          <th className="px-3 py-2 text-left font-medium">Title</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {finderPreview.map((row, i) => (
+                          <tr key={i} className="border-b border-border last:border-0">
+                            <td className="px-3 py-1.5 font-mono">{row.email ?? "—"}</td>
+                            <td className="px-3 py-1.5">{[row.first_name, row.last_name].filter(Boolean).join(" ") || "—"}</td>
+                            <td className="px-3 py-1.5 text-muted-foreground">{row.company ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-muted-foreground">{row.title ?? "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs text-muted-foreground">
+                      Showing first 5 rows{finderTotal != null ? ` of ~${finderTotal.toLocaleString()} total` : ""}. All rows with an email will be imported.
+                    </p>
+                    <Button onClick={runFinderImport} disabled={finderImporting} className="gap-1.5 shrink-0">
+                      {finderImporting
+                        ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Importing…</>
+                        : <><Upload className="h-3.5 w-3.5" /> Import Leads</>}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {adding && (
         <div className="rounded-lg border border-border bg-card p-6 space-y-4 max-w-lg">
@@ -295,17 +498,18 @@ function LeadsPage() {
                 <th className="px-5 py-3 font-medium">Company</th>
                 <th className="px-5 py-3 font-medium">Title</th>
                 <th className="px-5 py-3 font-medium">Status</th>
+                <th className="px-5 py-3 font-medium">Tags</th>
                 <th className="px-5 py-3 font-medium">Added</th>
               </tr>
             </thead>
             <tbody>
               {leads.map((l) => (
-                <tr key={l.id} className="border-b border-border last:border-0 hover:bg-muted/20">
+                <tr key={l.id} className="border-b border-border last:border-0 hover:bg-muted/10 transition-colors cursor-pointer" onClick={() => navigate({ to: "/dashboard/leads/$id", params: { id: l.id } })}>
                   <td className="px-5 py-3 font-mono text-xs">{l.email}</td>
                   <td className="px-5 py-3">{[l.firstName, l.lastName].filter(Boolean).join(" ") || "—"}</td>
                   <td className="px-5 py-3 text-muted-foreground">{l.company ?? "—"}</td>
                   <td className="px-5 py-3 text-muted-foreground">{l.title ?? "—"}</td>
-                  <td className="px-5 py-3">
+                  <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
                   <select
                     className="rounded border border-input bg-background px-2 py-0.5 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     value={l.status}
@@ -335,6 +539,13 @@ function LeadsPage() {
                     ))}
                   </select>
                 </td>
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex flex-wrap gap-1">
+                      {(l.tags ?? []).slice(0, 3).map(t => (
+                        <span key={t} className="rounded-full bg-muted px-1.5 py-0.5 text-xs">{t}</span>
+                      ))}
+                    </div>
+                  </td>
                   <td className="px-5 py-3 text-muted-foreground">{new Date(l.createdAt).toLocaleDateString()}</td>
                 </tr>
               ))}

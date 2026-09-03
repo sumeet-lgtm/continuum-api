@@ -256,6 +256,7 @@ const NAV: NavItem[] = [
     icon: GitBranch,
     children: [
       { to: "/dashboard/sequences", label: "All Sequences", icon: GitBranch, exact: true },
+      { to: "/dashboard/accounts", label: "Accounts", icon: Building2 },
       { to: "/dashboard/leads", label: "Leads", icon: Users },
       { to: "/dashboard/finder", label: "Find People", icon: Search },
       { to: "/dashboard/mailboxes", label: "Mailboxes", icon: Send },

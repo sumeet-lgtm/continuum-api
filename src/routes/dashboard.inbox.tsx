@@ -1,13 +1,16 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
-import { Inbox, RefreshCw, MailOpen, Sparkles } from "lucide-react";
+import {
+  Inbox, RefreshCw, MailOpen, Sparkles, ThumbsUp,
+  Archive, ChevronDown, ChevronUp, User,
+} from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/inbox")({
-  head: () => ({ meta: [{ title: "Unified Inbox — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Unified Inbox — Continuum" }] }),
   component: InboxPage,
 });
 
@@ -15,9 +18,18 @@ interface Reply {
   id: string;
   fromEmail: string;
   subject: string | null;
+  bodySnippet: string | null;
   receivedAt: string;
   enrollmentId: string | null;
   mailboxId: string;
+  isRead: boolean;
+  status: string;
+  enrollment?: {
+    sequenceId: string;
+    email: string;
+    status: string;
+    sequence?: { id: string; name: string };
+  } | null;
 }
 
 interface ClassifyResult {
@@ -26,7 +38,7 @@ interface ClassifyResult {
   suggested_action: string;
 }
 
-const CATEGORY_COLORS: Record<string, string> = {
+const CATEGORY_STYLES: Record<string, string> = {
   interested: "bg-muted text-[oklch(0.55_0.16_145)]",
   not_interested: "bg-muted text-[oklch(0.58_0.22_27)]",
   out_of_office: "bg-muted text-muted-foreground",
@@ -35,18 +47,28 @@ const CATEGORY_COLORS: Record<string, string> = {
   bounced: "bg-muted text-[oklch(0.58_0.22_27)]",
 };
 
+const STATUS_STYLES: Record<string, string> = {
+  new: "bg-muted text-muted-foreground",
+  interested: "bg-muted text-[oklch(0.55_0.16_145)]",
+  not_interested: "bg-muted text-[oklch(0.58_0.22_27)]",
+  archived: "bg-muted text-muted-foreground",
+};
+
 function InboxPage() {
   const { primaryKey } = useAuth();
+  const navigate = useNavigate();
   const [replies, setReplies] = useState<Reply[]>([]);
   const [loading, setLoading] = useState(true);
   const [classifyResults, setClassifyResults] = useState<Record<string, ClassifyResult>>({});
   const [classifyingId, setClassifyingId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
     setLoading(true);
     api.withKey
-      .get<{ data?: Reply[]; replies?: Reply[]; total: number }>("/v1/inbox?page=1&limit=50", primaryKey.keyRaw)
+      .get<{ data?: Reply[]; replies?: Reply[]; total: number }>("/v1/inbox?page=1&limit=100", primaryKey.keyRaw)
       .then((r) => setReplies(r.data ?? r.replies ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -61,7 +83,10 @@ function InboxPage() {
       const res = await fetch("https://api.continuumapi.com/v1/ai/classify-reply", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
-        body: JSON.stringify({ subject: r.subject ?? undefined, body: r.subject ?? "reply" }),
+        body: JSON.stringify({
+          subject: r.subject ?? undefined,
+          body: r.bodySnippet ?? r.subject ?? "reply",
+        }),
       });
       const data = await res.json().catch(() => null) as ClassifyResult | { error?: string };
       if (!res.ok) throw new Error((data as { error?: string })?.error ?? `Failed (${res.status})`);
@@ -70,6 +95,40 @@ function InboxPage() {
     finally { setClassifyingId(null); }
   };
 
+  const updateStatus = async (r: Reply, status: string) => {
+    if (!primaryKey?.keyRaw) return;
+    setUpdatingId(r.id);
+    try {
+      await api.withKey.patch(`/v1/inbox/${r.id}`, { status }, primaryKey.keyRaw);
+      setReplies(prev => prev.map(x => x.id === r.id ? { ...x, status } : x));
+      toast.success(status === "interested" ? "Marked as interested." : "Archived.");
+    } catch { toast.error("Update failed."); }
+    finally { setUpdatingId(null); }
+  };
+
+  const markLeadInterested = async (r: Reply) => {
+    if (!primaryKey?.keyRaw) return;
+    try {
+      await api.withKey.patch(`/v1/inbox/${r.id}`, {
+        status: "interested",
+        lead_status: "interested",
+      }, primaryKey.keyRaw);
+      setReplies(prev => prev.map(x => x.id === r.id ? { ...x, status: "interested" } : x));
+      toast.success("Lead marked as interested.");
+    } catch { toast.error("Update failed."); }
+  };
+
+  const toggleExpand = (id: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const activeReplies = replies.filter(r => r.status !== "archived");
+  const archivedReplies = replies.filter(r => r.status === "archived");
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -77,9 +136,11 @@ function InboxPage() {
           <h1 className="text-2xl font-display font-medium tracking-tight">Unified Inbox</h1>
           <p className="text-sm text-muted-foreground">All replies across every mailbox and sequence in one place.</p>
         </header>
-        <Button variant="outline" size="sm" className="gap-1.5" onClick={load}>
-          <RefreshCw className="h-4 w-4" /> Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={load}>
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -101,53 +162,138 @@ function InboxPage() {
           <p className="text-xs text-muted-foreground">When prospects reply to your sequences, they appear here — across all connected mailboxes.</p>
         </div>
       ) : (
-        <div className="rounded-lg border border-border bg-card overflow-hidden">
-          <div className="divide-y divide-border">
-            {replies.map((r) => {
-              const classification = classifyResults[r.id];
-              return (
-                <div key={r.id} className="flex items-start gap-4 p-4 hover:bg-muted/20 transition-colors">
-                  <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
-                    <MailOpen className="h-4 w-4 text-muted-foreground" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-sm truncate">{r.fromEmail}</span>
-                      {r.enrollmentId && (
-                        <span className="text-xs bg-muted px-1.5 py-0.5 rounded">Sequence reply</span>
-                      )}
-                      {classification && (
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${CATEGORY_COLORS[classification.category] ?? "bg-muted text-muted-foreground"}`}>
-                          {classification.category.replace(/_/g, " ")}
-                          {" "}· {Math.round(classification.confidence * 100)}%
-                        </span>
-                      )}
+        <>
+          {activeReplies.length > 0 && (
+            <div className="rounded-lg border border-border bg-card overflow-hidden">
+              <div className="divide-y divide-border">
+                {activeReplies.map((r) => {
+                  const classification = classifyResults[r.id];
+                  const isExpanded = expanded.has(r.id);
+                  const seqName = r.enrollment?.sequence?.name;
+                  return (
+                    <div key={r.id} className="flex items-start gap-4 p-4 hover:bg-muted/20 transition-colors">
+                      <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
+                        <MailOpen className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            className="font-medium text-sm hover:underline"
+                            onClick={() => navigate({ to: "/dashboard/leads", search: { q: r.fromEmail } as never })}
+                          >
+                            {r.fromEmail}
+                          </button>
+                          {seqName && (
+                            <span className="text-xs bg-muted px-1.5 py-0.5 rounded">{seqName}</span>
+                          )}
+                          {r.status !== "new" && (
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${STATUS_STYLES[r.status] ?? "bg-muted text-muted-foreground"}`}>
+                              {r.status.replace(/_/g, " ")}
+                            </span>
+                          )}
+                          {classification && (
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${CATEGORY_STYLES[classification.category] ?? "bg-muted text-muted-foreground"}`}>
+                              {classification.category.replace(/_/g, " ")} · {Math.round(classification.confidence * 100)}%
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-muted-foreground truncate">{r.subject ?? "(no subject)"}</p>
+                        {r.bodySnippet && isExpanded && (
+                          <p className="text-xs text-muted-foreground mt-1.5 p-2 bg-muted/30 rounded whitespace-pre-wrap line-clamp-6">
+                            {r.bodySnippet}
+                          </p>
+                        )}
+                        {classification?.suggested_action && (
+                          <p className="text-xs text-muted-foreground mt-0.5 italic">{classification.suggested_action}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                        <span className="text-xs text-muted-foreground">{new Date(r.receivedAt).toLocaleString()}</span>
+                        {r.bodySnippet && (
+                          <button
+                            className="p-1 rounded hover:bg-muted text-muted-foreground"
+                            onClick={() => toggleExpand(r.id)}
+                            title={isExpanded ? "Collapse" : "Expand"}
+                          >
+                            {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                          </button>
+                        )}
+                        <button
+                          className="p-1 rounded hover:bg-muted text-muted-foreground"
+                          onClick={() => navigate({ to: "/dashboard/leads/$id", params: { id: r.fromEmail } })}
+                          title="View lead profile"
+                        >
+                          <User className="h-3.5 w-3.5" />
+                        </button>
+                        {r.status !== "interested" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 gap-1 text-xs"
+                            disabled={updatingId === r.id}
+                            onClick={() => markLeadInterested(r)}
+                            title="Mark interested"
+                          >
+                            <ThumbsUp className="h-3 w-3" />
+                            Interested
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 gap-1 text-xs text-muted-foreground"
+                          disabled={updatingId === r.id}
+                          onClick={() => updateStatus(r, "archived")}
+                          title="Archive"
+                        >
+                          <Archive className="h-3 w-3" />
+                          Archive
+                        </Button>
+                        {!classification && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 gap-1 text-xs"
+                            disabled={classifyingId === r.id}
+                            onClick={() => classify(r)}
+                          >
+                            <Sparkles className="h-3 w-3" />
+                            {classifyingId === r.id ? "…" : "Classify"}
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    <p className="text-sm text-muted-foreground truncate">{r.subject ?? "(no subject)"}</p>
-                    {classification?.suggested_action && (
-                      <p className="text-xs text-muted-foreground mt-0.5 italic">{classification.suggested_action}</p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-xs text-muted-foreground">{new Date(r.receivedAt).toLocaleString()}</span>
-                    {!classification && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 gap-1 text-xs"
-                        disabled={classifyingId === r.id}
-                        onClick={() => classify(r)}
-                      >
-                        <Sparkles className="h-3 w-3" />
-                        {classifyingId === r.id ? "…" : "Classify"}
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {archivedReplies.length > 0 && (
+            <details className="group">
+              <summary className="text-xs text-muted-foreground cursor-pointer select-none flex items-center gap-1.5 py-1">
+                <ChevronDown className="h-3 w-3 group-open:rotate-180 transition-transform" />
+                {archivedReplies.length} archived
+              </summary>
+              <div className="mt-2 rounded-lg border border-border bg-card/50 overflow-hidden">
+                <div className="divide-y divide-border">
+                  {archivedReplies.map((r) => (
+                    <div key={r.id} className="flex items-center gap-4 px-4 py-3 opacity-60">
+                      <MailOpen className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium">{r.fromEmail}</span>
+                        <span className="text-sm text-muted-foreground ml-2">{r.subject ?? "(no subject)"}</span>
+                      </div>
+                      <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => updateStatus(r, "new")}>
+                        Unarchive
                       </Button>
-                    )}
-                  </div>
+                    </div>
+                  ))}
                 </div>
-              );
-            })}
-          </div>
-        </div>
+              </div>
+            </details>
+          )}
+        </>
       )}
     </div>
   );

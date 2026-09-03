@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -173,6 +173,7 @@ function PillSelect({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 function FinderPage() {
+  const navigate = useNavigate();
   // Filters
   const [personTitleIncludes, setPersonTitleIncludes] = useState<string[]>([]);
   const [seniorityIncludes, setSeniorityIncludes] = useState<string[]>([]);
@@ -199,6 +200,9 @@ function FinderPage() {
   const [verifying, setVerifying] = useState(false);
   const [verifyJobId, setVerifyJobId] = useState<string | null>(null);
   const [verifyProgress, setVerifyProgress] = useState<{ done: number; total: number } | null>(null);
+  // Sequence picker — loaded once when results arrive
+  const [sequences, setSequences] = useState<{ id: string; name: string }[]>([]);
+  const [targetSequenceId, setTargetSequenceId] = useState<string>("");
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -262,6 +266,13 @@ function FinderPage() {
     } catch {
       toast.error("Failed to load results.");
     }
+    // Load sequences once so user can pick one to enroll into
+    if (sequences.length === 0) {
+      try {
+        const seqData = await api.get<{ data?: { id: string; name: string }[] }>("/v1/sequences");
+        setSequences(seqData.data ?? []);
+      } catch { /* non-fatal */ }
+    }
   }
 
   async function handleSearch() {
@@ -323,14 +334,32 @@ function FinderPage() {
     if (!importAll && selected.size === 0) return;
     setImporting(true);
     try {
+      const base: Record<string, unknown> = {};
+      if (verifyJobId) base.verifyJobId = verifyJobId;
+      if (targetSequenceId) base.sequenceId = targetSequenceId;
+
       const body = importAll
-        ? { importAll: true }
-        : { indices: [...selected].map((i) => page * PAGE_SIZE + i) };
+        ? { ...base, importAll: true }
+        : { ...base, emails: [...selected].map((i) => results[i]?.email).filter(Boolean) };
+
       const data = await api.post<{ imported: number; skipped: number }>(
         `/v1/finder/jobs/${runId}/import`,
         body,
       );
-      toast.success(`${data.imported} lead${data.imported !== 1 ? "s" : ""} imported`);
+      const count = data.imported;
+      if (targetSequenceId) {
+        const seqName = sequences.find((s) => s.id === targetSequenceId)?.name ?? "sequence";
+        toast.success(`${count} lead${count !== 1 ? "s" : ""} added to "${seqName}"`, {
+          action: {
+            label: "Open Sequence",
+            onClick: () => navigate({ to: "/dashboard/sequences" }),
+          },
+        });
+      } else {
+        toast.success(`${count} lead${count !== 1 ? "s" : ""} saved to Leads`, {
+          action: { label: "View Leads", onClick: () => navigate({ to: "/dashboard/leads" }) },
+        });
+      }
       setSelected(new Set());
     } catch (err: unknown) {
       toast.error((err as { message?: string }).message ?? "Import failed.");
@@ -480,14 +509,27 @@ function FinderPage() {
         {phase === "succeeded" && (
           <div className="space-y-4">
             {/* Toolbar */}
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
               <p className="text-sm text-muted-foreground shrink-0">
                 {total > 0
-                  ? <><span className="font-medium text-foreground">{total.toLocaleString()}</span> result{total !== 1 ? "s" : ""}</>
+                  ? <><span className="font-medium text-foreground">{total.toLocaleString()}</span> verified result{total !== 1 ? "s" : ""}</>
                   : "No results — try broader filters."}
                 {selected.size > 0 && <span className="ml-2 text-foreground">· {selected.size} selected</span>}
               </p>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Sequence picker */}
+                {total > 0 && (
+                  <select
+                    value={targetSequenceId}
+                    onChange={(e) => setTargetSequenceId(e.target.value)}
+                    className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                  >
+                    <option value="">Save to Leads</option>
+                    {sequences.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                )}
                 {total > 0 && (
                   <Button variant="outline" size="sm" onClick={() => handleImport(true)} disabled={importing}>
                     <Download className="h-3.5 w-3.5 mr-1.5" />

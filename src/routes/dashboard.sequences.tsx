@@ -111,7 +111,8 @@ function SequencesPage() {
   const [steps, setSteps] = useState<Record<string, SequenceStep[]>>({});
   const [stepsLoading, setStepsLoading] = useState<string | null>(null);
   const [addingStep, setAddingStep] = useState<string | null>(null);
-  const [stepForm, setStepForm] = useState({ delayDays: "1", delayHours: "0", subject: "", htmlBody: "", condition: "always" });
+  const [stepForm, setStepForm] = useState<{ delayDays: string; delayHours: string; subject: string; htmlBody: string; condition: string; bodyMode: "html" | "text" | "both"; text_body: string }>({ delayDays: "1", delayHours: "0", subject: "", htmlBody: "", condition: "always", bodyMode: "html", text_body: "" });
+  const [seqStats, setSeqStats] = useState<Record<string, { sent: number; openRate: number; clickRate: number; replyRate: number; totalEnrolled: number }>>({});
   const [stepSaving, setStepSaving] = useState(false);
 
   // Variants
@@ -186,6 +187,7 @@ function SequencesPage() {
       setAddingStep(null);
       setEditWindowFor(null);
       if (!steps[seqId]) loadSteps(seqId);
+      loadSeqStats(seqId);
     }
   };
 
@@ -297,12 +299,15 @@ function SequencesPage() {
         delay_days: parseInt(stepForm.delayDays) || 0,
         delay_hours: parseInt(stepForm.delayHours) || 0,
         subject: stepForm.subject,
-        html_body: stepForm.htmlBody,
+        html_body: (stepForm.bodyMode === "text")
+          ? `<pre style="font-family:inherit;white-space:pre-wrap">${stepForm.text_body ?? ""}</pre>`
+          : stepForm.htmlBody,
+        text_body: stepForm.text_body || undefined,
         condition: stepForm.condition,
       }, primaryKey.keyRaw);
       toast.success("Step added");
       setAddingStep(null);
-      setStepForm({ delayDays: "1", delayHours: "0", subject: "", htmlBody: "", condition: "always" });
+      setStepForm({ delayDays: "1", delayHours: "0", subject: "", htmlBody: "", condition: "always", bodyMode: "html", text_body: "" });
       await loadSteps(seqId);
       setSequences((s) => s.map((x) => x.id === seqId ? { ...x, _count: { ...x._count, steps: (x._count?.steps ?? 0) + 1, enrollments: x._count?.enrollments ?? 0 } } : x));
     } catch (e: unknown) {
@@ -428,6 +433,14 @@ function SequencesPage() {
       setShowFunnelFor(seqId);
       loadFunnel(seqId);
     }
+  };
+
+  const loadSeqStats = async (seqId: string) => {
+    if (seqStats[seqId]) return; // already loaded
+    try {
+      const data = await api.withKey.get<{ sent: number; openRate: number; clickRate: number; replyRate: number; totalEnrolled: number }>(`/v1/sequences/${seqId}/stats`, primaryKey?.keyRaw ?? "");
+      setSeqStats(prev => ({ ...prev, [seqId]: data }));
+    } catch { /* non-fatal */ }
   };
 
   return (
@@ -576,6 +589,15 @@ function SequencesPage() {
                       <StatusBadge status={seq.status} />
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">{seq.fromName} &lt;{seq.fromEmail}&gt;</p>
+                    {seqStats[seq.id] && (
+                      <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                        <span><span className="font-medium text-foreground">{seqStats[seq.id].totalEnrolled}</span> enrolled</span>
+                        <span><span className="font-medium text-foreground">{seqStats[seq.id].sent}</span> sent</span>
+                        <span><span className="font-medium text-blue-500">{seqStats[seq.id].openRate}%</span> open</span>
+                        <span><span className="font-medium text-violet-500">{seqStats[seq.id].clickRate}%</span> click</span>
+                        <span><span className="font-medium text-emerald-500">{seqStats[seq.id].replyRate}%</span> reply</span>
+                      </div>
+                    )}
                   </div>
                 </button>
                 <div className="flex items-center gap-4 text-sm shrink-0">
@@ -942,15 +964,54 @@ function SequencesPage() {
                             <Label className="text-xs">Subject</Label>
                             <Input placeholder="Quick question about {{company}}" value={stepForm.subject} onChange={(e) => setStepForm((f) => ({ ...f, subject: e.target.value }))} className="h-8 text-sm" />
                           </div>
-                          <div className="space-y-1">
-                            <Label className="text-xs">Email body (HTML)</Label>
-                            <textarea
-                              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[80px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              placeholder={"<p>Hi {{first_name}},</p>\n<p>I noticed {{company}} is growing fast…</p>"}
-                              value={stepForm.htmlBody}
-                              onChange={(e) => setStepForm((f) => ({ ...f, htmlBody: e.target.value }))}
-                            />
+                          {/* Content type toggle */}
+                          <div>
+                            <Label className="text-xs font-medium text-muted-foreground mb-1.5 block">Email Format</Label>
+                            <div className="flex rounded-md border border-border overflow-hidden w-fit">
+                              {(["html", "text", "both"] as const).map((m) => (
+                                <button
+                                  key={m}
+                                  type="button"
+                                  onClick={() => setStepForm(prev => ({ ...prev, bodyMode: m }))}
+                                  className={`px-3 py-1 text-xs font-medium transition-colors capitalize ${
+                                    (stepForm.bodyMode ?? "html") === m
+                                      ? "bg-foreground text-background"
+                                      : "bg-transparent text-muted-foreground hover:text-foreground"
+                                  }`}
+                                >
+                                  {m === "both" ? "HTML + Text" : m.toUpperCase()}
+                                </button>
+                              ))}
+                            </div>
                           </div>
+                          {((stepForm.bodyMode ?? "html") === "html" || stepForm.bodyMode === "both") && (
+                            <div className="space-y-1">
+                              <Label className="text-xs">Email body (HTML){stepForm.bodyMode === "both" ? " (primary)" : ""}</Label>
+                              <textarea
+                                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[80px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                placeholder={"<p>Hi {{first_name}},</p>\n<p>I noticed {{company}} is growing fast…</p>"}
+                                value={stepForm.htmlBody}
+                                onChange={(e) => setStepForm((f) => ({ ...f, htmlBody: e.target.value }))}
+                              />
+                            </div>
+                          )}
+                          {((stepForm.bodyMode ?? "html") === "text" || stepForm.bodyMode === "both") && (
+                            <div>
+                              <Label className="text-xs font-medium text-muted-foreground mb-1 block">
+                                Plain text body {stepForm.bodyMode === "both" ? "(fallback)" : ""}
+                              </Label>
+                              <textarea
+                                value={stepForm.text_body ?? ""}
+                                onChange={e => setStepForm(prev => ({ ...prev, text_body: e.target.value }))}
+                                rows={8}
+                                placeholder="Plain text version of the email. No HTML tags — use {{firstName}} variables as normal."
+                                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono resize-y"
+                              />
+                              {(stepForm.bodyMode ?? "html") === "text" && (
+                                <p className="text-xs text-muted-foreground mt-1">Plain text emails have higher deliverability for cold outreach and cannot include open/click tracking.</p>
+                              )}
+                            </div>
+                          )}
                           <div className="flex gap-2">
                             <Button size="sm" onClick={() => addStep(seq.id)} disabled={stepSaving}>{stepSaving ? "Saving…" : "Add Step"}</Button>
                             <Button size="sm" variant="outline" onClick={() => setAddingStep(null)}>Cancel</Button>
@@ -961,7 +1022,7 @@ function SequencesPage() {
                           variant="outline"
                           size="sm"
                           className="gap-1.5 w-full"
-                          onClick={() => { setAddingStep(seq.id); setStepForm({ delayDays: "1", delayHours: "0", subject: "", htmlBody: "", condition: "always" }); }}
+                          onClick={() => { setAddingStep(seq.id); setStepForm({ delayDays: "1", delayHours: "0", subject: "", htmlBody: "", condition: "always", bodyMode: "html", text_body: "" }); }}
                         >
                           <Plus className="h-3.5 w-3.5" /> Add Step
                         </Button>
