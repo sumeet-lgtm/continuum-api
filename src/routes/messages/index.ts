@@ -5,6 +5,65 @@ import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
 export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
+  // GET /v1/events/live — unified real-time event feed (SendEvent + TrackingEvent merged)
+  fastify.get(
+    '/events/live',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const q = request.query as { limit?: string };
+      const apiKeyId = request.apiKey.id;
+      const limit = Math.min(50, Math.max(1, parseInt(q.limit ?? '30', 10)));
+
+      const [sendEvents, trackEvents] = await Promise.all([
+        prisma.sendEvent.findMany({
+          where: { sendMessage: { apiKeyId } },
+          orderBy: { occurredAt: 'desc' },
+          take: limit,
+          select: {
+            id: true,
+            type: true,
+            occurredAt: true,
+            sendMessage: { select: { id: true, to: true, subject: true } },
+          },
+        }),
+        prisma.trackingEvent.findMany({
+          where: { sendMessage: { apiKeyId } },
+          orderBy: { occurredAt: 'desc' },
+          take: limit,
+          select: {
+            id: true,
+            type: true,
+            occurredAt: true,
+            sendMessage: { select: { id: true, to: true, subject: true } },
+          },
+        }),
+      ]);
+
+      const combined = [
+        ...sendEvents.map((e) => ({
+          id: `se_${e.id}`,
+          type: e.type as string,
+          messageId: e.sendMessage?.id ?? '',
+          to: e.sendMessage?.to ?? '',
+          subject: e.sendMessage?.subject ?? '',
+          occurredAt: e.occurredAt.toISOString(),
+        })),
+        ...trackEvents.map((e) => ({
+          id: `te_${e.id}`,
+          type: e.type,
+          messageId: e.sendMessage?.id ?? '',
+          to: e.sendMessage?.to ?? '',
+          subject: e.sendMessage?.subject ?? '',
+          occurredAt: e.occurredAt.toISOString(),
+        })),
+      ]
+        .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
+        .slice(0, limit);
+
+      return reply.status(200).send({ events: combined, total: combined.length });
+    },
+  );
+
   // GET /v1/messages
   fastify.get(
     '/messages',
