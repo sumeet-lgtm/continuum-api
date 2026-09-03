@@ -36,6 +36,7 @@ interface Campaign {
 interface MailingList { id: string; name: string; }
 interface EmailTemplate { id: string; name: string; subject: string; htmlBody: string; }
 interface Segment { id: string; name: string; }
+interface SendingDomain { id: string; name: string; status: string; }
 interface CampaignHealth {
   health_score: number;
   signals: Array<{ type: "warning" | "critical" | "good"; message: string }>;
@@ -53,9 +54,10 @@ function CampaignsPage() {
   const [lists, setLists] = useState<MailingList[]>([]);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
+  const [domains, setDomains] = useState<SendingDomain[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
+  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
   const [saving, setSaving] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [testTarget, setTestTarget] = useState<string | null>(null);
@@ -88,11 +90,15 @@ function CampaignsPage() {
       .get<{ data: Segment[] }>("/v1/segments", primaryKey.keyRaw)
       .then((r) => setSegments(r.data ?? []))
       .catch(() => {});
+    api.withKey
+      .get<{ data: SendingDomain[] }>("/v1/domains", primaryKey.keyRaw)
+      .then((r) => setDomains((r.data ?? []).filter((d) => d.status === "verified")))
+      .catch(() => {});
   };
 
   useEffect(() => { load(); }, [primaryKey]);
 
-  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
+  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
 
   const openHealth = async (c: Campaign) => {
     if (!primaryKey?.keyRaw) return;
@@ -136,6 +142,7 @@ function CampaignsPage() {
         text_body: form.textBody || undefined,
         track_opens: form.trackOpens,
         track_clicks: form.trackClicks,
+        domain_id: form.domainId || undefined,
       };
       if (!asDraft && form.scheduledAt) payload.scheduled_at = new Date(form.scheduledAt).toISOString();
       const campaign = await api.withKey.post<{ id: string }>("/v1/campaigns", payload, primaryKey.keyRaw);
@@ -263,6 +270,19 @@ function CampaignsPage() {
               <Input placeholder="hello@acme.com" value={form.fromEmail} onChange={(e) => setForm((f) => ({ ...f, fromEmail: e.target.value }))} />
             </div>
           </div>
+          {domains.length > 0 && (
+            <div className="space-y-1.5">
+              <Label>Sending domain <span className="text-muted-foreground font-normal">(optional — defaults to account default)</span></Label>
+              <select
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={form.domainId}
+                onChange={(e) => setForm((f) => ({ ...f, domainId: e.target.value }))}
+              >
+                <option value="">— account default —</option>
+                {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label>Reply-to <span className="text-muted-foreground font-normal">(optional)</span></Label>
             <Input placeholder="replies@acme.com" type="email" value={form.replyTo} onChange={(e) => setForm((f) => ({ ...f, replyTo: e.target.value }))} />
@@ -609,7 +629,7 @@ function CampaignsPage() {
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => {
                             setEditingCampaign(c);
                             setCreating(false);
-                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", trackOpens: c.trackOpens, trackClicks: c.trackClicks, scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
+                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: c.trackOpens, trackClicks: c.trackClicks, scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
                           }}>
                             <Edit2 className="h-3 w-3" /> Edit
                           </Button>
