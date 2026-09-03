@@ -166,6 +166,34 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.status(200).send({ data: steps });
   });
 
+  // PATCH /v1/sequences/:id/steps/:stepId — edit an existing step
+  fastify.patch('/sequences/:id/steps/:stepId', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id, stepId } = request.params as { id: string; stepId: string };
+    const apiKeyId = request.apiKey.id;
+    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
+    if (!seq) throw Errors.notFound('Sequence not found.');
+    const step = await prisma.sequenceStep.findFirst({ where: { id: stepId, sequenceId: id } });
+    if (!step) throw Errors.notFound('Step not found.');
+
+    const patchSchema = stepSchema.partial();
+    const parsed = patchSchema.safeParse(request.body);
+    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+    const { delay_days, delay_hours, subject, html_body, text_body, condition } = parsed.data;
+    const updated = await prisma.sequenceStep.update({
+      where: { id: stepId },
+      data: {
+        ...(delay_days !== undefined && { delayDays: delay_days }),
+        ...(delay_hours !== undefined && { delayHours: delay_hours }),
+        ...(subject !== undefined && { subject }),
+        ...(html_body !== undefined && { htmlBody: html_body }),
+        ...(text_body !== undefined && { textBody: text_body }),
+        ...(condition !== undefined && { condition }),
+      },
+    });
+    return reply.status(200).send(updated);
+  });
+
   // DELETE /v1/sequences/:id/steps/:stepId
   fastify.delete('/sequences/:id/steps/:stepId', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id, stepId } = request.params as { id: string; stepId: string };
