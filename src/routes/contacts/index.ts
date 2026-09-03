@@ -235,6 +235,36 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.status(200).send(contact);
   });
 
+  // PATCH /v1/contacts/:email — update contact fields (firstName, lastName, customFields)
+  fastify.patch('/contacts/:email', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { email: rawEmail } = request.params as { email: string };
+    const email = decodeURIComponent(rawEmail).toLowerCase();
+    const apiKeyId = request.apiKey.id;
+
+    const patchSchema = z.object({
+      first_name:    z.string().max(200).optional(),
+      last_name:     z.string().max(200).optional(),
+      custom_fields: z.record(z.unknown()).optional(),
+    });
+    const parsed = patchSchema.safeParse(request.body);
+    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+    const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
+    if (!contact) throw Errors.notFound('Contact not found.');
+
+    const { first_name, last_name, custom_fields } = parsed.data;
+    const updated = await prisma.contact.update({
+      where: { apiKeyId_email: { apiKeyId, email } },
+      data: {
+        ...(first_name !== undefined && { firstName: first_name }),
+        ...(last_name  !== undefined && { lastName:  last_name }),
+        ...(custom_fields !== undefined && { customFields: custom_fields as Prisma.InputJsonValue }),
+      },
+      select: { id: true, email: true, firstName: true, lastName: true, customFields: true, updatedAt: true },
+    });
+    return reply.status(200).send(updated);
+  });
+
   // GET /v1/confirm?token=xxx — double opt-in confirmation (no auth required — email link)
   fastify.get('/confirm', { preHandler: [requireIpRateLimit('confirm', 60)] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const q = request.query as { token?: string };
