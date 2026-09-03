@@ -1,12 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Users, Trash2 } from "lucide-react";
+import { Plus, Users, Trash2, Leaf, X, ChevronDown, AlertTriangle, CheckCircle2, Clock, Ban } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/lists")({
   head: () => ({ meta: [{ title: "Mailing Lists — Continuum API" }] }),
@@ -15,6 +15,245 @@ export const Route = createFileRoute("/dashboard/lists")({
 
 interface MailingList { id: string; name: string; description: string | null; contactCount: number; createdAt: string; }
 
+type HygieneBucket = "active" | "at_risk" | "inactive" | "never_opened";
+
+interface HygieneContact {
+  id: string;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  lastEngagedAt: string | null;
+  bucket: HygieneBucket;
+}
+
+interface HygieneReport {
+  total: number;
+  active: number;
+  at_risk: number;
+  inactive: number;
+  never_opened: number;
+  inactive_days: number;
+  contacts: HygieneContact[];
+}
+
+const BUCKET_META: Record<HygieneBucket, { label: string; color: string; icon: React.ReactNode; description: string }> = {
+  active:       { label: "Active",       color: "text-[oklch(0.55_0.16_145)]", icon: <CheckCircle2 className="h-4 w-4" />, description: "Engaged in selected window" },
+  at_risk:      { label: "At risk",      color: "text-[oklch(0.65_0.16_75)]",  icon: <Clock className="h-4 w-4" />,         description: "No engagement in 1–2× window" },
+  inactive:     { label: "Inactive",     color: "text-[oklch(0.58_0.22_27)]",  icon: <AlertTriangle className="h-4 w-4" />, description: "No engagement in 2× window" },
+  never_opened: { label: "Never opened", color: "text-muted-foreground",        icon: <Ban className="h-4 w-4" />,           description: "Never opened any email" },
+};
+
+function ListHygieneModal({
+  list,
+  apiKey,
+  onClose,
+}: {
+  list: MailingList;
+  apiKey: string;
+  onClose: () => void;
+}) {
+  const [inactiveDays, setInactiveDays] = useState(90);
+  const [report, setReport] = useState<HygieneReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [suppressing, setSuppressing] = useState(false);
+  const [bucketFilter, setBucketFilter] = useState<HygieneBucket | "all">("all");
+  const [showContacts, setShowContacts] = useState(false);
+
+  const runAnalysis = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `https://api.continuumapi.com/v1/lists/${list.id}/hygiene?inactive_days=${inactiveDays}`,
+        { headers: { "X-API-Key": apiKey } },
+      );
+      const data = await res.json() as HygieneReport;
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? "Failed");
+      setReport(data);
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [list.id, apiKey, inactiveDays]);
+
+  const suppress = async (buckets: HygieneBucket[]) => {
+    if (!confirm(`Suppress ${buckets.join(" + ")} contacts from "${list.name}"?\nThey will be unsubscribed from this list and added to the global suppression list.`)) return;
+    setSuppressing(true);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/lists/${list.id}/hygiene/suppress`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+        body: JSON.stringify({ inactive_days: inactiveDays, buckets }),
+      });
+      const data = await res.json() as { suppressed: number; message: string };
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? "Failed");
+      toast.success(data.message);
+      setReport(null);
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setSuppressing(false);
+    }
+  };
+
+  const filteredContacts = report?.contacts.filter((c) => bucketFilter === "all" || c.bucket === bucketFilter) ?? [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="rounded-lg border border-border bg-card w-full max-w-2xl shadow-xl flex flex-col max-h-[90vh]">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+          <div>
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <Leaf className="h-4 w-4 text-[oklch(0.55_0.16_145)]" /> List Hygiene
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">{list.name} · {list.contactCount.toLocaleString()} subscribers</p>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto flex-1 p-5 space-y-5">
+          {/* Controls */}
+          <div className="flex items-end gap-3 flex-wrap">
+            <div className="space-y-1">
+              <Label className="text-xs">Engagement window (days)</Label>
+              <select
+                value={inactiveDays}
+                onChange={(e) => { setInactiveDays(Number(e.target.value)); setReport(null); }}
+                className="h-8 text-sm rounded-md border border-input bg-background px-2 focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                {[30, 60, 90, 120, 180, 365].map((d) => (
+                  <option key={d} value={d}>{d} days</option>
+                ))}
+              </select>
+            </div>
+            <Button size="sm" onClick={() => void runAnalysis()} disabled={loading}>
+              {loading ? "Analyzing…" : report ? "Re-run analysis" : "Run analysis"}
+            </Button>
+          </div>
+
+          {report && (
+            <>
+              {/* Bucket summary */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {(["active", "at_risk", "inactive", "never_opened"] as HygieneBucket[]).map((b) => {
+                  const meta = BUCKET_META[b];
+                  const count = report[b as keyof HygieneReport] as number;
+                  const pct = report.total > 0 ? Math.round((count / report.total) * 100) : 0;
+                  return (
+                    <button
+                      key={b}
+                      onClick={() => { setBucketFilter(bucketFilter === b ? "all" : b); setShowContacts(true); }}
+                      className={`rounded-lg border p-3 text-left space-y-1 transition-colors hover:bg-muted/40 ${bucketFilter === b ? "border-foreground/30 bg-muted/30" : "border-border"}`}
+                    >
+                      <div className={`flex items-center gap-1.5 text-xs font-medium ${meta.color}`}>
+                        {meta.icon} {meta.label}
+                      </div>
+                      <div className="text-2xl font-mono font-semibold tabular-nums">{count.toLocaleString()}</div>
+                      <div className="text-[10px] text-muted-foreground">{pct}% of list</div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Suppress actions */}
+              {(report.inactive > 0 || report.never_opened > 0) && (
+                <div className="rounded-lg border border-[oklch(0.65_0.16_75)]/30 bg-[oklch(0.65_0.16_75)]/5 p-4 space-y-3">
+                  <p className="text-sm font-medium">Clean your list</p>
+                  <div className="flex flex-wrap gap-2">
+                    {report.inactive > 0 && (
+                      <Button
+                        size="sm" variant="outline"
+                        onClick={() => void suppress(["inactive"])}
+                        disabled={suppressing}
+                        className="text-xs h-7"
+                      >
+                        <Ban className="h-3 w-3 mr-1.5" />
+                        Suppress {report.inactive.toLocaleString()} inactive
+                      </Button>
+                    )}
+                    {report.never_opened > 0 && (
+                      <Button
+                        size="sm" variant="outline"
+                        onClick={() => void suppress(["never_opened"])}
+                        disabled={suppressing}
+                        className="text-xs h-7"
+                      >
+                        <Ban className="h-3 w-3 mr-1.5" />
+                        Suppress {report.never_opened.toLocaleString()} never-opened
+                      </Button>
+                    )}
+                    {(report.inactive > 0 || report.never_opened > 0) && (
+                      <Button
+                        size="sm" variant="outline"
+                        onClick={() => void suppress(["inactive", "never_opened"])}
+                        disabled={suppressing}
+                        className="text-xs h-7"
+                      >
+                        Suppress all unengaged ({(report.inactive + report.never_opened).toLocaleString()})
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Contact list */}
+              <div>
+                <button
+                  onClick={() => setShowContacts((v) => !v)}
+                  className="flex items-center gap-2 text-xs font-medium hover:text-foreground text-muted-foreground transition-colors w-full"
+                >
+                  {showContacts ? <ChevronDown className="h-3.5 w-3.5 rotate-180" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  {bucketFilter === "all" ? "All contacts" : `${BUCKET_META[bucketFilter].label} contacts`} ({filteredContacts.length.toLocaleString()})
+                </button>
+
+                {showContacts && filteredContacts.length > 0 && (
+                  <div className="mt-2 rounded-md border border-border overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-muted/40 text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-medium">Email</th>
+                          <th className="px-3 py-2 text-left font-medium">Status</th>
+                          <th className="px-3 py-2 text-left font-medium">Last engaged</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredContacts.slice(0, 50).map((c) => {
+                          const meta = BUCKET_META[c.bucket];
+                          return (
+                            <tr key={c.id} className="border-t border-border hover:bg-muted/20">
+                              <td className="px-3 py-2 font-mono">{c.email}</td>
+                              <td className={`px-3 py-2 ${meta.color} flex items-center gap-1`}>
+                                {meta.icon} {meta.label}
+                              </td>
+                              <td className="px-3 py-2 text-muted-foreground">
+                                {c.lastEngagedAt ? new Date(c.lastEngagedAt).toLocaleDateString() : "Never"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {filteredContacts.length > 50 && (
+                          <tr className="border-t border-border">
+                            <td colSpan={3} className="px-3 py-2 text-center text-muted-foreground">
+                              +{(filteredContacts.length - 50).toLocaleString()} more — suppress to remove all at once
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ListsPage() {
   const { primaryKey } = useAuth();
   const [lists, setLists] = useState<MailingList[]>([]);
@@ -22,6 +261,7 @@ function ListsPage() {
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ name: "", description: "" });
   const [saving, setSaving] = useState(false);
+  const [hygieneList, setHygieneList] = useState<MailingList | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -62,7 +302,7 @@ function ListsPage() {
       <div className="flex items-center justify-between">
         <header>
           <h1 className="text-2xl font-display font-medium tracking-tight">Mailing Lists</h1>
-          <p className="text-sm text-muted-foreground">Manage opt-in subscriber lists for campaigns.</p>
+          <p className="text-sm text-muted-foreground">Manage opt-in subscriber lists with engagement health tracking.</p>
         </header>
         <Button size="sm" className="gap-1.5" onClick={() => setCreating(true)}>
           <Plus className="h-4 w-4" /> New List
@@ -117,15 +357,32 @@ function ListsPage() {
               <div className="flex items-center justify-between pt-1">
                 <span className="text-xs text-muted-foreground">{new Date(l.createdAt).toLocaleDateString()}</span>
                 <div className="flex gap-1">
+                  <Button
+                    variant="ghost" size="sm" className="h-7 text-xs gap-1 text-[oklch(0.55_0.16_145)]"
+                    title="List hygiene analysis"
+                    onClick={() => setHygieneList(l)}
+                  >
+                    <Leaf className="h-3.5 w-3.5" /> Hygiene
+                  </Button>
                   <Link to="/dashboard/contacts" search={{ list: l.id }}>
-                    <Button variant="outline" size="sm">Manage</Button>
+                    <Button variant="outline" size="sm" className="h-7 text-xs">Manage</Button>
                   </Link>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => remove(l)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(l)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
               </div>
             </div>
           ))}
         </div>
+      )}
+
+      {hygieneList && primaryKey?.keyRaw && (
+        <ListHygieneModal
+          list={hygieneList}
+          apiKey={primaryKey.keyRaw}
+          onClose={() => { setHygieneList(null); load(); }}
+        />
       )}
     </div>
   );
