@@ -396,4 +396,50 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
       message:      `Retarget campaign created for ${nonOpeners.length} non-openers out of ${allRecipients.length} total recipients.`,
     });
   });
+
+  // GET /v1/campaigns/:id/recipients
+  // Returns a paginated list of per-recipient delivery rows for a campaign.
+  // Useful for debugging ("did this contact receive the email?") and for
+  // enterprise support teams auditing delivery.
+  fastify.get('/campaigns/:id/recipients', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const q = request.query as { page?: string; limit?: string; status?: string; search?: string };
+
+    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId }, select: { id: true } });
+    if (!campaign) throw Errors.notFound('Campaign not found.');
+
+    const page = Math.max(1, parseInt(q.page ?? '1', 10));
+    const limit = Math.min(200, Math.max(1, parseInt(q.limit ?? '50', 10)));
+    const skip = (page - 1) * limit;
+
+    const where = {
+      campaignId: id,
+      ...(q.status ? { status: q.status } : {}),
+      ...(q.search ? { email: { contains: q.search, mode: 'insensitive' as const } } : {}),
+    };
+
+    const [total, rows] = await Promise.all([
+      prisma.campaignRecipient.count({ where }),
+      prisma.campaignRecipient.findMany({
+        where,
+        select: {
+          id: true, email: true, status: true, variant: true,
+          sesMessageId: true, sentAt: true, deliveredAt: true,
+          openedAt: true, clickedAt: true,
+        },
+        orderBy: { sentAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    return reply.status(200).send({
+      total,
+      page,
+      limit,
+      pages: Math.ceil(total / limit),
+      data: rows,
+    });
+  });
 }
