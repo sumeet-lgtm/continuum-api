@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
 import {
-  ShieldCheck, ShieldAlert, CheckCircle2, XCircle, Copy, Sparkles, Calculator,
+  ShieldCheck, ShieldAlert, CheckCircle2, XCircle, Copy, Sparkles, Calculator, Clock,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useApiKey } from "@/lib/use-api-key";
@@ -481,6 +481,231 @@ function ContentTab() {
   );
 }
 
+// ─── Send Time Optimizer ────────────────────────────────────────────────────
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const HOUR_LABELS = Array.from({ length: 24 }, (_, i) => {
+  const h = i % 12 || 12;
+  return `${h}${i < 12 ? "am" : "pm"}`;
+});
+
+interface SendTimeResult {
+  total_opens_analyzed: number;
+  hour_distribution: number[];
+  day_distribution: number[];
+  heatmap: number[][];
+  top_windows: Array<{ day: number; hour: number; count: number; day_name: string }>;
+  optimal_hour: number | null;
+  optimal_day: number | null;
+  optimal_day_name: string | null;
+}
+
+function SendTimeTab() {
+  const { apiKey } = useApiKey();
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<SendTimeResult | null>(null);
+  const [emailInput, setEmailInput] = useState("");
+  const [contactResult, setContactResult] = useState<{
+    email: string;
+    sufficient_data: boolean;
+    opens_analyzed: number;
+    optimal_hour?: number;
+    optimal_day?: number;
+    optimal_day_name?: string;
+    confidence?: number;
+    hour_distribution?: number[];
+    day_distribution?: number[];
+    message?: string;
+  } | null>(null);
+  const [contactLoading, setContactLoading] = useState(false);
+
+  const loadPlatform = async () => {
+    if (!apiKey?.keyRaw) return;
+    setLoading(true);
+    try {
+      const data = await api.withKey.get<SendTimeResult>("/v1/analytics/send-time", apiKey.keyRaw);
+      setResult(data);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadContact = async () => {
+    if (!apiKey?.keyRaw || !emailInput.trim()) return;
+    setContactLoading(true);
+    setContactResult(null);
+    try {
+      const data = await api.withKey.get<typeof contactResult>(
+        `/v1/contacts/${encodeURIComponent(emailInput.trim())}/send-time`,
+        apiKey.keyRaw,
+      );
+      setContactResult(data);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Contact not found");
+    } finally {
+      setContactLoading(false);
+    }
+  };
+
+  const maxHour = result ? Math.max(...result.hour_distribution, 1) : 1;
+  const maxDay  = result ? Math.max(...result.day_distribution, 1) : 1;
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-lg border border-border bg-card p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-medium">Audience send-time heatmap</h3>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">Analyses when your audience opens emails across hours and days.</p>
+          </div>
+          <Button size="sm" onClick={loadPlatform} disabled={loading || !apiKey}>
+            {loading ? "Analysing…" : "Analyse my list"}
+          </Button>
+        </div>
+
+        {result && result.total_opens_analyzed === 0 && (
+          <p className="text-sm text-muted-foreground">No open events found yet — send some emails and track opens first.</p>
+        )}
+
+        {result && result.total_opens_analyzed > 0 && (
+          <div className="space-y-5">
+            {result.optimal_hour !== null && (
+              <div className="flex flex-wrap gap-3">
+                <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center min-w-[120px]">
+                  <p className="text-xs text-muted-foreground">Best hour (UTC)</p>
+                  <p className="text-2xl font-semibold tabular-nums mt-0.5">{HOUR_LABELS[result.optimal_hour]}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center min-w-[120px]">
+                  <p className="text-xs text-muted-foreground">Best day</p>
+                  <p className="text-2xl font-semibold mt-0.5">{result.optimal_day_name}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center min-w-[120px]">
+                  <p className="text-xs text-muted-foreground">Opens analysed</p>
+                  <p className="text-2xl font-semibold tabular-nums mt-0.5">{result.total_opens_analyzed.toLocaleString()}</p>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-2">Opens by hour of day (UTC)</p>
+              <div className="flex items-end gap-0.5 h-16">
+                {result.hour_distribution.map((count, hour) => (
+                  <div key={hour} className="flex-1 flex flex-col items-center gap-0.5" title={`${HOUR_LABELS[hour]}: ${count} opens`}>
+                    <div
+                      className="w-full rounded-sm transition-all"
+                      style={{
+                        height: `${Math.max(2, (count / maxHour) * 52)}px`,
+                        background: count === Math.max(...result.hour_distribution)
+                          ? "oklch(0.55 0.16 145)"
+                          : "oklch(0.55 0.16 145 / 0.35)",
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-0.5 mt-1">
+                {HOUR_LABELS.map((label, i) => (
+                  i % 4 === 0 ? (
+                    <div key={i} className="flex-1 text-[9px] text-muted-foreground text-center" style={{ marginLeft: i === 0 ? 0 : undefined }}>
+                      {label}
+                    </div>
+                  ) : <div key={i} className="flex-1" />
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-2">Opens by day of week</p>
+              <div className="flex items-end gap-1.5 h-12">
+                {result.day_distribution.map((count, day) => (
+                  <div key={day} className="flex-1 flex flex-col items-center gap-0.5">
+                    <div
+                      className="w-full rounded-sm"
+                      style={{
+                        height: `${Math.max(2, (count / maxDay) * 40)}px`,
+                        background: count === Math.max(...result.day_distribution)
+                          ? "oklch(0.55 0.16 145)"
+                          : "oklch(0.55 0.16 145 / 0.35)",
+                      }}
+                      title={`${DAY_NAMES[day]}: ${count} opens`}
+                    />
+                    <span className="text-[9px] text-muted-foreground">{DAY_NAMES[day]}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {result.top_windows.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-2">Top 5 send windows</p>
+                <div className="space-y-1.5">
+                  {result.top_windows.map((w, i) => (
+                    <div key={i} className="flex items-center gap-3 text-sm">
+                      <span className="text-xs text-muted-foreground tabular-nums w-4">{i + 1}.</span>
+                      <span className="font-medium">{w.day_name} {HOUR_LABELS[w.hour]}</span>
+                      <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-foreground/60"
+                          style={{ width: `${(w.count / result.top_windows[0]!.count) * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground tabular-nums">{w.count} opens</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-border bg-card p-5 space-y-3">
+        <h3 className="text-sm font-medium">Per-contact optimal time</h3>
+        <p className="text-xs text-muted-foreground">Look up when a specific contact is most likely to open based on their history.</p>
+        <div className="flex gap-2">
+          <Input
+            placeholder="contact@example.com"
+            value={emailInput}
+            onChange={(e) => setEmailInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && loadContact()}
+            className="max-w-xs"
+          />
+          <Button variant="outline" onClick={loadContact} disabled={contactLoading || !emailInput.trim() || !apiKey}>
+            {contactLoading ? "Looking up…" : "Look up"}
+          </Button>
+        </div>
+        {contactResult && (
+          <div className="rounded-lg border border-border bg-muted/30 p-4">
+            {!contactResult.sufficient_data ? (
+              <p className="text-sm text-muted-foreground">{contactResult.message ?? "Insufficient data."} ({contactResult.opens_analyzed} opens found — need at least 3)</p>
+            ) : (
+              <div className="flex flex-wrap gap-4 text-sm">
+                <div>
+                  <p className="text-xs text-muted-foreground">Best time to send</p>
+                  <p className="font-medium mt-0.5">{contactResult.optimal_day_name} {contactResult.optimal_hour !== undefined ? HOUR_LABELS[contactResult.optimal_hour] : "—"} UTC</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Based on</p>
+                  <p className="font-medium mt-0.5">{contactResult.opens_analyzed} opens</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Confidence</p>
+                  <p className="font-medium mt-0.5">{contactResult.confidence !== undefined ? `${Math.round(contactResult.confidence * 100)}%` : "—"}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Rate Calculator ────────────────────────────────────────────────────────
 
 interface RatesResult {
@@ -584,6 +809,7 @@ function ToolsPage() {
           <TabsTrigger value="generators">DNS Generators</TabsTrigger>
           <TabsTrigger value="content">Content & Spam</TabsTrigger>
           <TabsTrigger value="rates">Rate Calculator</TabsTrigger>
+          <TabsTrigger value="send-time">Send Time</TabsTrigger>
         </TabsList>
         <TabsContent value="domain" className="mt-4">
           <DomainHealthTab />
@@ -596,6 +822,9 @@ function ToolsPage() {
         </TabsContent>
         <TabsContent value="rates" className="mt-4">
           <RatesTab />
+        </TabsContent>
+        <TabsContent value="send-time" className="mt-4">
+          <SendTimeTab />
         </TabsContent>
       </Tabs>
     </div>
