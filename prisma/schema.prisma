@@ -620,10 +620,29 @@ model EmailTemplate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+  apiKey   ApiKey                 @relation(fields: [apiKeyId], references: [id])
+  versions EmailTemplateVersion[]
 
   @@index([apiKeyId])
   @@map("email_templates")
+}
+
+model EmailTemplateVersion {
+  id         String   @id @default(cuid())
+  templateId String
+  version    Int
+  name       String
+  subject    String
+  htmlBody   String
+  textBody   String?
+  variables  Json?
+  savedAt    DateTime @default(now())
+  savedBy    String?  // email of user who made the change
+
+  template EmailTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, version])
+  @@map("email_template_versions")
 }
 
 // ─── Open / Click Tracking Events ────────────────────────────────────────────
