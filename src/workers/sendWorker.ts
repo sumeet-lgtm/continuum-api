@@ -174,4 +174,14 @@ export { processScheduledSend as processScheduledSendForTesting };
 // Guard: do not auto-start when imported by tests
 if (process.env['NODE_ENV'] !== 'test') {
   startSendWorker();
+
+  // Keep the worker alive across transient BullMQ job errors.
+  // Uncaught exceptions at startup (missing modules, etc.) still crash.
+  process.on('unhandledRejection', (reason) => {
+    logger.error({ reason }, 'Send worker: unhandled rejection (worker kept alive)');
+  });
+  process.on('uncaughtException', (err) => {
+    logger.fatal({ err }, 'Send worker: uncaught exception — exiting');
+    process.exit(1);
+  });
 }

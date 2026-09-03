@@ -64,6 +64,14 @@ const shutdown = async () => {
 process.on('SIGTERM', () => void shutdown());
 process.on('SIGINT', () => void shutdown());
 process.on('unhandledRejection', (reason) => {
-  console.error('[worker-new] unhandled rejection:', reason);
+  // Log but do not exit — an unhandled rejection in a job processor must not
+  // take down the entire worker process. BullMQ marks the job as failed and
+  // retries it; we keep the worker alive for the next one.
+  console.error('[worker-new] unhandled rejection (worker kept alive):', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  // Uncaught exceptions (syntax errors, startup failures) ARE fatal.
+  console.error('[worker-new] uncaught exception — exiting:', err);
   process.exit(1);
 });

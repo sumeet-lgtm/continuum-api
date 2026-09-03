@@ -62,7 +62,11 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('unhandledRejection', (reason) => {
-    logger.fatal({ reason }, 'Unhandled rejection in worker process');
+    // Job-level rejections must not crash the worker process — BullMQ retries them.
+    logger.error({ reason }, 'Unhandled rejection in worker process (worker kept alive)');
+  });
+  process.on('uncaughtException', (err) => {
+    logger.fatal({ err }, 'Uncaught exception in worker process — exiting');
     process.exit(1);
   });
 }
