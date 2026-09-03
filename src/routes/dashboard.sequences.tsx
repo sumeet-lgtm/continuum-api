@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2, Edit2 } from "lucide-react";
+import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2, Edit2, Sparkles, Phone, Linkedin, CheckSquare, Mail } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/sequences")({
   head: () => ({ meta: [{ title: "Sequences — Continuum API" }] }),
@@ -39,8 +39,10 @@ interface SequenceStep {
   stepOrder: number;
   delayDays: number;
   delayHours: number;
+  type: StepType;
   subject: string;
   htmlBody: string;
+  taskNote?: string;
   condition: string;
 }
 
@@ -78,6 +80,15 @@ const CONDITION_LABELS: Record<string, string> = {
   if_not_replied: "Only if not replied",
 };
 
+type StepType = "email" | "call" | "linkedin" | "task";
+
+const STEP_TYPE_CONFIG: Record<StepType, { label: string; icon: React.ElementType; color: string; bg: string }> = {
+  email:    { label: "Email",    icon: Mail,        color: "text-blue-500",   bg: "bg-blue-500/10" },
+  call:     { label: "Call",     icon: Phone,       color: "text-emerald-500", bg: "bg-emerald-500/10" },
+  linkedin: { label: "LinkedIn", icon: Linkedin,    color: "text-sky-500",    bg: "bg-sky-500/10" },
+  task:     { label: "Task",     icon: CheckSquare, color: "text-amber-500",  bg: "bg-amber-500/10" },
+};
+
 const DEFAULT_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
 
 function formatWindow(seq: Sequence) {
@@ -111,9 +122,15 @@ function SequencesPage() {
   const [steps, setSteps] = useState<Record<string, SequenceStep[]>>({});
   const [stepsLoading, setStepsLoading] = useState<string | null>(null);
   const [addingStep, setAddingStep] = useState<string | null>(null);
-  const [stepForm, setStepForm] = useState<{ delayDays: string; delayHours: string; subject: string; htmlBody: string; condition: string; bodyMode: "html" | "text" | "both"; text_body: string }>({ delayDays: "1", delayHours: "0", subject: "", htmlBody: "", condition: "always", bodyMode: "html", text_body: "" });
+  const [stepForm, setStepForm] = useState<{ type: StepType; delayDays: string; delayHours: string; subject: string; htmlBody: string; taskNote: string; condition: string; bodyMode: "html" | "text" | "both"; text_body: string }>({ type: "email", delayDays: "1", delayHours: "0", subject: "", htmlBody: "", taskNote: "", condition: "always", bodyMode: "html", text_body: "" });
   const [seqStats, setSeqStats] = useState<Record<string, { sent: number; openRate: number; clickRate: number; replyRate: number; totalEnrolled: number }>>({});
   const [stepSaving, setStepSaving] = useState(false);
+  const [stepAiGenerating, setStepAiGenerating] = useState(false);
+
+  // AI brief modal for generating a full sequence
+  const [showAIBrief, setShowAIBrief] = useState<string | null>(null); // seqId
+  const [aiBriefForm, setAiBriefForm] = useState({ icpDescription: "", goal: "", tone: "professional" as string, numSteps: "5", allowedTypes: ["email", "call", "linkedin"] as string[] });
+  const [aiBriefGenerating, setAiBriefGenerating] = useState(false);
 
   // Variants
   const [stepVariants, setStepVariants] = useState<Record<string, StepVariant[]>>({});
@@ -129,7 +146,7 @@ function SequencesPage() {
 
   // Step editing
   const [editingStep, setEditingStep] = useState<{ seqId: string; stepId: string } | null>(null);
-  const [editStepForm, setEditStepForm] = useState({ delayDays: "1", delayHours: "0", subject: "", htmlBody: "", condition: "always" });
+  const [editStepForm, setEditStepForm] = useState({ type: "email" as StepType, delayDays: "1", delayHours: "0", subject: "", htmlBody: "", taskNote: "", condition: "always" });
   const [editStepSaving, setEditStepSaving] = useState(false);
 
   // Funnel analytics
@@ -292,22 +309,34 @@ function SequencesPage() {
 
   const addStep = async (seqId: string) => {
     if (!primaryKey?.keyRaw) return;
-    if (!stepForm.subject || !stepForm.htmlBody) { toast.error("Subject and body are required"); return; }
+    if (stepForm.type === "email") {
+      if (!stepForm.subject.trim()) { toast.error("Subject is required for email steps"); return; }
+      if (!stepForm.htmlBody.trim() && stepForm.bodyMode !== "text") { toast.error("Email body is required"); return; }
+      if (stepForm.bodyMode === "text" && !stepForm.text_body.trim()) { toast.error("Email body is required"); return; }
+    } else {
+      if (!stepForm.taskNote.trim()) { toast.error(`Instructions are required for ${stepForm.type} steps`); return; }
+    }
     setStepSaving(true);
     try {
-      await api.withKey.post(`/v1/sequences/${seqId}/steps`, {
+      const payload: Record<string, unknown> = {
+        type: stepForm.type,
         delay_days: parseInt(stepForm.delayDays) || 0,
         delay_hours: parseInt(stepForm.delayHours) || 0,
-        subject: stepForm.subject,
-        html_body: (stepForm.bodyMode === "text")
-          ? `<pre style="font-family:inherit;white-space:pre-wrap">${stepForm.text_body ?? ""}</pre>`
-          : stepForm.htmlBody,
-        text_body: stepForm.text_body || undefined,
         condition: stepForm.condition,
-      }, primaryKey.keyRaw);
+      };
+      if (stepForm.type === "email") {
+        payload.subject = stepForm.subject;
+        payload.html_body = stepForm.bodyMode === "text"
+          ? `<pre style="font-family:inherit;white-space:pre-wrap">${stepForm.text_body ?? ""}</pre>`
+          : stepForm.htmlBody;
+        payload.text_body = stepForm.text_body || undefined;
+      } else {
+        payload.task_note = stepForm.taskNote;
+      }
+      await api.withKey.post(`/v1/sequences/${seqId}/steps`, payload, primaryKey.keyRaw);
       toast.success("Step added");
       setAddingStep(null);
-      setStepForm({ delayDays: "1", delayHours: "0", subject: "", htmlBody: "", condition: "always", bodyMode: "html", text_body: "" });
+      setStepForm({ type: "email", delayDays: "1", delayHours: "0", subject: "", htmlBody: "", taskNote: "", condition: "always", bodyMode: "html", text_body: "" });
       await loadSteps(seqId);
       setSequences((s) => s.map((x) => x.id === seqId ? { ...x, _count: { ...x._count, steps: (x._count?.steps ?? 0) + 1, enrollments: x._count?.enrollments ?? 0 } } : x));
     } catch (e: unknown) {
@@ -317,22 +346,116 @@ function SequencesPage() {
     }
   };
 
+  const generateStepWithAI = async () => {
+    if (!primaryKey?.keyRaw) return;
+    if (!stepForm.subject.trim()) { toast.error("Enter a subject or topic hint first"); return; }
+    setStepAiGenerating(true);
+    try {
+      const result = await api.withKey.post<{ variants: Array<{ subject: string; body?: string }> }>(
+        "/v1/ai/generate-email",
+        { type: "cold_outreach", about: stepForm.subject, tone: "professional", num_variants: 1 },
+        primaryKey.keyRaw,
+      );
+      const variant = result.variants?.[0];
+      if (variant) {
+        setStepForm((f) => ({ ...f, subject: variant.subject ?? f.subject, htmlBody: variant.body ?? f.htmlBody }));
+        toast.success("AI generated email content — review and edit before saving");
+      }
+    } catch (e: unknown) {
+      const msg = (e as Error).message;
+      if (msg.includes("Growth") || msg.includes("Scale")) {
+        toast.error("AI features require a Growth or Scale plan");
+      } else {
+        toast.error("AI generation failed — try again");
+      }
+    } finally {
+      setStepAiGenerating(false);
+    }
+  };
+
+  const generateSequenceWithAI = async (seqId: string) => {
+    if (!primaryKey?.keyRaw) return;
+    if (!aiBriefForm.icpDescription.trim()) { toast.error("Describe your target audience"); return; }
+    if (!aiBriefForm.goal.trim()) { toast.error("Describe your goal"); return; }
+    setAiBriefGenerating(true);
+    try {
+      const result = await api.withKey.post<{
+        sequence_name: string;
+        steps: Array<{ step_order: number; type: StepType; delay_days: number; delay_hours?: number; subject?: string; html_body?: string; task_note?: string; condition?: string }>;
+      }>(
+        "/v1/ai/generate-sequence",
+        {
+          icp_description: aiBriefForm.icpDescription,
+          goal: aiBriefForm.goal,
+          tone: aiBriefForm.tone,
+          num_steps: parseInt(aiBriefForm.numSteps) || 5,
+          allowed_step_types: aiBriefForm.allowedTypes,
+        },
+        primaryKey.keyRaw,
+      );
+
+      if (!result.steps?.length) { toast.error("AI returned no steps — try again"); return; }
+
+      for (const step of result.steps) {
+        const payload: Record<string, unknown> = {
+          type: step.type,
+          delay_days: step.delay_days ?? 0,
+          delay_hours: step.delay_hours ?? 0,
+          condition: step.condition ?? "always",
+        };
+        if (step.type === "email") {
+          payload.subject = step.subject ?? "";
+          payload.html_body = step.html_body ?? "";
+        } else {
+          payload.task_note = step.task_note ?? "";
+        }
+        await api.withKey.post(`/v1/sequences/${seqId}/steps`, payload, primaryKey.keyRaw);
+      }
+
+      toast.success(`${result.steps.length} steps added — review and adjust timing`);
+      setShowAIBrief(null);
+      await loadSteps(seqId);
+      setSequences((s) => s.map((x) => x.id === seqId ? { ...x, _count: { ...x._count, steps: (x._count?.steps ?? 0) + result.steps.length, enrollments: x._count?.enrollments ?? 0 } } : x));
+    } catch (e: unknown) {
+      const msg = (e as Error).message;
+      if (msg.includes("Growth") || msg.includes("Scale")) {
+        toast.error("AI features require a Growth or Scale plan");
+      } else {
+        toast.error("AI generation failed — try again");
+      }
+    } finally {
+      setAiBriefGenerating(false);
+    }
+  };
+
   const openEditStep = (seqId: string, step: SequenceStep) => {
     setEditingStep({ seqId, stepId: step.id });
-    setEditStepForm({ delayDays: String(step.delayDays), delayHours: String(step.delayHours ?? 0), subject: step.subject, htmlBody: step.htmlBody ?? "", condition: step.condition ?? "always" });
+    setEditStepForm({ type: step.type ?? "email", delayDays: String(step.delayDays), delayHours: String(step.delayHours ?? 0), subject: step.subject ?? "", htmlBody: step.htmlBody ?? "", taskNote: step.taskNote ?? "", condition: step.condition ?? "always" });
   };
 
   const saveEditStep = async () => {
     if (!primaryKey?.keyRaw || !editingStep) return;
     setEditStepSaving(true);
     try {
+      const payload: Record<string, unknown> = {
+        type: editStepForm.type,
+        delay_days: parseInt(editStepForm.delayDays) || 0,
+        delay_hours: parseInt(editStepForm.delayHours) || 0,
+        condition: editStepForm.condition,
+      };
+      if (editStepForm.type === "email") {
+        payload.subject = editStepForm.subject;
+        payload.html_body = editStepForm.htmlBody;
+      } else {
+        payload.task_note = editStepForm.taskNote;
+      }
       const res = await fetch(`https://api.continuumapi.com/v1/sequences/${editingStep.seqId}/steps/${editingStep.stepId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
-        body: JSON.stringify({ delay_days: parseInt(editStepForm.delayDays) || 0, delay_hours: parseInt(editStepForm.delayHours) || 0, subject: editStepForm.subject, html_body: editStepForm.htmlBody, condition: editStepForm.condition }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error("Failed");
-      const updated = await res.json();
+      const updated = await res.json() as SequenceStep;
       setSteps((prev) => ({ ...prev, [editingStep.seqId]: (prev[editingStep.seqId] ?? []).map((s) => s.id === editingStep.stepId ? { ...s, ...updated } : s) }));
       setEditingStep(null);
       toast.success("Step updated");
@@ -448,7 +571,7 @@ function SequencesPage() {
       <div className="flex items-center justify-between">
         <header>
           <h1 className="text-2xl font-display font-medium tracking-tight">Sequences</h1>
-          <p className="text-sm text-muted-foreground">Multi-step cold outreach with conditions, delays, reply detection, and A/B testing.</p>
+          <p className="text-sm text-muted-foreground">Multi-channel outreach — email, calls, LinkedIn, tasks — with AI-generated steps.</p>
         </header>
         <Button size="sm" className="gap-1.5" onClick={() => setCreating(true)}>
           <Plus className="h-4 w-4" /> New Sequence
@@ -512,6 +635,89 @@ function SequencesPage() {
           <div className="flex gap-2">
             <Button onClick={create} disabled={saving}>{saving ? "Creating…" : "Create Sequence"}</Button>
             <Button variant="outline" onClick={() => setCreating(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+
+      {/* AI Brief modal — generate full sequence */}
+      {showAIBrief && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="rounded-lg border border-border bg-card p-6 w-full max-w-lg space-y-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-violet-500" />
+                <h2 className="text-sm font-semibold">Generate Sequence with AI</h2>
+              </div>
+              <button onClick={() => setShowAIBrief(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+            </div>
+            <p className="text-xs text-muted-foreground">Describe your target audience and goal — AI will plan the full multi-channel sequence with email copy, call scripts, and LinkedIn touchpoints.</p>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Who are you targeting? (ICP)</Label>
+                <textarea
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm min-h-[60px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  placeholder="e.g. VP of Sales at B2B SaaS companies with 50-500 employees, using Salesforce, recently raised Series A"
+                  value={aiBriefForm.icpDescription}
+                  onChange={(e) => setAiBriefForm((f) => ({ ...f, icpDescription: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">What's the goal of this sequence?</Label>
+                <Input
+                  placeholder="e.g. Book a 15-min demo for our AI-powered cold email tool"
+                  value={aiBriefForm.goal}
+                  onChange={(e) => setAiBriefForm((f) => ({ ...f, goal: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Tone</Label>
+                  <select
+                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm focus-visible:outline-none"
+                    value={aiBriefForm.tone}
+                    onChange={(e) => setAiBriefForm((f) => ({ ...f, tone: e.target.value }))}
+                  >
+                    {["professional", "casual", "friendly", "direct"].map((t) => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Number of steps</Label>
+                  <Input
+                    type="number" min="2" max="10"
+                    value={aiBriefForm.numSteps}
+                    onChange={(e) => setAiBriefForm((f) => ({ ...f, numSteps: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Channels to include</Label>
+                <div className="flex flex-wrap gap-2">
+                  {(["email", "call", "linkedin", "task"] as StepType[]).map((t) => {
+                    const cfg = STEP_TYPE_CONFIG[t];
+                    const Icon = cfg.icon;
+                    const active = aiBriefForm.allowedTypes.includes(t);
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setAiBriefForm((f) => ({ ...f, allowedTypes: active ? f.allowedTypes.filter((x) => x !== t) : [...f.allowedTypes, t] }))}
+                        className={`flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium border transition-colors ${active ? `${cfg.bg} ${cfg.color} border-current/30` : "text-muted-foreground border-border hover:border-foreground/30"}`}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                        {cfg.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <Button className="gap-1.5" onClick={() => generateSequenceWithAI(showAIBrief!)} disabled={aiBriefGenerating}>
+                <Sparkles className="h-3.5 w-3.5" />
+                {aiBriefGenerating ? "Generating…" : "Generate Sequence"}
+              </Button>
+              <Button variant="outline" onClick={() => setShowAIBrief(null)}>Cancel</Button>
+            </div>
           </div>
         </div>
       )}
@@ -757,13 +963,26 @@ function SequencesPage() {
                       )}
 
                       {/* Steps list */}
-                      {(steps[seq.id] ?? []).length === 0 && addingStep !== seq.id && (
-                        <p className="text-xs text-muted-foreground">No steps yet. Add your first email step below.</p>
+                      {(steps[seq.id] ?? []).length === 0 && addingStep !== seq.id && showAIBrief !== seq.id && (
+                        <div className="rounded-md border border-dashed border-border p-4 text-center space-y-2">
+                          <p className="text-xs text-muted-foreground">No steps yet.</p>
+                          <div className="flex items-center justify-center gap-2">
+                            <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs" onClick={() => { setAddingStep(seq.id); setStepForm({ type: "email", delayDays: "0", delayHours: "0", subject: "", htmlBody: "", taskNote: "", condition: "always", bodyMode: "html", text_body: "" }); }}>
+                              <Plus className="h-3.5 w-3.5" /> Add manually
+                            </Button>
+                            <Button size="sm" className="gap-1.5 h-7 text-xs bg-violet-600 hover:bg-violet-700 text-white" onClick={() => { setShowAIBrief(seq.id); setAiBriefForm({ icpDescription: "", goal: "", tone: "professional", numSteps: "5", allowedTypes: ["email", "call", "linkedin"] }); }}>
+                              <Sparkles className="h-3.5 w-3.5" /> Create with AI
+                            </Button>
+                          </div>
+                        </div>
                       )}
 
                       {(steps[seq.id] ?? []).map((step, i) => {
                         const variants = stepVariants[step.id];
                         const isLoadingVariants = variantsLoading.has(step.id);
+                        const stepType = (step.type ?? "email") as StepType;
+                        const typeCfg = STEP_TYPE_CONFIG[stepType];
+                        const TypeIcon = typeCfg.icon;
                         return (
                           <div key={step.id} className="flex items-start gap-3">
                             <div className="h-7 w-7 rounded-full bg-muted border border-border flex items-center justify-center text-xs font-semibold shrink-0 mt-0.5">
@@ -772,8 +991,14 @@ function SequencesPage() {
                             <div className="flex-1 min-w-0 rounded-md border border-border bg-card p-3 space-y-2">
                               {/* Step header */}
                               <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0">
-                                  <p className="text-sm font-medium truncate">{step.subject}</p>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className={`inline-flex items-center gap-1 text-xs font-medium px-1.5 py-0.5 rounded-md ${typeCfg.bg} ${typeCfg.color}`}>
+                                      <TypeIcon className="h-3 w-3" />
+                                      {typeCfg.label}
+                                    </span>
+                                    <p className="text-sm font-medium truncate">{stepType === "email" ? step.subject : (step.taskNote ?? "")}</p>
+                                  </div>
                                   <div className="flex items-center gap-3 mt-1">
                                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
                                       <Clock className="h-3 w-3" />
@@ -823,6 +1048,21 @@ function SequencesPage() {
                               {/* Inline step editor */}
                               {editingStep?.stepId === step.id && (
                                 <div className="border border-border rounded-md p-3 space-y-2 bg-muted/20 text-xs">
+                                  <div>
+                                    <label className="text-muted-foreground block mb-1">Step type</label>
+                                    <div className="flex gap-1 flex-wrap">
+                                      {(["email", "call", "linkedin", "task"] as StepType[]).map((t) => {
+                                        const cfg = STEP_TYPE_CONFIG[t];
+                                        const Icon = cfg.icon;
+                                        return (
+                                          <button key={t} type="button" onClick={() => setEditStepForm((f) => ({ ...f, type: t }))}
+                                            className={`flex items-center gap-1 h-6 px-2 rounded-md text-xs font-medium border transition-colors ${editStepForm.type === t ? `${cfg.bg} ${cfg.color} border-current/30` : "text-muted-foreground border-border"}`}>
+                                            <Icon className="h-3 w-3" />{cfg.label}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
                                   <div className="flex gap-2">
                                     <div className="flex-1">
                                       <label className="text-muted-foreground block mb-1">Delay (days)</label>
@@ -837,14 +1077,23 @@ function SequencesPage() {
                                       </select>
                                     </div>
                                   </div>
-                                  <div>
-                                    <label className="text-muted-foreground block mb-1">Subject</label>
-                                    <Input className="h-7 text-xs" value={editStepForm.subject} onChange={(e) => setEditStepForm((f) => ({ ...f, subject: e.target.value }))} />
-                                  </div>
-                                  <div>
-                                    <label className="text-muted-foreground block mb-1">HTML body</label>
-                                    <textarea className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono h-28 resize-y" value={editStepForm.htmlBody} onChange={(e) => setEditStepForm((f) => ({ ...f, htmlBody: e.target.value }))} />
-                                  </div>
+                                  {editStepForm.type === "email" ? (
+                                    <>
+                                      <div>
+                                        <label className="text-muted-foreground block mb-1">Subject</label>
+                                        <Input className="h-7 text-xs" value={editStepForm.subject} onChange={(e) => setEditStepForm((f) => ({ ...f, subject: e.target.value }))} />
+                                      </div>
+                                      <div>
+                                        <label className="text-muted-foreground block mb-1">HTML body</label>
+                                        <textarea className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono h-28 resize-y" value={editStepForm.htmlBody} onChange={(e) => setEditStepForm((f) => ({ ...f, htmlBody: e.target.value }))} />
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <div>
+                                      <label className="text-muted-foreground block mb-1">Instructions / task note</label>
+                                      <textarea className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs h-20 resize-y" placeholder={`What to do for this ${editStepForm.type} step…`} value={editStepForm.taskNote} onChange={(e) => setEditStepForm((f) => ({ ...f, taskNote: e.target.value }))} />
+                                    </div>
+                                  )}
                                   <div className="flex gap-2 justify-end">
                                     <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => setEditingStep(null)}>Cancel</Button>
                                     <Button size="sm" className="h-6 text-xs" onClick={saveEditStep} disabled={editStepSaving}>{editStepSaving ? "Saving…" : "Save"}</Button>
@@ -940,6 +1189,25 @@ function SequencesPage() {
                       {addingStep === seq.id ? (
                         <div className="rounded-md border border-border bg-card p-4 space-y-3">
                           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">New Step</p>
+
+                          {/* Step type picker */}
+                          <div>
+                            <Label className="text-xs mb-1.5 block">Step type</Label>
+                            <div className="flex gap-1.5 flex-wrap">
+                              {(["email", "call", "linkedin", "task"] as StepType[]).map((t) => {
+                                const cfg = STEP_TYPE_CONFIG[t];
+                                const Icon = cfg.icon;
+                                return (
+                                  <button key={t} type="button"
+                                    onClick={() => setStepForm((f) => ({ ...f, type: t }))}
+                                    className={`flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium border transition-colors ${stepForm.type === t ? `${cfg.bg} ${cfg.color} border-current/30` : "text-muted-foreground border-border hover:border-foreground/30"}`}>
+                                    <Icon className="h-3.5 w-3.5" />{cfg.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
                           <div className="grid grid-cols-3 gap-3">
                             <div className="space-y-1">
                               <Label className="text-xs">Delay (days)</Label>
@@ -960,73 +1228,117 @@ function SequencesPage() {
                               </select>
                             </div>
                           </div>
-                          <div className="space-y-1">
-                            <Label className="text-xs">Subject</Label>
-                            <Input placeholder="Quick question about {{company}}" value={stepForm.subject} onChange={(e) => setStepForm((f) => ({ ...f, subject: e.target.value }))} className="h-8 text-sm" />
-                          </div>
-                          {/* Content type toggle */}
-                          <div>
-                            <Label className="text-xs font-medium text-muted-foreground mb-1.5 block">Email Format</Label>
-                            <div className="flex rounded-md border border-border overflow-hidden w-fit">
-                              {(["html", "text", "both"] as const).map((m) => (
-                                <button
-                                  key={m}
-                                  type="button"
-                                  onClick={() => setStepForm(prev => ({ ...prev, bodyMode: m }))}
-                                  className={`px-3 py-1 text-xs font-medium transition-colors capitalize ${
-                                    (stepForm.bodyMode ?? "html") === m
-                                      ? "bg-foreground text-background"
-                                      : "bg-transparent text-muted-foreground hover:text-foreground"
-                                  }`}
-                                >
-                                  {m === "both" ? "HTML + Text" : m.toUpperCase()}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                          {((stepForm.bodyMode ?? "html") === "html" || stepForm.bodyMode === "both") && (
+
+                          {stepForm.type === "email" ? (
+                            <>
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <Label className="text-xs">Subject</Label>
+                                  <button
+                                    type="button"
+                                    onClick={generateStepWithAI}
+                                    disabled={stepAiGenerating}
+                                    className="flex items-center gap-1 text-xs text-violet-500 hover:text-violet-400 disabled:opacity-50 transition-colors"
+                                  >
+                                    <Sparkles className="h-3 w-3" />
+                                    {stepAiGenerating ? "Generating…" : "Generate with AI"}
+                                  </button>
+                                </div>
+                                <Input placeholder="Quick question about {{company}}" value={stepForm.subject} onChange={(e) => setStepForm((f) => ({ ...f, subject: e.target.value }))} className="h-8 text-sm" />
+                              </div>
+                              {/* Content type toggle */}
+                              <div>
+                                <Label className="text-xs font-medium text-muted-foreground mb-1.5 block">Email Format</Label>
+                                <div className="flex rounded-md border border-border overflow-hidden w-fit">
+                                  {(["html", "text", "both"] as const).map((m) => (
+                                    <button
+                                      key={m}
+                                      type="button"
+                                      onClick={() => setStepForm(prev => ({ ...prev, bodyMode: m }))}
+                                      className={`px-3 py-1 text-xs font-medium transition-colors capitalize ${
+                                        (stepForm.bodyMode ?? "html") === m
+                                          ? "bg-foreground text-background"
+                                          : "bg-transparent text-muted-foreground hover:text-foreground"
+                                      }`}
+                                    >
+                                      {m === "both" ? "HTML + Text" : m.toUpperCase()}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              {((stepForm.bodyMode ?? "html") === "html" || stepForm.bodyMode === "both") && (
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Email body (HTML){stepForm.bodyMode === "both" ? " (primary)" : ""}</Label>
+                                  <textarea
+                                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[80px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    placeholder={"<p>Hi {{first_name}},</p>\n<p>I noticed {{company}} is growing fast…</p>"}
+                                    value={stepForm.htmlBody}
+                                    onChange={(e) => setStepForm((f) => ({ ...f, htmlBody: e.target.value }))}
+                                  />
+                                </div>
+                              )}
+                              {((stepForm.bodyMode ?? "html") === "text" || stepForm.bodyMode === "both") && (
+                                <div>
+                                  <Label className="text-xs font-medium text-muted-foreground mb-1 block">
+                                    Plain text body {stepForm.bodyMode === "both" ? "(fallback)" : ""}
+                                  </Label>
+                                  <textarea
+                                    value={stepForm.text_body ?? ""}
+                                    onChange={e => setStepForm(prev => ({ ...prev, text_body: e.target.value }))}
+                                    rows={8}
+                                    placeholder="Plain text version of the email. No HTML tags — use {{firstName}} variables as normal."
+                                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono resize-y"
+                                  />
+                                  {(stepForm.bodyMode ?? "html") === "text" && (
+                                    <p className="text-xs text-muted-foreground mt-1">Plain text emails have higher deliverability for cold outreach and cannot include open/click tracking.</p>
+                                  )}
+                                </div>
+                              )}
+                            </>
+                          ) : (
                             <div className="space-y-1">
-                              <Label className="text-xs">Email body (HTML){stepForm.bodyMode === "both" ? " (primary)" : ""}</Label>
-                              <textarea
-                                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[80px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                placeholder={"<p>Hi {{first_name}},</p>\n<p>I noticed {{company}} is growing fast…</p>"}
-                                value={stepForm.htmlBody}
-                                onChange={(e) => setStepForm((f) => ({ ...f, htmlBody: e.target.value }))}
-                              />
-                            </div>
-                          )}
-                          {((stepForm.bodyMode ?? "html") === "text" || stepForm.bodyMode === "both") && (
-                            <div>
-                              <Label className="text-xs font-medium text-muted-foreground mb-1 block">
-                                Plain text body {stepForm.bodyMode === "both" ? "(fallback)" : ""}
+                              <Label className="text-xs">
+                                {stepForm.type === "call" ? "Call script / talking points" :
+                                 stepForm.type === "linkedin" ? "LinkedIn message or action" :
+                                 "Task instructions"}
                               </Label>
                               <textarea
-                                value={stepForm.text_body ?? ""}
-                                onChange={e => setStepForm(prev => ({ ...prev, text_body: e.target.value }))}
-                                rows={8}
-                                placeholder="Plain text version of the email. No HTML tags — use {{firstName}} variables as normal."
-                                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono resize-y"
+                                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm min-h-[80px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                placeholder={
+                                  stepForm.type === "call" ? "Call {{first_name}} at {{company}}. Ask about their current email outreach process. Key talking points: …" :
+                                  stepForm.type === "linkedin" ? "Connect with {{first_name}} on LinkedIn. Reference the emails sent. Mention the case study link in the connection note." :
+                                  "Send follow-up deck to {{email}} using Docusend for tracking. Check for views after 48 hours."
+                                }
+                                value={stepForm.taskNote}
+                                onChange={(e) => setStepForm((f) => ({ ...f, taskNote: e.target.value }))}
                               />
-                              {(stepForm.bodyMode ?? "html") === "text" && (
-                                <p className="text-xs text-muted-foreground mt-1">Plain text emails have higher deliverability for cold outreach and cannot include open/click tracking.</p>
-                              )}
                             </div>
                           )}
+
                           <div className="flex gap-2">
                             <Button size="sm" onClick={() => addStep(seq.id)} disabled={stepSaving}>{stepSaving ? "Saving…" : "Add Step"}</Button>
                             <Button size="sm" variant="outline" onClick={() => setAddingStep(null)}>Cancel</Button>
                           </div>
                         </div>
-                      ) : (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="gap-1.5 w-full"
-                          onClick={() => { setAddingStep(seq.id); setStepForm({ delayDays: "1", delayHours: "0", subject: "", htmlBody: "", condition: "always", bodyMode: "html", text_body: "" }); }}
-                        >
-                          <Plus className="h-3.5 w-3.5" /> Add Step
-                        </Button>
-                      )}
+                      ) : (steps[seq.id] ?? []).length > 0 ? (
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-1.5 flex-1"
+                            onClick={() => { setAddingStep(seq.id); setStepForm({ type: "email", delayDays: "1", delayHours: "0", subject: "", htmlBody: "", taskNote: "", condition: "always", bodyMode: "html", text_body: "" }); }}
+                          >
+                            <Plus className="h-3.5 w-3.5" /> Add Step
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="gap-1.5 bg-violet-600 hover:bg-violet-700 text-white"
+                            onClick={() => { setShowAIBrief(seq.id); setAiBriefForm({ icpDescription: "", goal: "", tone: "professional", numSteps: "3", allowedTypes: ["email", "call", "linkedin"] }); }}
+                          >
+                            <Sparkles className="h-3.5 w-3.5" /> AI Steps
+                          </Button>
+                        </div>
+                      ) : null}
                     </>
                   )}
                 </div>
