@@ -57,7 +57,7 @@ function CampaignsPage() {
   const [domains, setDomains] = useState<SendingDomain[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
+  const [form, setForm] = useState({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
   const [saving, setSaving] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [testTarget, setTestTarget] = useState<string | null>(null);
@@ -98,7 +98,7 @@ function CampaignsPage() {
 
   useEffect(() => { load(); }, [primaryKey]);
 
-  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
+  const resetForm = () => setForm({ name: "", fromName: "", fromEmail: "", replyTo: "", subject: "", preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: true, trackClicks: true, scheduledAt: "" });
 
   const openHealth = async (c: Campaign) => {
     if (!primaryKey?.keyRaw) return;
@@ -134,6 +134,7 @@ function CampaignsPage() {
         from_name: form.fromName,
         from_email: form.fromEmail,
         subject: form.subject,
+        preheader: form.preheader || undefined,
         html_body: form.htmlBody,
         list_ids: form.listId ? [form.listId] : [],
         segment_ids: form.segmentId ? [form.segmentId] : [],
@@ -174,6 +175,7 @@ function CampaignsPage() {
         from_name: form.fromName,
         from_email: form.fromEmail,
         subject: form.subject,
+        preheader: form.preheader || undefined,
         html_body: form.htmlBody,
         list_ids: form.listId ? [form.listId] : [],
         reply_to: form.replyTo || undefined,
@@ -290,6 +292,18 @@ function CampaignsPage() {
           <div className="space-y-1.5">
             <Label>Subject</Label>
             <Input placeholder="Your May update is here" value={form.subject} onChange={(e) => setForm((f) => ({ ...f, subject: e.target.value }))} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Preheader <span className="text-muted-foreground font-normal">(optional — inbox preview text shown after the subject line)</span></Label>
+            <Input
+              placeholder="Grab your exclusive offer before it expires..."
+              value={form.preheader}
+              onChange={(e) => setForm((f) => ({ ...f, preheader: e.target.value }))}
+              maxLength={200}
+            />
+            {form.preheader && (
+              <p className="text-xs text-muted-foreground">{form.preheader.length}/200 chars</p>
+            )}
           </div>
           {lists.length > 0 && (
             <div className="space-y-1.5">
@@ -629,7 +643,7 @@ function CampaignsPage() {
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => {
                             setEditingCampaign(c);
                             setCreating(false);
-                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: c.trackOpens, trackClicks: c.trackClicks, scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
+                            setForm({ name: c.subject, fromName: c.fromName, fromEmail: c.fromEmail, replyTo: "", subject: c.subject, preheader: "", htmlBody: "", textBody: "", listId: "", segmentId: "", excludeListId: "", domainId: "", trackOpens: c.trackOpens, trackClicks: c.trackClicks, scheduledAt: c.scheduledAt ? new Date(c.scheduledAt).toISOString().slice(0, 16) : "" });
                           }}>
                             <Edit2 className="h-3 w-3" /> Edit
                           </Button>
