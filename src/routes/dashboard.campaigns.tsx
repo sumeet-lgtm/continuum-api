@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight } from "lucide-react";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
@@ -75,6 +75,8 @@ function CampaignsPage() {
   const [healthLoading, setHealthLoading] = useState(false);
   const [spamResult, setSpamResult] = useState<{ campaign_id: string; spam_score: number; verdict: string; flags: Array<{ severity: string; message: string }> } | null>(null);
   const [spamLoading, setSpamLoading] = useState(false);
+  const [retargetResult, setRetargetResult] = useState<{ campaign_id?: string; non_openers: number; total_sent?: number; message: string } | null>(null);
+  const [retargetLoading, setRetargetLoading] = useState(false);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -126,6 +128,19 @@ function CampaignsPage() {
       setSpamResult(r);
     } catch { toast.error("Could not run spam check"); }
     finally { setSpamLoading(false); }
+  };
+
+  const runRetarget = async (c: Campaign) => {
+    if (!primaryKey?.keyRaw) return;
+    setRetargetLoading(true);
+    setRetargetResult(null);
+    try {
+      const r = await api.withKey.post<{ campaign_id?: string; non_openers: number; total_sent?: number; message: string }>(`/v1/campaigns/${c.id}/retarget`, {}, primaryKey.keyRaw);
+      setRetargetResult(r);
+      if (r.campaign_id) { toast.success("Retarget campaign created as draft"); load(); }
+      else toast.info(r.message);
+    } catch { toast.error("Could not create retarget campaign"); }
+    finally { setRetargetLoading(false); }
   };
 
   const autoTextBody = () => {
@@ -736,6 +751,11 @@ function CampaignsPage() {
                         {(c.status === "sent" || c.status === "sending") && (
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => openHealth(c)}>
                             <BarChart2 className="h-3 w-3" /> Stats
+                          </Button>
+                        )}
+                        {c.status === "sent" && (
+                          <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => runRetarget(c)} disabled={retargetLoading}>
+                            <Target className="h-3 w-3" /> Retarget
                           </Button>
                         )}
                       </div>
