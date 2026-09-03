@@ -462,6 +462,332 @@ print(f"Imported: {result.imported}")
       },
     ],
   },
+  {
+    id: "campaigns",
+    title: "Campaigns",
+    endpoints: [
+      {
+        method: "GET",
+        path: "/v1/campaigns",
+        summary: "List campaigns with status, recipient counts, and engagement metrics.",
+        auth: "apikey",
+        params: [
+          { name: "status", type: "string", description: "Filter by status: draft | scheduled | sending | sent | failed | cancelled" },
+          { name: "limit", type: "number", description: "Page size (default 50)." },
+          { name: "page", type: "number", description: "Page number (default 1)." },
+        ],
+        response: `{
+  "data": [{
+    "id": "cmp_abc123",
+    "name": "May Newsletter",
+    "fromName": "Acme Inc.",
+    "fromEmail": "hello@mail.acme.com",
+    "subject": "Your May update is here",
+    "status": "sent",
+    "totalRecipients": 4820,
+    "sentCount": 4818,
+    "openCount": 1205,
+    "clickCount": 312,
+    "bounceCount": 2,
+    "complaintCount": 0,
+    "trackOpens": true,
+    "trackClicks": true,
+    "sentAt": "2026-05-12T10:00:00Z"
+  }],
+  "total": 1
+}`,
+      },
+      {
+        method: "POST",
+        path: "/v1/campaigns",
+        summary: "Create a campaign. Send immediately or schedule for later.",
+        auth: "apikey",
+        body: [
+          { name: "name", type: "string", description: "Campaign display name (defaults to subject)." },
+          { name: "from_name", type: "string", required: true, description: "Sender display name." },
+          { name: "from_email", type: "string", required: true, description: "Verified sending address." },
+          { name: "reply_to", type: "string", description: "Reply-to address (optional)." },
+          { name: "subject", type: "string", required: true, description: "Email subject line." },
+          { name: "html_body", type: "string", required: true, description: "HTML email body. Supports {{first_name}}, {{email}}, {{unsubscribe_url}} tokens." },
+          { name: "text_body", type: "string", description: "Plain-text fallback (recommended for deliverability)." },
+          { name: "list_ids", type: "string[]", description: "Mailing list IDs to send to." },
+          { name: "segment_ids", type: "string[]", description: "Segment IDs — filters list recipients by matching rules." },
+          { name: "exclude_list_ids", type: "string[]", description: "Contacts in these lists are excluded from delivery." },
+          { name: "track_opens", type: "boolean", description: "Enable open tracking (default true)." },
+          { name: "track_clicks", type: "boolean", description: "Enable click tracking (default true)." },
+          { name: "scheduled_at", type: "ISO 8601", description: "Schedule send time. If omitted, campaign is saved as draft." },
+        ],
+        example: `curl -X POST https://api.continuumapi.com/v1/campaigns \\
+  -H "X-API-Key: YOUR_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "from_name": "Acme Inc.",
+    "from_email": "hello@mail.acme.com",
+    "subject": "Your May update is here",
+    "html_body": "<p>Hi {{first_name}},</p><p>...</p>",
+    "text_body": "Hi {{first_name}}, ...",
+    "list_ids": ["lst_abc123"],
+    "track_opens": true,
+    "track_clicks": true
+  }'`,
+        response: `{
+  "id": "cmp_abc123",
+  "status": "draft",
+  "totalRecipients": 0,
+  "createdAt": "2026-05-01T09:00:00Z"
+}`,
+      },
+      {
+        method: "POST",
+        path: "/v1/campaigns/:id/send",
+        summary: "Queue a draft campaign for immediate sending.",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Campaign ID." }],
+      },
+      {
+        method: "POST",
+        path: "/v1/campaigns/:id/cancel",
+        summary: "Cancel a scheduled campaign and revert it to draft.",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Campaign ID." }],
+      },
+      {
+        method: "PATCH",
+        path: "/v1/campaigns/:id",
+        summary: "Update a draft or scheduled campaign.",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Campaign ID." }],
+        body: [
+          { name: "subject", type: "string", description: "New subject line." },
+          { name: "html_body", type: "string", description: "New HTML body." },
+          { name: "text_body", type: "string", description: "New plain-text body." },
+          { name: "reply_to", type: "string", description: "New reply-to address." },
+          { name: "track_opens", type: "boolean", description: "Toggle open tracking." },
+          { name: "track_clicks", type: "boolean", description: "Toggle click tracking." },
+          { name: "scheduled_at", type: "ISO 8601", description: "Reschedule send time." },
+        ],
+      },
+    ],
+  },
+  {
+    id: "templates",
+    title: "Email Templates",
+    endpoints: [
+      {
+        method: "GET",
+        path: "/v1/templates",
+        summary: "List saved email templates.",
+        auth: "apikey",
+        params: [
+          { name: "limit", type: "number", description: "Page size (default 50)." },
+          { name: "cursor", type: "string", description: "Pagination cursor." },
+        ],
+      },
+      {
+        method: "POST",
+        path: "/v1/templates",
+        summary: "Create a new email template.",
+        auth: "apikey",
+        body: [
+          { name: "name", type: "string", required: true, description: "Template name." },
+          { name: "subject", type: "string", required: true, description: "Default subject line." },
+          { name: "html_body", type: "string", required: true, description: "HTML body content." },
+          { name: "text_body", type: "string", description: "Plain-text fallback." },
+          { name: "category", type: "string", description: "Optional grouping label." },
+        ],
+      },
+      {
+        method: "PATCH",
+        path: "/v1/templates/:id",
+        summary: "Update a template. Automatically snapshots the previous version before saving.",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Template ID." }],
+        body: [
+          { name: "name", type: "string", description: "New name." },
+          { name: "subject", type: "string", description: "New subject." },
+          { name: "html_body", type: "string", description: "New HTML body." },
+          { name: "text_body", type: "string", description: "New plain-text body." },
+        ],
+      },
+      {
+        method: "GET",
+        path: "/v1/templates/:id/versions",
+        summary: "List all saved versions of a template (auto-created on each PATCH).",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Template ID." }],
+        response: `{
+  "data": [{
+    "id": "tv_abc",
+    "versionNumber": 3,
+    "subject": "Old subject line",
+    "createdAt": "2026-04-30T14:22:00Z"
+  }]
+}`,
+      },
+      {
+        method: "POST",
+        path: "/v1/templates/:id/versions/:versionId/restore",
+        summary: "Restore a template to a previous version. The current content is snapshotted first.",
+        auth: "apikey",
+        params: [
+          { name: "id", type: "string", required: true, description: "Template ID." },
+          { name: "versionId", type: "string", required: true, description: "Version ID to restore." },
+        ],
+      },
+    ],
+  },
+  {
+    id: "lists-hygiene",
+    title: "List Hygiene",
+    endpoints: [
+      {
+        method: "GET",
+        path: "/v1/lists/:id/hygiene",
+        summary: "Analyse contact engagement health. Returns counts by tier: active, at_risk, dormant, never_opened.",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Mailing list ID." }],
+        response: `{
+  "listId": "lst_abc123",
+  "listName": "Newsletter subscribers",
+  "totalContacts": 9800,
+  "breakdown": {
+    "active":       { "count": 6120, "pct": 62.4 },
+    "at_risk":      { "count": 1540, "pct": 15.7 },
+    "dormant":      { "count":  980, "pct": 10.0 },
+    "never_opened": { "count": 1160, "pct": 11.8 }
+  },
+  "recommendations": ["Suppress 2140 dormant/never-opened contacts to improve sender reputation."]
+}`,
+      },
+      {
+        method: "POST",
+        path: "/v1/lists/:id/hygiene/suppress",
+        summary: "Suppress all contacts in a given health tier (dormant, never_opened, at_risk, or a combo).",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Mailing list ID." }],
+        body: [
+          { name: "tiers", type: "string[]", required: true, description: "Tiers to suppress: dormant | never_opened | at_risk" },
+        ],
+        example: `curl -X POST https://api.continuumapi.com/v1/lists/lst_abc123/hygiene/suppress \\
+  -H "X-API-Key: YOUR_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"tiers": ["dormant", "never_opened"]}'`,
+        response: `{ "suppressed": 2140 }`,
+      },
+    ],
+  },
+  {
+    id: "contacts-patch",
+    title: "Contact Management",
+    endpoints: [
+      {
+        method: "GET",
+        path: "/v1/contacts",
+        summary: "List contacts for a specific mailing list.",
+        auth: "apikey",
+        params: [
+          { name: "list_id", type: "string", required: true, description: "Mailing list ID." },
+          { name: "limit", type: "number", description: "Page size (default 50)." },
+          { name: "cursor", type: "string", description: "Pagination cursor." },
+        ],
+      },
+      {
+        method: "PATCH",
+        path: "/v1/contacts/:email",
+        summary: "Update a contact's name or custom fields. URL-encode the email address.",
+        auth: "apikey",
+        params: [{ name: "email", type: "string", required: true, description: "URL-encoded email address of the contact." }],
+        body: [
+          { name: "first_name", type: "string", description: "New first name." },
+          { name: "last_name", type: "string", description: "New last name." },
+          { name: "custom_fields", type: "object", description: "Arbitrary key-value pairs merged into the contact's custom fields." },
+        ],
+        example: `curl -X PATCH https://api.continuumapi.com/v1/contacts/alice%40example.com \\
+  -H "X-API-Key: YOUR_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "first_name": "Alice",
+    "custom_fields": { "plan": "enterprise", "company": "Acme Corp" }
+  }'`,
+        response: `{
+  "id": "con_abc123",
+  "email": "alice@example.com",
+  "firstName": "Alice",
+  "lastName": "Smith",
+  "customFields": { "plan": "enterprise", "company": "Acme Corp" },
+  "updatedAt": "2026-09-03T10:00:00Z"
+}`,
+      },
+    ],
+  },
+  {
+    id: "domains-dkim",
+    title: "Domain DKIM Rotation",
+    endpoints: [
+      {
+        method: "POST",
+        path: "/v1/domains/:id/rotate-dkim",
+        summary: "Rotate the DKIM keypair for a verified domain. Returns the new DNS record to publish before the old key expires.",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Sending domain ID." }],
+        response: `{
+  "message": "DKIM key rotated. Update the DNS record below within 72 hours.",
+  "dkim": {
+    "name": "continuumapi-abc._domainkey.mail.acme.com",
+    "type": "CNAME",
+    "value": "continuumapi-abc.dkim.amazonses.com"
+  }
+}`,
+      },
+    ],
+  },
+  {
+    id: "segments",
+    title: "Segments",
+    endpoints: [
+      {
+        method: "GET",
+        path: "/v1/segments",
+        summary: "List all segments with their filter rules.",
+        auth: "apikey",
+      },
+      {
+        method: "POST",
+        path: "/v1/segments",
+        summary: "Create a dynamic segment that filters a list by contact field rules.",
+        auth: "apikey",
+        body: [
+          { name: "name", type: "string", required: true, description: "Segment name." },
+          { name: "list_id", type: "string", required: true, description: "Base mailing list to filter." },
+          { name: "filter_rules", type: "array", required: true, description: "Array of {field, operator, value} rules. Fields: email | first_name | last_name | custom.<key>. Operators: equals | not_equals | contains | starts_with" },
+        ],
+        example: `curl -X POST https://api.continuumapi.com/v1/segments \\
+  -H "X-API-Key: YOUR_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "name": "Enterprise plan users",
+    "list_id": "lst_abc123",
+    "filter_rules": [
+      {"field": "custom.plan", "operator": "equals", "value": "enterprise"}
+    ]
+  }'`,
+        response: `{
+  "id": "seg_xyz789",
+  "name": "Enterprise plan users",
+  "listId": "lst_abc123",
+  "filterRules": [{ "field": "custom.plan", "operator": "equals", "value": "enterprise" }],
+  "createdAt": "2026-09-03T10:00:00Z"
+}`,
+      },
+      {
+        method: "DELETE",
+        path: "/v1/segments/:id",
+        summary: "Delete a segment. Does not affect the underlying contacts or list.",
+        auth: "apikey",
+        params: [{ name: "id", type: "string", required: true, description: "Segment ID." }],
+      },
+    ],
+  },
 ];
 
 const METHOD_STYLES: Record<Method, string> = {
