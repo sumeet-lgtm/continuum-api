@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Users, Trash2, Search, Upload, FileText, Loader2, X, Download } from "lucide-react";
+import { Plus, Users, Trash2, Search, Upload, FileText, Loader2, X, Download, ChevronRight, Pencil, Save } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/contacts")({
   head: () => ({ meta: [{ title: "Contacts — Continuum API" }] }),
@@ -25,6 +25,7 @@ interface Contact {
   status?: string;
   subscribedAt?: string;
   createdAt?: string;
+  customFields?: Record<string, unknown>;
 }
 
 interface MailingList { id: string; name: string; }
@@ -53,6 +54,12 @@ function ContactsPage() {
   const [search, setSearch] = useState("");
   const [form, setForm] = useState({ email: "", firstName: "", lastName: "" });
   const [saving, setSaving] = useState(false);
+  const [detailContact, setDetailContact] = useState<Contact | null>(null);
+  const [editingFields, setEditingFields] = useState(false);
+  const [fieldDraft, setFieldDraft] = useState<Record<string, string>>({});
+  const [savingFields, setSavingFields] = useState(false);
+  const [newFieldKey, setNewFieldKey] = useState("");
+  const [newFieldVal, setNewFieldVal] = useState("");
   const [importPreview, setImportPreview] = useState<Record<string, string>[] | null>(null);
   const [importFile, setImportFile] = useState("");
   const [importing, setImporting] = useState(false);
@@ -75,7 +82,7 @@ function ContactsPage() {
     if (!primaryKey?.keyRaw || !selectedList) return;
     setLoading(true);
     api.withKey
-      .get<{ data: { id: string; status: string; subscribedAt: string; contact: { email: string; firstName: string | null; lastName: string | null } }[] }>(`/v1/lists/${selectedList}/contacts?page=1&limit=100${search ? `&search=${encodeURIComponent(search)}` : ""}`, primaryKey.keyRaw)
+      .get<{ data: { id: string; status: string; subscribedAt: string; contact: { email: string; firstName: string | null; lastName: string | null; customFields?: Record<string, unknown> } }[] }>(`/v1/lists/${selectedList}/contacts?page=1&limit=100${search ? `&search=${encodeURIComponent(search)}` : ""}`, primaryKey.keyRaw)
       .then((r) => setContacts((r.data ?? []).map((m) => ({
         id: m.id,
         email: m.contact?.email ?? "",
@@ -83,6 +90,7 @@ function ContactsPage() {
         lastName: m.contact?.lastName ?? null,
         status: m.status,
         subscribedAt: m.subscribedAt,
+        customFields: m.contact?.customFields ?? {},
       }))))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -107,6 +115,25 @@ function ContactsPage() {
       loadContacts();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }
+  };
+
+  const saveCustomFields = async () => {
+    if (!primaryKey?.keyRaw || !detailContact) return;
+    setSavingFields(true);
+    try {
+      const fields: Record<string, string> = { ...fieldDraft };
+      if (newFieldKey.trim()) fields[newFieldKey.trim()] = newFieldVal;
+      await api.withKey.patch(`/v1/contacts/${encodeURIComponent(detailContact.email)}`, {
+        custom_fields: fields,
+      }, primaryKey.keyRaw);
+      toast.success("Custom fields saved");
+      setDetailContact((d) => d ? { ...d, customFields: fields } : d);
+      setContacts((cs) => cs.map((c) => c.email === detailContact.email ? { ...c, customFields: fields } : c));
+      setEditingFields(false);
+      setNewFieldKey("");
+      setNewFieldVal("");
+    } catch (e: unknown) { toast.error((e as Error).message); }
+    finally { setSavingFields(false); }
   };
 
   const unsubscribe = async (email: string) => {
@@ -195,6 +222,77 @@ function ContactsPage() {
 
   return (
     <div className="space-y-6">
+      {/* Contact detail drawer */}
+      {detailContact && (
+        <div className="fixed inset-0 z-50 flex justify-end" onClick={() => { setDetailContact(null); setEditingFields(false); }}>
+          <div className="bg-black/40 absolute inset-0" />
+          <div className="relative bg-card border-l border-border w-full max-w-sm h-full overflow-y-auto shadow-2xl flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border sticky top-0 bg-card z-10">
+              <div>
+                <p className="font-medium text-sm">{[detailContact.firstName, detailContact.lastName].filter(Boolean).join(" ") || "—"}</p>
+                <p className="text-xs text-muted-foreground font-mono">{detailContact.email}</p>
+              </div>
+              <button onClick={() => { setDetailContact(null); setEditingFields(false); }} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="px-5 py-4 space-y-5 flex-1">
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Status</p>
+                <StatusBadge status={detailContact.status ?? "subscribed"} />
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Subscribed</p>
+                <p className="text-sm">{detailContact.subscribedAt ? new Date(detailContact.subscribedAt).toLocaleDateString() : "—"}</p>
+              </div>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Custom Fields</p>
+                  {!editingFields && (
+                    <button onClick={() => { setEditingFields(true); setFieldDraft(Object.fromEntries(Object.entries(detailContact.customFields ?? {}).map(([k, v]) => [k, String(v)]))); }} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
+                      <Pencil className="h-3 w-3" /> Edit
+                    </button>
+                  )}
+                </div>
+                {editingFields ? (
+                  <div className="space-y-2">
+                    {Object.entries(fieldDraft).map(([k, v]) => (
+                      <div key={k} className="flex gap-2 items-center">
+                        <span className="text-xs font-mono text-muted-foreground w-24 shrink-0 truncate">{k}</span>
+                        <Input
+                          value={v}
+                          onChange={(e) => setFieldDraft((d) => ({ ...d, [k]: e.target.value }))}
+                          className="h-7 text-xs"
+                        />
+                        <button onClick={() => setFieldDraft((d) => { const n = { ...d }; delete n[k]; return n; })} className="text-muted-foreground hover:text-destructive shrink-0"><X className="h-3.5 w-3.5" /></button>
+                      </div>
+                    ))}
+                    <div className="flex gap-2 items-center pt-1 border-t border-border">
+                      <Input placeholder="key" value={newFieldKey} onChange={(e) => setNewFieldKey(e.target.value)} className="h-7 text-xs w-24 shrink-0" />
+                      <Input placeholder="value" value={newFieldVal} onChange={(e) => setNewFieldVal(e.target.value)} className="h-7 text-xs" />
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <Button size="sm" className="h-7 text-xs gap-1" onClick={saveCustomFields} disabled={savingFields}>
+                        <Save className="h-3 w-3" />{savingFields ? "Saving…" : "Save"}
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setEditingFields(false); setNewFieldKey(""); setNewFieldVal(""); }}>Cancel</Button>
+                    </div>
+                  </div>
+                ) : Object.keys(detailContact.customFields ?? {}).length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic">No custom fields yet. Click Edit to add one.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {Object.entries(detailContact.customFields ?? {}).map(([k, v]) => (
+                      <div key={k} className="flex justify-between text-sm">
+                        <span className="text-muted-foreground font-mono text-xs">{k}</span>
+                        <span className="font-medium text-xs max-w-[140px] truncate text-right">{String(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <header>
           <h1 className="text-2xl font-display font-medium tracking-tight">Contacts</h1>
@@ -367,7 +465,7 @@ function ContactsPage() {
                 <th className="px-5 py-3 font-medium">Name</th>
                 <th className="px-5 py-3 font-medium">Status</th>
                 <th className="px-5 py-3 font-medium">Subscribed</th>
-                <th className="px-5 py-3 font-medium w-16"></th>
+                <th className="px-5 py-3 font-medium w-20"></th>
               </tr>
             </thead>
             <tbody>
@@ -380,9 +478,14 @@ function ContactsPage() {
                     {c.subscribedAt ? new Date(c.subscribedAt).toLocaleDateString() : c.createdAt ? new Date(c.createdAt).toLocaleDateString() : "—"}
                   </td>
                   <td className="px-5 py-3">
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => unsubscribe(c.email)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    <div className="flex gap-1 items-center">
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={() => { setDetailContact(c); setEditingFields(false); }}>
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => unsubscribe(c.email)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
