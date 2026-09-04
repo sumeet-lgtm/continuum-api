@@ -16,7 +16,7 @@ vi.mock('../../lib/queue.js', () => ({
   redisConnection: {},
 }));
 
-vi.mock('../../lib/ses.js', () => ({ sendViaSes: vi.fn() }));
+vi.mock('../../lib/ses.js', () => ({ sendViaSes: vi.fn(), isSesConfigured: vi.fn().mockReturnValue(true) }));
 vi.mock('../../lib/unsubscribe.js', () => ({
   generateUnsubToken: vi.fn().mockReturnValue('tok'),
   generateUnsubHtml:  vi.fn().mockReturnValue(''),
@@ -53,6 +53,7 @@ function makeCampaign(overrides: Record<string, unknown> = {}) {
     status: 'sending',
     listIds: ['list-1'],
     excludeListIds: [],
+    segmentIds: [],
     fromName: 'Acme',
     fromEmail: 'hello@acme.com',
     subject: 'Hi there',

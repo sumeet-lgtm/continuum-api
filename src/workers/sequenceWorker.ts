@@ -183,22 +183,21 @@ export async function processSequenceTick(): Promise<void> {
       continue;
     }
 
-    // Non-email steps (linkedin, task) are manual-action placeholders.
-    // Advance the enrollment without sending or charging send credits.
+    // Non-email steps (linkedin, task) need an actual human to go do the
+    // thing — a call, a LinkedIn touch — before the sequence should move on.
+    // This used to auto-advance past them on a timer with nobody ever told,
+    // which meant "call this lead" silently marked itself done and the
+    // sequence just kept going as if it had happened. Now it parks the
+    // enrollment (falls out of every future tick's `status: 'active'`
+    // query, so it stays put with zero risk of double-processing) until
+    // POST /v1/sequences/:id/enrollments/:enrollmentId/complete-task
+    // explicitly advances it — same currentStep/nextSendAt math this block
+    // used to do inline.
     const stepType = (step as { type?: string }).type ?? 'email';
     if (stepType !== 'email') {
-      const nextStep = steps[nextStepIndex + 1];
-      const nextSendAt = nextStep
-        ? new Date(now.getTime() + (nextStep.delayDays * 24 * 60 * 60 * 1000) + (nextStep.delayHours * 60 * 60 * 1000))
-        : null;
-      const isLastStep = nextStep === undefined;
       await prisma.sequenceEnrollment.update({
         where: { id: enrollment.id },
-        data: {
-          currentStep: nextStepIndex + 1,
-          nextSendAt,
-          ...(isLastStep && { status: 'completed', completedAt: now }),
-        },
+        data: { status: 'awaiting_manual_action' },
       });
       continue;
     }

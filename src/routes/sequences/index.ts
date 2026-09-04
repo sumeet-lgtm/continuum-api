@@ -568,6 +568,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       bounced: byStatus['bounced'] ?? 0,
       unsubscribed: byStatus['unsubscribed'] ?? 0,
       paused: byStatus['paused'] ?? 0,
+      awaitingManualAction: byStatus['awaiting_manual_action'] ?? 0,
       sent: sentCount,
       opened: openCount,
       clicked: clickCount,
@@ -577,4 +578,80 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       replyRate: totalEnrolled > 0 ? Math.round((replyCount / totalEnrolled) * 100) : 0,
     });
   });
+
+  // GET /v1/tasks — every manual-channel step (LinkedIn, call, task) that's
+  // waiting on a human, across every sequence this key owns. This is the
+  // list processSequenceTick stops advancing past once it hits a non-email
+  // step — see the worker for why.
+  fastify.get('/tasks', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const apiKeyId = request.apiKey.id;
+
+    const enrollments = await prisma.sequenceEnrollment.findMany({
+      where: { status: 'awaiting_manual_action', sequence: { apiKeyId } },
+      include: { sequence: { select: { id: true, name: true, steps: { orderBy: { stepOrder: 'asc' } } } } },
+      orderBy: { enrolledAt: 'asc' },
+      take: 200,
+    });
+
+    const tasks = enrollments.map((e) => {
+      const step = e.sequence.steps[e.currentStep];
+      return {
+        enrollmentId: e.id,
+        sequenceId: e.sequenceId,
+        sequenceName: e.sequence.name,
+        email: e.email,
+        stepType: step?.type ?? 'task',
+        subject: step?.subject ?? null,
+        taskNote: step?.taskNote ?? null,
+        // The step became actionable the moment its delay elapsed, which is
+        // exactly what nextSendAt already held — this just stopped moving
+        // once it hit a manual step, so it still reads as "since when".
+        waitingSince: e.nextSendAt,
+      };
+    }).filter((t) => t.stepType !== 'email'); // a deleted/reordered step could leave this pointing past the end
+
+    return reply.status(200).send({ data: tasks, total: tasks.length });
+  });
+
+  // POST /v1/sequences/:id/enrollments/:enrollmentId/complete-task — mark a
+  // manual step done and advance the enrollment, exactly what the worker
+  // used to do automatically for non-email steps before that got fixed.
+  fastify.post(
+    '/sequences/:id/enrollments/:enrollmentId/complete-task',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id, enrollmentId } = request.params as { id: string; enrollmentId: string };
+      const apiKeyId = request.apiKey.id;
+
+      const seq = await prisma.sequence.findFirst({
+        where: { id, apiKeyId },
+        include: { steps: { orderBy: { stepOrder: 'asc' } } },
+      });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+
+      const enrollment = await prisma.sequenceEnrollment.findFirst({
+        where: { id: enrollmentId, sequenceId: id, status: 'awaiting_manual_action' },
+      });
+      if (!enrollment) throw Errors.notFound('Pending task not found for this enrollment.');
+
+      const nextStepIndex = enrollment.currentStep + 1;
+      const nextStep = seq.steps[nextStepIndex];
+      const nextSendAt = nextStep
+        ? new Date(Date.now() + (nextStep.delayDays * 24 * 60 * 60 * 1000) + (nextStep.delayHours * 60 * 60 * 1000))
+        : null;
+      const isLastStep = nextStep === undefined;
+
+      const updated = await prisma.sequenceEnrollment.update({
+        where: { id: enrollmentId },
+        data: {
+          currentStep: nextStepIndex,
+          nextSendAt,
+          status: isLastStep ? 'completed' : 'active',
+          ...(isLastStep && { completedAt: new Date() }),
+        },
+      });
+
+      return reply.status(200).send({ completed: true, enrollment: updated });
+    },
+  );
 }

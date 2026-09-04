@@ -10,6 +10,12 @@ vi.mock('../../lib/prisma.js', () => ({
     trackingEvent:      { findFirst: vi.fn().mockResolvedValue(null) },
     mailbox:            { findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
     sendMessage:        { create: vi.fn().mockResolvedValue({}) },
+    // Every email step looks up AI-enriched lead fields (icebreaker, etc.)
+    // to merge into the template — this was missing entirely, so any test
+    // that actually reached the send path (not just the suppression-skip
+    // branch) threw "Cannot read properties of undefined (reading
+    // 'findFirst')" regardless of what the test itself was asserting.
+    lead:               { findFirst: vi.fn().mockResolvedValue(null) },
     $disconnect:        vi.fn(),
   },
 }));
@@ -156,6 +162,45 @@ describe('processSequenceTick — suppression enforcement', () => {
     expect(mockSuppression).toHaveBeenCalledTimes(1);
     expect(mockSuppression).toHaveBeenCalledWith(
       expect.objectContaining({ where: { email: { in: expect.arrayContaining(['a@example.com', 'b@example.com']) } } }),
+    );
+  });
+});
+
+describe('processSequenceTick — manual-channel steps (linkedin/task/call)', () => {
+  it('parks the enrollment instead of silently auto-advancing past a manual step', async () => {
+    mockDue.mockResolvedValue([
+      makeEnrollment({
+        sequence: {
+          ...makeEnrollment().sequence,
+          steps: [
+            { stepOrder: 0, condition: 'always', type: 'linkedin', subject: null, htmlBody: '', textBody: null, taskNote: 'Send a connection request', delayDays: 0, delayHours: 0 },
+            { stepOrder: 1, condition: 'always', type: 'email', subject: 'Follow up', htmlBody: '<p>hi</p>', textBody: null, delayDays: 2, delayHours: 0 },
+          ],
+        },
+      }),
+    ] as never);
+
+    await processSequenceTick();
+
+    // No email sent for a manual step, and — critically — the enrollment
+    // must not silently jump straight past it to currentStep 1 with nobody
+    // ever told.
+    expect(mockSendSes).not.toHaveBeenCalled();
+    expect(mockUpdate).toHaveBeenCalledWith({
+      where: { id: 'enr-001' },
+      data: { status: 'awaiting_manual_action' },
+    });
+  });
+
+  it('still sends normally when the current step is an email step', async () => {
+    mockDue.mockResolvedValue([makeEnrollment()] as never); // default step has no `type` — defaults to email
+    mockSendSes.mockResolvedValue({ sesMessageId: 'ses-manual-test' } as never);
+
+    await processSequenceTick();
+
+    expect(mockSendSes).toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'awaiting_manual_action' }) }),
     );
   });
 });
