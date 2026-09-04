@@ -14,6 +14,7 @@ import {
   TrendingUp,
   Mail,
   ArrowRight,
+  Flame,
 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/deliverability")({
@@ -38,6 +39,24 @@ type Domain = {
   returnPathStatus: string;
 };
 
+type WarmupConfig = {
+  enabled: boolean;
+  targetPerDay: number;
+  currentPerDay: number;
+  rampUpDays: number;
+  startedAt: string;
+};
+
+type MailboxSummary = {
+  id: string;
+  username: string;
+  type: string;
+  status: string;
+  sentToday: number;
+  dailyLimit: number;
+  warmupConfig: WarmupConfig | null;
+};
+
 type Recommendation = {
   id: string;
   severity: "critical" | "warning" | "info" | "good";
@@ -46,7 +65,12 @@ type Recommendation = {
   action?: { label: string; to: string };
 };
 
-function computeScore(health: SendHealth | null, domains: Domain[]): number {
+function warmupProgressPct(wc: WarmupConfig): number {
+  const daysRunning = Math.floor((Date.now() - new Date(wc.startedAt).getTime()) / 86_400_000);
+  return Math.max(0, Math.min(100, Math.round((daysRunning / Math.max(1, wc.rampUpDays)) * 100)));
+}
+
+function computeScore(health: SendHealth | null, domains: Domain[], mailboxes: MailboxSummary[]): number {
   let score = 100;
 
   if (health && health.sent >= 10) {
@@ -68,14 +92,69 @@ function computeScore(health: SendHealth | null, domains: Domain[]): number {
     }
   }
 
+  // A brand-new (or never-warmed) mailbox sending at full volume is the
+  // single fastest way to torch a domain's reputation — dock the same as a
+  // missing SPF/DKIM record, since it's just as consequential and far more
+  // commonly the actual cause when a new sender's deliverability tanks.
+  if (mailboxes.length > 0) {
+    const active = mailboxes.filter((m) => m.status === "active");
+    const warming = active.filter((m) => m.warmupConfig?.enabled);
+    if (warming.length === 0) score -= 15;
+    else {
+      const avgProgress = warming.reduce((s, m) => s + warmupProgressPct(m.warmupConfig!), 0) / warming.length;
+      if (avgProgress < 50) score -= 8;
+    }
+  }
+
   return Math.max(0, Math.min(100, score));
 }
 
-function buildRecommendations(health: SendHealth | null, domains: Domain[]): Recommendation[] {
+function buildRecommendations(health: SendHealth | null, domains: Domain[], mailboxes: MailboxSummary[]): Recommendation[] {
   const recs: Recommendation[] = [];
   const verified = domains.filter((d) => d.status === "verified");
   const noSpf = verified.filter((d) => d.spfStatus !== "verified");
   const noDkim = verified.filter((d) => d.dkimStatus !== "verified");
+  const activeMailboxes = mailboxes.filter((m) => m.status === "active");
+  const notWarming = activeMailboxes.filter((m) => !m.warmupConfig?.enabled);
+  const stillRamping = activeMailboxes.filter((m) => m.warmupConfig?.enabled && warmupProgressPct(m.warmupConfig) < 100);
+  const erroredMailboxes = mailboxes.filter((m) => m.status === "error");
+
+  // Warmup recommendations
+  if (erroredMailboxes.length > 0) {
+    recs.push({
+      id: "mailbox-error",
+      severity: "critical",
+      title: `${erroredMailboxes.length} mailbox${erroredMailboxes.length > 1 ? "es" : ""} failing to connect`,
+      detail: `${erroredMailboxes.map((m) => m.username).join(", ")} — sending and warmup are both paused until the credentials are fixed.`,
+      action: { label: "Check mailboxes", to: "/dashboard/mailboxes" },
+    });
+  }
+  if (activeMailboxes.length > 0 && notWarming.length === activeMailboxes.length) {
+    recs.push({
+      id: "no-warmup",
+      severity: "warning",
+      title: `Warmup is off on all ${activeMailboxes.length} connected mailbox${activeMailboxes.length > 1 ? "es" : ""}`,
+      detail: "A mailbox that hasn't built up sending history yet gets flagged fast at real volume. Turn on warmup and give it 2-4 weeks before running cold campaigns from it.",
+      action: { label: "Enable warmup", to: "/dashboard/mailboxes" },
+    });
+  } else if (notWarming.length > 0) {
+    recs.push({
+      id: "some-not-warming",
+      severity: "info",
+      title: `${notWarming.length} of ${activeMailboxes.length} mailboxes aren't warming`,
+      detail: `${notWarming.map((m) => m.username).join(", ")} ${notWarming.length > 1 ? "have" : "has"} warmup disabled. Fine if they're already established senders — otherwise turn it on before using them for cold outreach.`,
+      action: { label: "Manage mailboxes", to: "/dashboard/mailboxes" },
+    });
+  }
+  if (stillRamping.length > 0) {
+    recs.push({
+      id: "still-ramping",
+      severity: "info",
+      title: `${stillRamping.length} mailbox${stillRamping.length > 1 ? "es" : ""} still ramping up`,
+      detail: "Warmup is running but hasn't reached full target volume yet. Keep cold-campaign send limits on these mailboxes low until ramp-up completes.",
+      action: { label: "View progress", to: "/dashboard/mailboxes" },
+    });
+  }
 
   // Domain recommendations
   if (domains.length === 0) {
@@ -275,20 +354,23 @@ function DeliverabilityPage() {
   const [health, setHealth] = useState<SendHealth | null>(null);
   const [domains, setDomains] = useState<Domain[]>([]);
   const [providers, setProviders] = useState<InboxProvider[]>([]);
+  const [mailboxes, setMailboxes] = useState<MailboxSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     if (!primaryKey?.keyRaw) return;
     const dateFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const [healthRes, domainsRes, providersRes] = await Promise.allSettled([
+    const [healthRes, domainsRes, providersRes, mailboxesRes] = await Promise.allSettled([
       api.withKey.get<SendHealth>(`/v1/analytics/sends?date_from=${dateFrom}`, primaryKey.keyRaw),
       api.withKey.get<{ data: Domain[] }>("/v1/domains", primaryKey.keyRaw),
       api.withKey.get<{ data: InboxProvider[] }>(`/v1/analytics/inbox-providers?date_from=${dateFrom}`, primaryKey.keyRaw),
+      api.withKey.get<{ data: MailboxSummary[] }>("/v1/analytics/mailboxes", primaryKey.keyRaw),
     ]);
     if (healthRes.status === "fulfilled") setHealth(healthRes.value);
     if (domainsRes.status === "fulfilled") setDomains(domainsRes.value.data ?? []);
     if (providersRes.status === "fulfilled") setProviders(providersRes.value.data ?? []);
+    if (mailboxesRes.status === "fulfilled") setMailboxes(mailboxesRes.value.data ?? []);
   }, [primaryKey]);
 
   useEffect(() => {
@@ -301,8 +383,8 @@ function DeliverabilityPage() {
     setRefreshing(false);
   };
 
-  const score = loading ? null : computeScore(health, domains);
-  const recs = loading ? [] : buildRecommendations(health, domains);
+  const score = loading ? null : computeScore(health, domains, mailboxes);
+  const recs = loading ? [] : buildRecommendations(health, domains, mailboxes);
   const criticalCount = recs.filter((r) => r.severity === "critical").length;
   const warningCount = recs.filter((r) => r.severity === "warning").length;
 
@@ -342,7 +424,7 @@ function DeliverabilityPage() {
                     : "Your sending reputation looks healthy"}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Score is based on bounce rate, complaint rate, and domain authentication.
+                  Score is based on bounce rate, complaint rate, domain authentication, and mailbox warmup.
                 </p>
               </div>
               {health && health.sent >= 10 && (
@@ -389,6 +471,61 @@ function DeliverabilityPage() {
                           );
                         })}
                       </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Mailbox warmup status */}
+          {mailboxes.length > 0 && (
+            <div className="rounded-lg border border-border bg-card overflow-hidden">
+              <div className="px-5 py-3 border-b border-border flex items-center gap-2">
+                <Flame className="h-3.5 w-3.5 text-muted-foreground" />
+                <h2 className="text-sm font-medium">Mailbox warmup</h2>
+              </div>
+              <div className="divide-y divide-border">
+                {mailboxes.map((m) => {
+                  const wc = m.warmupConfig;
+                  const progress = wc?.enabled ? warmupProgressPct(wc) : null;
+                  return (
+                    <div key={m.id} className="flex items-center justify-between px-5 py-3 gap-4">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div
+                          className={`h-2 w-2 rounded-full shrink-0 ${
+                            m.status === "error"
+                              ? "bg-[oklch(0.58_0.22_27)]"
+                              : progress === 100
+                              ? "bg-[oklch(0.55_0.16_145)]"
+                              : progress !== null
+                              ? "bg-[oklch(0.65_0.16_75)]"
+                              : "bg-muted-foreground/40"
+                          }`}
+                        />
+                        <code className="text-sm font-mono truncate">{m.username}</code>
+                      </div>
+                      {m.status === "error" ? (
+                        <span className="text-[10px] font-medium rounded-full border px-1.5 py-0.5 bg-[oklch(0.96_0.04_27)] text-[oklch(0.42_0.18_27)] border-[oklch(0.85_0.12_27)] shrink-0">
+                          Connection error
+                        </span>
+                      ) : progress === null ? (
+                        <span className="text-[10px] font-medium rounded-full border px-1.5 py-0.5 bg-muted text-muted-foreground border-border shrink-0">
+                          Warmup off
+                        </span>
+                      ) : (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <div className="w-24 h-1.5 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-[oklch(0.55_0.16_145)] transition-[width]"
+                              style={{ width: `${progress}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] font-medium text-muted-foreground tabular-nums w-16 text-right">
+                            {progress}% · {wc!.currentPerDay}/{wc!.targetPerDay} per day
+                          </span>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
