@@ -7,6 +7,8 @@ import { Errors } from '../../plugins/errorHandler.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
 import { detectESP } from '../../lib/espMatch.js';
+import { prisma } from '../../lib/prisma.js';
+import { Prisma } from '@prisma/client';
 
 const GROWTH_PLANS = new Set(['growth', 'scale']);
 
@@ -172,6 +174,118 @@ async function classifyReplyContent(subject: string, body: string, apiKey: strin
   } catch {
     return { category: 'unknown', confidence: 0, suggested_action: 'reply' };
   }
+}
+
+// ─── Natural-language leads search ──────────────────────────────────────────
+
+const LEAD_STATUSES = ['active', 'interested', 'not_interested', 'replied', 'unsubscribed', 'bounced', 'do_not_contact', 'converted'] as const;
+const SORTABLE_FIELDS = ['createdAt', 'updatedAt', 'repliedAt', 'company', 'title'] as const;
+type SortableField = typeof SORTABLE_FIELDS[number];
+
+export interface LeadsQueryParams {
+  status?: string;
+  search?: string;
+  tag?: string;
+  sort_by: SortableField;
+  sort_dir: 'asc' | 'desc';
+  limit: number;
+}
+
+// Forces the model into a single tool call rather than free-text — its only
+// job is picking filter/sort parameters from natural language, it never
+// sees or handles actual lead data, and the resulting query still runs as
+// a normal parameterized Prisma call, not anything the model wrote itself.
+export async function interpretLeadsQuery(query: string, apiKey: string): Promise<LeadsQueryParams> {
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      tools: [{
+        name: 'query_leads',
+        description: "Search and filter the leads database to answer the user's question.",
+        input_schema: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', enum: LEAD_STATUSES, description: 'Filter by lead status, only if the question clearly implies one (e.g. "interested leads" -> interested).' },
+            search: { type: 'string', description: 'Free-text term to match against email, name, company, or title — only if the question names a specific company, person, or keyword.' },
+            tag: { type: 'string', description: 'Filter to leads carrying this exact tag, only if the question mentions a tag.' },
+            sort_by: { type: 'string', enum: SORTABLE_FIELDS, description: 'Field to sort by. Use repliedAt for "most engaged" or "recently replied" questions; createdAt for "top"/"newest" leads with no other signal.' },
+            sort_dir: { type: 'string', enum: ['asc', 'desc'], description: '"top"/"best"/"most recent" implies desc; "oldest" implies asc.' },
+            limit: { type: 'integer', minimum: 1, maximum: 50, description: 'How many leads to return — use the number in the question (e.g. "top 10" -> 10); default to 10 if none is given.' },
+          },
+          required: ['sort_by', 'sort_dir', 'limit'],
+        },
+      }],
+      tool_choice: { type: 'tool', name: 'query_leads' },
+      messages: [{ role: 'user', content: query }],
+    }),
+  });
+
+  if (!resp.ok) throw new Error(`Anthropic tool call failed: ${resp.status}`);
+  const data = await resp.json() as { content?: Array<{ type: string; input?: Record<string, unknown> }> };
+  const toolUse = data.content?.find((c) => c.type === 'tool_use');
+  const input = (toolUse?.input ?? {}) as Partial<Record<keyof LeadsQueryParams, unknown>>;
+
+  return {
+    status: typeof input.status === 'string' && (LEAD_STATUSES as readonly string[]).includes(input.status) ? input.status : undefined,
+    search: typeof input.search === 'string' && input.search.trim() ? input.search.trim().slice(0, 200) : undefined,
+    tag: typeof input.tag === 'string' && input.tag.trim() ? input.tag.trim().slice(0, 50) : undefined,
+    sort_by: (SORTABLE_FIELDS as readonly string[]).includes(input.sort_by as string) ? (input.sort_by as SortableField) : 'createdAt',
+    sort_dir: input.sort_dir === 'asc' ? 'asc' : 'desc',
+    limit: typeof input.limit === 'number' && Number.isFinite(input.limit) ? Math.max(1, Math.min(50, Math.round(input.limit))) : 10,
+  };
+}
+
+export async function runLeadsQuery(apiKeyId: string, params: LeadsQueryParams) {
+  const where: Prisma.LeadWhereInput = { apiKeyId };
+  if (params.status) where.status = params.status;
+  if (params.tag) where.tags = { has: params.tag };
+  if (params.search) {
+    where.OR = [
+      { email: { contains: params.search, mode: 'insensitive' } },
+      { firstName: { contains: params.search, mode: 'insensitive' } },
+      { lastName: { contains: params.search, mode: 'insensitive' } },
+      { company: { contains: params.search, mode: 'insensitive' } },
+      { title: { contains: params.search, mode: 'insensitive' } },
+    ];
+  }
+
+  return prisma.lead.findMany({
+    where,
+    orderBy: { [params.sort_by]: params.sort_dir },
+    take: params.limit,
+    select: {
+      id: true, email: true, firstName: true, lastName: true, company: true, title: true,
+      status: true, tags: true, repliedAt: true, createdAt: true, updatedAt: true,
+    },
+  });
+}
+
+export function summarizeLeadsResult(params: LeadsQueryParams, count: number): string {
+  if (count === 0) {
+    const filters = [
+      params.status && `status "${params.status}"`,
+      params.search && `matching "${params.search}"`,
+      params.tag && `tagged "${params.tag}"`,
+    ].filter(Boolean).join(', ');
+    return `No leads found${filters ? ` with ${filters}` : ''}.`;
+  }
+  const parts = [`Found ${count} lead${count === 1 ? '' : 's'}`];
+  if (params.status) parts.push(`with status "${params.status}"`);
+  if (params.search) parts.push(`matching "${params.search}"`);
+  if (params.tag) parts.push(`tagged "${params.tag}"`);
+  const sortLabel = params.sort_by === 'createdAt' ? 'most recently added'
+    : params.sort_by === 'updatedAt' ? 'most recently updated'
+    : params.sort_by === 'repliedAt' ? 'most recently replied'
+    : params.sort_by;
+  parts.push(`sorted by ${sortLabel} (${params.sort_dir === 'desc' ? 'highest/newest first' : 'lowest/oldest first'})`);
+  return parts.join(', ') + '.';
 }
 
 export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
@@ -396,6 +510,45 @@ Return ONLY valid JSON in this exact format:
         const msg = err instanceof Error ? err.message : 'generation failed';
         logger.error({ err: msg }, 'AI generate-sequence failed');
         throw Errors.serviceUnavailable('AI sequence generation failed. Please try again.');
+      }
+    },
+  );
+
+  // POST /v1/ai/ask-leads — natural-language search over the leads table
+  // ("who are my top 10 leads", "interested leads at companies with acme
+  // in the name from the last week"). One Claude call, forced to use a
+  // single query_leads tool, so the model's only job is picking filter/sort
+  // parameters — it never sees or touches actual lead data, and the query
+  // itself runs as a normal parameterized Prisma call, not free-form SQL.
+  fastify.post(
+    '/ai/ask-leads',
+    { preHandler: [requireAuth, requireRateLimit, requireMonthlyQuota] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!config.AI_PERSONALIZATION_ENABLED) {
+        throw Errors.forbidden('AI features are not enabled on this account.');
+      }
+      const anthropicKey = config.ANTHROPIC_API_KEY;
+      if (!anthropicKey) throw Errors.serviceUnavailable('AI service temporarily unavailable.');
+
+      const parsed = z.object({ query: z.string().min(1).max(500) }).safeParse(request.body);
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+      const apiKeyId = request.apiKey.id;
+
+      try {
+        const params = await interpretLeadsQuery(parsed.data.query, anthropicKey);
+        const leads = await runLeadsQuery(apiKeyId, params);
+        void incrementUsage(apiKeyId);
+
+        return reply.status(200).send({
+          answer: summarizeLeadsResult(params, leads.length),
+          query_used: params,
+          leads,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'query failed';
+        logger.error({ err: msg, query: parsed.data.query }, 'AI ask-leads failed');
+        throw Errors.serviceUnavailable('Could not process that question. Try rephrasing it.');
       }
     },
   );
