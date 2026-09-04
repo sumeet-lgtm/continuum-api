@@ -93,6 +93,7 @@ function Overview() {
   const [sendHealth, setSendHealth] = useState<{ bounce_rate: number; complaint_rate: number; sent: number } | null>(null);
   const [liveFeed, setLiveFeed] = useState<LiveEvent[]>([]);
   const liveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [sequencesDone, setSequencesDone] = useState(false);
 
   useEffect(() => {
     if (!primaryKey?.keyRaw) {
@@ -103,13 +104,15 @@ function Overview() {
       setLoading(true);
       try {
         const dateFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-        const [usageRes, histRes, healthRes] = await Promise.allSettled([
+        const [usageRes, histRes, healthRes, seqRes] = await Promise.allSettled([
           api.withKey.get<UsageData>("/v1/usage", primaryKey.keyRaw!),
           api.withKey.get<{ history: HistoryItem[]; total: number }>("/v1/history?page=1&limit=10", primaryKey.keyRaw!),
           api.withKey.get<{ bounce_rate: number; complaint_rate: number; sent: number }>(`/v1/analytics/sends?date_from=${dateFrom}`, primaryKey.keyRaw!),
+          api.withKey.get<{ sequences: unknown[]; total: number }>("/v1/sequences?limit=1", primaryKey.keyRaw!),
         ]);
         if (usageRes.status === "fulfilled") setUsage(usageRes.value);
         if (healthRes.status === "fulfilled") setSendHealth(healthRes.value);
+        if (seqRes.status === "fulfilled") setSequencesDone((seqRes.value.total ?? seqRes.value.sequences?.length ?? 0) > 0);
         if (histRes.status === "fulfilled") {
           const rows = histRes.value.history ?? [];
           setRecent(rows);
@@ -195,10 +198,10 @@ function Overview() {
           </div>
           <ol className="space-y-2">
             <Step done={true} icon={KeyRound} title="API key ready" desc="Your key is active." to="/dashboard/api-keys" cta="View key" />
-            <Step done={false} icon={Mail} title="Verify an email" desc="Run your first verification." to="/dashboard/verify" cta="Try Verify" />
-            <Step done={false} icon={Activity} title="Set up monitoring" desc="Watch addresses on a schedule." to="/dashboard/monitoring" cta="Add monitor" />
-            <Step done={false} icon={Send} title="Send a transactional email" desc="Use the sending API." to="/dashboard/transactional" cta="Send Email" />
-            <Step done={false} icon={GitBranch} title="Create a sequence" desc="Build multi-step cold outreach." to="/dashboard/sequences" cta="New Sequence" />
+            <Step done={verifUsed > 0} icon={Mail} title="Verify an email" desc="Run your first verification." to="/dashboard/verify" cta="Try Verify" />
+            <Step done={!!(usage && usage.monitors.active > 0)} icon={Activity} title="Set up monitoring" desc="Watch addresses on a schedule." to="/dashboard/monitoring" cta="Add monitor" />
+            <Step done={sendUsed > 0} icon={Send} title="Send a transactional email" desc="Use the sending API." to="/dashboard/transactional" cta="Send Email" />
+            <Step done={sequencesDone} icon={GitBranch} title="Create a sequence" desc="Build multi-step cold outreach." to="/dashboard/sequences" cta="New Sequence" />
           </ol>
         </div>
       )}

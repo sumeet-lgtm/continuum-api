@@ -35,7 +35,7 @@ const PLANS: PlanDef[] = [
     id: "starter",
     name: "Starter",
     price: "$29",
-    quota: "10,000 verifications · 10,000 sends · 5 mailboxes",
+    quota: "5,000 verifications · 5,000 sends · 5 mailboxes",
     features: [
       "Email verification API",
       "Phone & IP intelligence",
@@ -51,7 +51,7 @@ const PLANS: PlanDef[] = [
     id: "growth",
     name: "Growth",
     price: "$79",
-    quota: "50,000 verifications · 50,000 sends · 25 mailboxes",
+    quota: "15,000 verifications · 15,000 sends · 25 mailboxes",
     features: [
       "Everything in Starter",
       "AI first-line personalization",
@@ -67,7 +67,7 @@ const PLANS: PlanDef[] = [
     id: "scale",
     name: "Scale",
     price: "$199",
-    quota: "200,000 verifications · 200,000 sends · 100 mailboxes",
+    quota: "100,000 verifications · 100,000 sends · 100 mailboxes",
     features: [
       "Everything in Growth",
       "99.9% uptime target",
@@ -121,6 +121,19 @@ function BillingPage() {
     })();
     return () => { cancelled = true; };
   }, [apiKey?.keyRaw, loading]);
+
+  // Highlight a plan when arriving from the pricing page (?plan=growth etc.)
+  const [highlightedPlan, setHighlightedPlan] = useState<PlanId | null>(null);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const plan = params.get("plan") as PlanId | null;
+    if (plan && ["starter", "growth", "scale"].includes(plan)) {
+      setHighlightedPlan(plan);
+      setTimeout(() => {
+        document.getElementById(`plan-${plan}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 300);
+    }
+  }, []);
 
   // Show success toast when returning from a credit pack checkout
   useEffect(() => {
@@ -230,10 +243,10 @@ function BillingPage() {
           </div>
           {currentPlan !== "free" && (
             <a
-              href="mailto:support@continuumapi.com?subject=Cancel%20or%20change%20my%20plan"
+              href={`mailto:support@continuumapi.com?subject=Cancel%20my%20Continuum%20${encodeURIComponent(currentPlan)}%20plan&body=Hi%2C%20I'd%20like%20to%20cancel%20my%20${encodeURIComponent(currentPlan)}%20plan.%20Please%20process%20at%20end%20of%20the%20current%20billing%20period.`}
               className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
             >
-              Cancel or change plan
+              Cancel plan
             </a>
           )}
         </div>
@@ -297,8 +310,9 @@ function BillingPage() {
           return (
             <div
               key={p.id}
-              className={`rounded-lg border bg-card p-5 flex flex-col ${
-                isCurrent ? "border-foreground" : "border-border"
+              id={`plan-${p.id}`}
+              className={`rounded-lg border bg-card p-5 flex flex-col transition-shadow ${
+                isCurrent ? "border-foreground" : highlightedPlan === p.id ? "border-foreground ring-2 ring-foreground/20" : "border-border"
               }`}
             >
               <div className="flex items-baseline justify-between">
