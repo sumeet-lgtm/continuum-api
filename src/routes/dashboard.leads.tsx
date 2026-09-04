@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Users, Upload, X, FileText, Loader2, Search, Sparkles, GitBranch, CheckSquare, Square } from "lucide-react";
+import { Plus, Users, Upload, X, FileText, Loader2, Search, Sparkles, GitBranch, CheckSquare, Square, Wand2, ArrowRight } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/leads")({
   head: () => ({ meta: [{ title: "Leads — Continuum API" }] }),
@@ -106,6 +106,38 @@ function LeadsPage() {
   const [finderTotal, setFinderTotal] = useState<number | null>(null);
   const [finderPreviewing, setFinderPreviewing] = useState(false);
   const [finderImporting, setFinderImporting] = useState(false);
+
+  const [askQuery, setAskQuery] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [askAnswer, setAskAnswer] = useState<string | null>(null);
+  const [askResults, setAskResults] = useState<Lead[] | null>(null);
+
+  const askAI = async () => {
+    if (!primaryKey?.keyRaw || !askQuery.trim() || asking) return;
+    setAsking(true);
+    setAskAnswer(null);
+    try {
+      const res = await api.withKey.post<{ answer: string; leads: Lead[] }>(
+        "/v1/ai/ask-leads",
+        { query: askQuery.trim() },
+        primaryKey.keyRaw,
+      );
+      setAskAnswer(res.answer);
+      setAskResults(res.leads ?? []);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Couldn't answer that — try rephrasing it.");
+      setAskAnswer(null);
+      setAskResults(null);
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  const clearAsk = () => {
+    setAskQuery("");
+    setAskAnswer(null);
+    setAskResults(null);
+  };
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -326,6 +358,55 @@ function LeadsPage() {
           </Button>
           <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}><Plus className="h-4 w-4" /> Add Lead</Button>
         </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Wand2 className="h-4 w-4 text-violet-500 shrink-0" />
+          <input
+            value={askQuery}
+            onChange={(e) => setAskQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") askAI(); }}
+            placeholder='Ask in plain English — "who are my top 10 leads", "interested leads at companies with acme in the name"…'
+            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            disabled={asking}
+          />
+          {askQuery && (
+            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={clearAsk}>
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          <Button size="sm" className="gap-1.5 shrink-0" onClick={askAI} disabled={asking || !askQuery.trim()}>
+            {asking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />}
+            Ask
+          </Button>
+        </div>
+
+        {askAnswer && (
+          <div className="pt-3 border-t border-border space-y-3">
+            <p className="text-sm text-muted-foreground">{askAnswer}</p>
+            {askResults && askResults.length > 0 && (
+              <div className="rounded-md border border-border divide-y divide-border overflow-hidden">
+                {askResults.map((l) => (
+                  <button
+                    key={l.id}
+                    className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left hover:bg-muted/30 transition-colors"
+                    onClick={() => navigate({ to: "/dashboard/leads/$id", params: { id: l.email } })}
+                  >
+                    <div className="min-w-0">
+                      <span className="text-sm font-medium">{[l.firstName, l.lastName].filter(Boolean).join(" ") || l.email}</span>
+                      {l.company && <span className="text-xs text-muted-foreground ml-2">{l.company}</span>}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <StatusBadge status={l.status} />
+                      <span className="text-xs text-muted-foreground font-mono truncate max-w-[180px]">{l.email}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {enrichOpen && (
