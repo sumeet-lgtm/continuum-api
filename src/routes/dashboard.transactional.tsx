@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ChevronDown, ChevronUp, FlaskConical, CheckCircle2, Eye, Monitor, Smartphone, Sun, Moon } from "lucide-react";
+import { ChevronDown, ChevronUp, FlaskConical, CheckCircle2, Eye, Monitor, Smartphone, Sun, Moon, Search, RefreshCw, ChevronLeft, ChevronRight, BarChart3, Mail, Zap, AlertCircle, MessageSquareOff, MousePointerClick } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/dashboard/transactional")({
@@ -15,6 +15,69 @@ export const Route = createFileRoute("/dashboard/transactional")({
 });
 
 interface Template { id: string; name: string; subject: string; }
+
+interface MsgRow {
+  id: string;
+  to: string;
+  from: string;
+  subject: string | null;
+  status: string;
+  createdAt: string;
+  sentAt: string | null;
+  tags: string[];
+}
+
+interface MsgEvent {
+  id: string;
+  type: string;
+  occurredAt: string;
+}
+
+interface MsgDetail extends MsgRow {
+  sesMessageId: string | null;
+  events: MsgEvent[];
+  trackingEvents: MsgEvent[];
+}
+
+interface MsgStats {
+  sent: number;
+  delivered: number;
+  bounced: number;
+  complained: number;
+  opens: number;
+  clicks: number;
+  delivery_rate: number;
+  open_rate: number;
+  click_rate: number;
+  bounce_rate: number;
+}
+
+const STATUS_STYLE: Record<string, { dot: string; label: string }> = {
+  sent:       { dot: "bg-blue-500",   label: "Sent" },
+  delivered:  { dot: "bg-emerald-500", label: "Delivered" },
+  bounced:    { dot: "bg-rose-500",   label: "Bounced" },
+  complained: { dot: "bg-orange-500", label: "Complained" },
+  scheduled:  { dot: "bg-violet-500", label: "Scheduled" },
+  failed:     { dot: "bg-red-600",    label: "Failed" },
+};
+
+const EVENT_ICON: Record<string, string> = {
+  delivered:  "✅",
+  bounced:    "⛔",
+  complained: "🚩",
+  open:       "👁",
+  click:      "🖱",
+};
+
+function StatusDot({ status }: { status: string }) {
+  const s = STATUS_STYLE[status] ?? { dot: "bg-muted-foreground", label: status };
+  return (
+    <span className="flex items-center gap-1.5 text-xs">
+      <span className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${s.dot}`} />
+      {s.label}
+    </span>
+  );
+}
 
 function TransactionalPage() {
   const { primaryKey } = useAuth();
@@ -42,6 +105,17 @@ function TransactionalPage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
 
+  // Email log state
+  const [logPage, setLogPage] = useState(1);
+  const [logTotal, setLogTotal] = useState(0);
+  const [logItems, setLogItems] = useState<MsgRow[]>([]);
+  const [logLoading, setLogLoading] = useState(false);
+  const [logFilter, setLogFilter] = useState({ status: "", to: "", subject: "" });
+  const [logStats, setLogStats] = useState<MsgStats | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedMsg, setExpandedMsg] = useState<MsgDetail | null>(null);
+  const LOG_LIMIT = 20;
+
   useEffect(() => {
     if (!primaryKey?.keyRaw) return;
     api.withKey
@@ -49,6 +123,41 @@ function TransactionalPage() {
       .then((r) => setTemplates(r.templates ?? []))
       .catch(() => {});
   }, [primaryKey]);
+
+  const fetchLog = useCallback(async (page = 1) => {
+    if (!primaryKey?.keyRaw) return;
+    setLogLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: String(LOG_LIMIT) });
+      if (logFilter.status) params.set("status", logFilter.status);
+      if (logFilter.to) params.set("to", logFilter.to);
+      if (logFilter.subject) params.set("subject", logFilter.subject);
+      const [logRes, statsRes] = await Promise.all([
+        fetch(`https://api.continuumapi.com/v1/messages?${params}`, { headers: { "X-API-Key": primaryKey.keyRaw } }),
+        fetch("https://api.continuumapi.com/v1/messages/stats", { headers: { "X-API-Key": primaryKey.keyRaw } }),
+      ]);
+      if (logRes.ok) {
+        const data = await logRes.json() as { data: MsgRow[]; total: number };
+        setLogItems(data.data ?? []);
+        setLogTotal(data.total ?? 0);
+      }
+      if (statsRes.ok) setLogStats(await statsRes.json() as MsgStats);
+    } catch { /* network hiccup */ }
+    finally { setLogLoading(false); }
+  }, [primaryKey, logFilter, LOG_LIMIT]);
+
+  useEffect(() => { fetchLog(1); setLogPage(1); }, [primaryKey?.keyRaw]);
+
+  const fetchMsgDetail = async (id: string) => {
+    if (!primaryKey?.keyRaw) return;
+    if (expandedId === id) { setExpandedId(null); setExpandedMsg(null); return; }
+    setExpandedId(id);
+    setExpandedMsg(null);
+    try {
+      const res = await fetch(`https://api.continuumapi.com/v1/messages/${id}`, { headers: { "X-API-Key": primaryKey.keyRaw } });
+      if (res.ok) setExpandedMsg(await res.json() as MsgDetail);
+    } catch { /* */ }
+  };
 
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -328,6 +437,179 @@ X-API-Key: ${primaryKey?.keyRaw ?? "<your-api-key>"}
   "idempotency_key": "welcome-user-123",    // optional
   "test": true                           // optional — renders without sending, no charge
 }`}</pre>
+      </div>
+
+      {/* Email Log */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h2 className="text-lg font-display font-medium tracking-tight">Email Log</h2>
+            <p className="text-xs text-muted-foreground">Per-email delivery events — delivered, opened, clicked, bounced</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => fetchLog(logPage)} disabled={logLoading}>
+            <RefreshCw className={cn("h-3.5 w-3.5 mr-1.5", logLoading && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
+
+        {/* Stats row */}
+        {logStats && (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+            {[
+              { icon: Mail,            label: "Sent",       val: logStats.sent,       color: "text-blue-500" },
+              { icon: CheckCircle2,    label: "Delivered",  val: logStats.delivered,  color: "text-emerald-500" },
+              { icon: Eye,             label: "Opened",     val: logStats.opens,      color: "text-violet-500" },
+              { icon: MousePointerClick, label: "Clicked",  val: logStats.clicks,     color: "text-indigo-500" },
+              { icon: AlertCircle,     label: "Bounced",    val: logStats.bounced,    color: "text-rose-500" },
+              { icon: MessageSquareOff, label: "Spam",      val: logStats.complained, color: "text-orange-500" },
+            ].map(({ icon: Icon, label, val, color }) => (
+              <div key={label} className="rounded-md border border-border bg-card px-3 py-2.5">
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <Icon className={`h-3.5 w-3.5 ${color}`} />
+                  <span className="text-xs text-muted-foreground">{label}</span>
+                </div>
+                <span className="text-lg font-semibold tabular-nums">{val.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Filters */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              className="pl-8 pr-3 h-8 rounded-md border border-input bg-background text-sm w-52 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              placeholder="Filter by recipient…"
+              value={logFilter.to}
+              onChange={(e) => setLogFilter((f) => ({ ...f, to: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && fetchLog(1)}
+            />
+          </div>
+          <input
+            className="px-3 h-8 rounded-md border border-input bg-background text-sm w-44 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            placeholder="Filter by subject…"
+            value={logFilter.subject}
+            onChange={(e) => setLogFilter((f) => ({ ...f, subject: e.target.value }))}
+            onKeyDown={(e) => e.key === "Enter" && fetchLog(1)}
+          />
+          <select
+            className="h-8 rounded-md border border-input bg-background text-sm px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            value={logFilter.status}
+            onChange={(e) => { setLogFilter((f) => ({ ...f, status: e.target.value })); setTimeout(() => fetchLog(1), 0); }}
+          >
+            <option value="">All statuses</option>
+            <option value="sent">Sent</option>
+            <option value="delivered">Delivered</option>
+            <option value="bounced">Bounced</option>
+            <option value="complained">Complained</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="failed">Failed</option>
+          </select>
+          <Button size="sm" variant="outline" onClick={() => fetchLog(1)}>
+            <Search className="h-3.5 w-3.5 mr-1" />
+            Search
+          </Button>
+        </div>
+
+        {/* Log table */}
+        <div className="rounded-lg border border-border bg-card overflow-hidden">
+          {logLoading && logItems.length === 0 ? (
+            <div className="p-6 space-y-3">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className="flex items-center gap-4">
+                  <div className="h-3 w-36 rounded bg-muted animate-pulse" />
+                  <div className="h-3 w-48 rounded bg-muted animate-pulse" />
+                  <div className="h-4 w-16 rounded-full bg-muted animate-pulse" />
+                </div>
+              ))}
+            </div>
+          ) : logItems.length === 0 ? (
+            <div className="p-8 text-center">
+              <BarChart3 className="h-8 w-8 text-muted-foreground mx-auto mb-2 opacity-40" />
+              <p className="text-sm text-muted-foreground">No emails sent yet.</p>
+              <p className="text-xs text-muted-foreground mt-1">Send your first email above — it will appear here with live delivery status.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-muted-foreground border-b border-border bg-muted/30">
+                    <th className="px-4 py-2 font-medium">To</th>
+                    <th className="px-4 py-2 font-medium">Subject</th>
+                    <th className="px-4 py-2 font-medium">Status</th>
+                    <th className="px-4 py-2 font-medium">Sent</th>
+                    <th className="px-4 py-2 font-medium w-8" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {logItems.map((msg) => (
+                    <>
+                      <tr
+                        key={msg.id}
+                        onClick={() => fetchMsgDetail(msg.id)}
+                        className={cn("border-b border-border last:border-0 cursor-pointer hover:bg-muted/30 transition-colors", expandedId === msg.id && "bg-muted/40")}
+                      >
+                        <td className="px-4 py-2.5 font-mono text-xs max-w-[180px] truncate">{msg.to}</td>
+                        <td className="px-4 py-2.5 text-xs max-w-[240px] truncate text-muted-foreground">{msg.subject ?? "—"}</td>
+                        <td className="px-4 py-2.5"><StatusDot status={msg.status} /></td>
+                        <td className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">
+                          {msg.createdAt ? new Date(msg.createdAt).toLocaleString() : "—"}
+                        </td>
+                        <td className="px-4 py-2.5 text-muted-foreground">
+                          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", expandedId === msg.id && "rotate-180")} />
+                        </td>
+                      </tr>
+                      {expandedId === msg.id && (
+                        <tr key={`${msg.id}-detail`} className="bg-muted/20 border-b border-border">
+                          <td colSpan={5} className="px-4 py-3">
+                            {!expandedMsg ? (
+                              <p className="text-xs text-muted-foreground animate-pulse">Loading events…</p>
+                            ) : (
+                              <div className="space-y-2">
+                                <p className="text-xs font-mono text-muted-foreground">ID: {expandedMsg.id}</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {[...expandedMsg.events, ...expandedMsg.trackingEvents]
+                                    .sort((a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime())
+                                    .map((ev, i) => (
+                                      <div key={i} className="flex items-center gap-1.5 rounded-md bg-background border border-border px-2.5 py-1.5 text-xs">
+                                        <span>{EVENT_ICON[ev.type] ?? "•"}</span>
+                                        <span className="font-medium capitalize">{ev.type}</span>
+                                        <span className="text-muted-foreground">{new Date(ev.occurredAt).toLocaleTimeString()}</span>
+                                      </div>
+                                    ))}
+                                  {expandedMsg.events.length === 0 && expandedMsg.trackingEvents.length === 0 && (
+                                    <p className="text-xs text-muted-foreground">No delivery events yet — check back shortly.</p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Pagination */}
+        {logTotal > LOG_LIMIT && (
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>{logTotal.toLocaleString()} messages total</span>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="ghost" disabled={logPage <= 1} onClick={() => { setLogPage((p) => p - 1); fetchLog(logPage - 1); }}>
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              <span className="px-2">Page {logPage} of {Math.ceil(logTotal / LOG_LIMIT)}</span>
+              <Button size="sm" variant="ghost" disabled={logPage >= Math.ceil(logTotal / LOG_LIMIT)} onClick={() => { setLogPage((p) => p + 1); fetchLog(logPage + 1); }}>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
