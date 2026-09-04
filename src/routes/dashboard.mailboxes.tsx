@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Send, Zap, TestTube, ZapOff, KeyRound, TrendingUp, ShieldCheck, ShieldAlert, Shield } from "lucide-react";
+import { Plus, Send, Zap, TestTube, ZapOff, Mail, TrendingUp, ShieldCheck, ShieldAlert, Shield, ExternalLink } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/mailboxes")({
   head: () => ({ meta: [{ title: "Mailboxes — Continuum API" }] }),
@@ -61,7 +61,7 @@ function MailboxesPage() {
   const { primaryKey } = useAuth();
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
+  const [connectMode, setConnectMode] = useState<null | "gmail" | "outlook" | "smtp">(null);
   const [form, setForm] = useState({ type: "smtp", host: "", port: "587", username: "", password: "", dailyLimit: "100" });
   const [saving, setSaving] = useState(false);
   const [warmupBusy, setWarmupBusy] = useState<string | null>(null);
@@ -101,14 +101,11 @@ function MailboxesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const connectOAuth = async (provider: "google" | "microsoft") => {
-    if (!primaryKey?.keyRaw) return;
-    try {
-      const { url } = await api.withKey.get<{ url: string }>(`/v1/mailboxes/oauth/${provider}/start`, primaryKey.keyRaw);
-      window.location.href = url;
-    } catch (e: unknown) {
-      toast.error((e as Error).message);
-    }
+  const openConnect = (mode: "gmail" | "outlook" | "smtp") => {
+    setConnectMode(mode);
+    if (mode === "gmail") setForm((f) => ({ ...f, host: "smtp.gmail.com", port: "587", type: "smtp" }));
+    else if (mode === "outlook") setForm((f) => ({ ...f, host: "smtp.office365.com", port: "587", type: "smtp" }));
+    else setForm((f) => ({ ...f, host: "", port: "587", type: "smtp" }));
   };
 
   const add = async () => {
@@ -124,7 +121,7 @@ function MailboxesPage() {
         daily_limit: parseInt(form.dailyLimit),
       }, primaryKey.keyRaw);
       toast.success("Mailbox connected");
-      setAdding(false);
+      setConnectMode(null);
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }
@@ -186,38 +183,77 @@ function MailboxesPage() {
           <p className="text-sm text-muted-foreground">Connect SMTP or OAuth mailboxes for multi-mailbox rotation in sequences.</p>
         </header>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => connectOAuth("google")}>
-            <KeyRound className="h-4 w-4" /> Connect Gmail
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => openConnect("gmail")}>
+            <Mail className="h-4 w-4" /> Connect Gmail
           </Button>
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => connectOAuth("microsoft")}>
-            <KeyRound className="h-4 w-4" /> Connect Outlook
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => openConnect("outlook")}>
+            <Mail className="h-4 w-4" /> Connect Outlook
           </Button>
-          <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}>
+          <Button size="sm" className="gap-1.5" onClick={() => openConnect("smtp")}>
             <Plus className="h-4 w-4" /> Connect SMTP
           </Button>
         </div>
       </div>
 
-      {adding && (
+      {connectMode && (
         <div className="rounded-lg border border-border bg-card p-6 space-y-4 max-w-lg">
-          <h2 className="text-sm font-semibold">Connect SMTP Mailbox</h2>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>SMTP Host</Label>
-              <Input placeholder="smtp.gmail.com" value={form.host} onChange={(e) => setForm((f) => ({ ...f, host: e.target.value }))} />
+          <h2 className="text-sm font-semibold">
+            {connectMode === "gmail" ? "Connect Gmail Mailbox" : connectMode === "outlook" ? "Connect Outlook Mailbox" : "Connect SMTP Mailbox"}
+          </h2>
+
+          {/* Gmail App Password instructions */}
+          {connectMode === "gmail" && (
+            <div className="rounded-md bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 p-4 space-y-2">
+              <p className="text-xs font-semibold text-blue-800 dark:text-blue-300">You need a Gmail App Password (not your regular password)</p>
+              <ol className="text-xs text-blue-700 dark:text-blue-400 space-y-1 list-decimal list-inside">
+                <li>Make sure 2-Step Verification is ON for your Google account</li>
+                <li>Go to <strong>myaccount.google.com → Security → App Passwords</strong></li>
+                <li>Create a new app password — name it "Continuum"</li>
+                <li>Copy the 16-character code and paste it below</li>
+              </ol>
+              <a
+                href="https://myaccount.google.com/apppasswords"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 dark:text-blue-400 underline underline-offset-2"
+              >
+                Open App Passwords <ExternalLink className="h-3 w-3" />
+              </a>
             </div>
-            <div className="space-y-1.5">
-              <Label>Port</Label>
-              <Input placeholder="587" type="number" value={form.port} onChange={(e) => setForm((f) => ({ ...f, port: e.target.value }))} />
+          )}
+
+          {/* Outlook App Password instructions */}
+          {connectMode === "outlook" && (
+            <div className="rounded-md bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 p-4 space-y-2">
+              <p className="text-xs font-semibold text-blue-800 dark:text-blue-300">You need an Outlook App Password</p>
+              <ol className="text-xs text-blue-700 dark:text-blue-400 space-y-1 list-decimal list-inside">
+                <li>Go to <strong>account.microsoft.com → Security → Advanced security options</strong></li>
+                <li>Under "App passwords," create a new one named "Continuum"</li>
+                <li>Copy the password and paste it below</li>
+              </ol>
             </div>
+          )}
+
+          {connectMode === "smtp" && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>SMTP Host</Label>
+                <Input placeholder="smtp.example.com" value={form.host} onChange={(e) => setForm((f) => ({ ...f, host: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Port</Label>
+                <Input placeholder="587" type="number" value={form.port} onChange={(e) => setForm((f) => ({ ...f, port: e.target.value }))} />
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <Label>Email address</Label>
+            <Input placeholder="you@gmail.com" value={form.username} onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))} />
           </div>
           <div className="space-y-1.5">
-            <Label>Email (username)</Label>
-            <Input placeholder="you@company.com" value={form.username} onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>App Password</Label>
-            <Input type="password" placeholder="••••••••••••" value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} />
+            <Label>{connectMode === "smtp" ? "Password" : "App Password"}</Label>
+            <Input type="password" placeholder={connectMode === "smtp" ? "••••••••" : "16-character app password"} value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} />
           </div>
           <div className="space-y-1.5">
             <Label>Daily sending limit</Label>
@@ -225,7 +261,7 @@ function MailboxesPage() {
           </div>
           <div className="flex gap-2">
             <Button onClick={add} disabled={saving}>{saving ? "Connecting…" : "Connect Mailbox"}</Button>
-            <Button variant="outline" onClick={() => setAdding(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setConnectMode(null)}>Cancel</Button>
           </div>
         </div>
       )}
