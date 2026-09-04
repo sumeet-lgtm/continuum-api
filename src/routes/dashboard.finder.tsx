@@ -22,6 +22,10 @@ import {
   Bookmark,
   BookmarkCheck,
   Trash2,
+  Zap,
+  TrendingUp,
+  Briefcase,
+  Building2,
 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/finder")({
@@ -221,6 +225,7 @@ function FinderPage() {
   const [technologiesIncludes, setTechnologiesIncludes] = useState<string[]>([]);
   const [hasEmail, setHasEmail] = useState(true);
   const [totalResults, setTotalResults] = useState(100);
+  const [minResponseSignal, setMinResponseSignal] = useState<"all" | "medium" | "high">("all");
 
   // Search state
   const [phase, setPhase] = useState<SearchPhase>("idle");
@@ -425,7 +430,7 @@ function FinderPage() {
 
       const body = importAll
         ? { ...base, importAll: true }
-        : { ...base, emails: [...selected].map((i) => results[i]?.email).filter(Boolean) };
+        : { ...base, emails: [...selected].map((i) => filteredResults[i]?.email).filter(Boolean) };
 
       const data = await api.post<{ imported: number; skipped: number }>(
         `/v1/finder/jobs/${runId}/import`,
@@ -454,7 +459,7 @@ function FinderPage() {
   }
 
   function exportCsv() {
-    const rows = results.length > 0 ? results : [];
+    const rows = filteredResults.length > 0 ? filteredResults : [];
     if (rows.length === 0) return;
     const headers = ["First Name","Last Name","Email","Title","Company","Company Domain","Location","Company Size","Industry","Seniority","Response Signal","LinkedIn URL"];
     const lines = [
@@ -481,7 +486,12 @@ function FinderPage() {
     URL.revokeObjectURL(url);
   }
 
-  const allOnPage = results.map((_, i) => i);
+  const SIGNAL_RANK: Record<string, number> = { high: 2, medium: 1, low: 0 };
+  const filteredResults = minResponseSignal === "all"
+    ? results
+    : results.filter((r) => (SIGNAL_RANK[r.responseSignal] ?? 0) >= SIGNAL_RANK[minResponseSignal]);
+
+  const allOnPage = filteredResults.map((_, i) => i);
   const allSelected = allOnPage.length > 0 && allOnPage.every((i) => selected.has(i));
   function toggleSelectAll() { setSelected(allSelected ? new Set() : new Set(allOnPage)); }
   function toggleRow(i: number) {
@@ -524,6 +534,61 @@ function FinderPage() {
         <TagInput label="Company Keywords" placeholder="e.g. Series B, AI — Enter to add" values={companyKeywordIncludes} onChange={setCompanyKeywordIncludes} />
 
         <TagInput label="Technologies Used" placeholder="e.g. Salesforce, HubSpot" values={technologiesIncludes} onChange={setTechnologiesIncludes} />
+
+        {/* Intent Signals — Apollo parity */}
+        <div>
+          <div className="flex items-center gap-1.5 mb-2">
+            <Zap className="h-3.5 w-3.5 text-amber-500" />
+            <Label className="text-xs font-medium text-muted-foreground">Intent Signals</Label>
+          </div>
+          <p className="text-[10px] text-muted-foreground mb-2">Click to add as company keyword signal</p>
+          <div className="flex flex-wrap gap-1.5">
+            {[
+              { label: "Recently hired", icon: Briefcase, keyword: "recently hired" },
+              { label: "Hiring now", icon: TrendingUp, keyword: "hiring" },
+              { label: "Series A/B", icon: TrendingUp, keyword: "Series B" },
+              { label: "Raised funding", icon: Building2, keyword: "raised funding" },
+              { label: "Expanding", icon: TrendingUp, keyword: "expanding" },
+              { label: "New office", icon: Building2, keyword: "new office" },
+            ].map(({ label, icon: Icon, keyword }) => {
+              const active = companyKeywordIncludes.includes(keyword);
+              return (
+                <button
+                  key={keyword}
+                  type="button"
+                  onClick={() => setCompanyKeywordIncludes((prev) =>
+                    active ? prev.filter((k) => k !== keyword) : [...prev, keyword]
+                  )}
+                  className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs border transition-colors ${active ? "bg-amber-500/20 border-amber-500/40 text-amber-600 dark:text-amber-400" : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground"}`}
+                >
+                  <Icon className="h-3 w-3" />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Response signal filter */}
+        <div>
+          <Label className="text-xs font-medium text-muted-foreground mb-1.5 block">Min. Response Signal</Label>
+          <div className="flex gap-1.5">
+            {(["all", "medium", "high"] as const).map((sig) => (
+              <button
+                key={sig}
+                type="button"
+                onClick={() => setMinResponseSignal(sig)}
+                className={`flex-1 h-7 rounded-md text-xs border transition-colors ${minResponseSignal === sig
+                  ? sig === "high" ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
+                  : sig === "medium" ? "bg-amber-500/20 border-amber-500/40 text-amber-600 dark:text-amber-400"
+                  : "bg-foreground/10 border-foreground/30 text-foreground"
+                  : "border-border text-muted-foreground hover:border-foreground/30"}`}
+              >
+                {sig === "all" ? "Any" : sig.charAt(0).toUpperCase() + sig.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div className="flex items-center justify-between py-1">
           <Label className="text-xs font-medium text-muted-foreground">Must have email</Label>
@@ -737,7 +802,7 @@ function FinderPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {results.map((r, i) => {
+                      {filteredResults.map((r, i) => {
                         const name = [r.firstName, r.lastName].filter(Boolean).join(" ") || "—";
                         const signalStyles: Record<string, string> = {
                           high: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
