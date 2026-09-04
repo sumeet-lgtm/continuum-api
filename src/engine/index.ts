@@ -148,6 +148,17 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
         logger.info({ email, fromCache: mvResult.fromCache }, 'SMTP via MillionVerifier fallback (own probe inconclusive)');
       }
     }
+
+    // Applied once here rather than inside each individual source (own
+    // probe, its cache, the third-party fallback, and *its* cache all set
+    // isCatchAll independently) — major webmail providers accept RCPT TO
+    // for nearly any syntactically valid local-part and only bounce a
+    // nonexistent mailbox later, asynchronously, so none of those sources
+    // can detect a real catch-all on them; reporting one anyway reliably
+    // mislabels ordinary valid Gmail/Outlook/Yahoo addresses as risky.
+    if (smtpResult.isCatchAll && isFreeEmailProvider(domain)) {
+      smtpResult = { ...smtpResult, isCatchAll: false };
+    }
   }
   const smtpMs = Date.now() - t3;
 
