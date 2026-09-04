@@ -1,12 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Users, Trash2, Leaf, X, ChevronDown, AlertTriangle, CheckCircle2, Clock, Ban } from "lucide-react";
+import { Plus, Users, Trash2, Leaf, X, ChevronDown, AlertTriangle, CheckCircle2, Clock, Ban, Upload, FileText, ArrowRight } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/lists")({
   head: () => ({ meta: [{ title: "Mailing Lists — Continuum API" }] }),
@@ -254,6 +254,186 @@ function ListHygieneModal({
   );
 }
 
+function parseCsvToRows(text: string): Array<Record<string, string>> {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, "").toLowerCase());
+  return lines.slice(1).map((line) => {
+    const vals = line.split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
+    return Object.fromEntries(headers.map((h, i) => [h, vals[i] ?? ""]));
+  });
+}
+
+function detectEmailCol(headers: string[]): string | null {
+  const candidates = ["email", "email_address", "e-mail", "emailaddress", "mail"];
+  return headers.find((h) => candidates.includes(h.toLowerCase())) ?? null;
+}
+
+function CsvImportModal({ list, apiKey, onClose, onDone }: { list: MailingList; apiKey: string; onClose: () => void; onDone: () => void }) {
+  const [rows, setRows] = useState<Array<Record<string, string>>>([]);
+  const [emailCol, setEmailCol] = useState<string>("");
+  const [firstNameCol, setFirstNameCol] = useState<string>("");
+  const [lastNameCol, setLastNameCol] = useState<string>("");
+  const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number; failed: number } | null>(null);
+  const [done, setDone] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const onFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      const parsed = parseCsvToRows(text);
+      setRows(parsed);
+      const headers = Object.keys(parsed[0] ?? {});
+      const detectedEmail = detectEmailCol(headers) ?? "";
+      setEmailCol(detectedEmail);
+      setFirstNameCol(headers.find((h) => h.includes("first")) ?? "");
+      setLastNameCol(headers.find((h) => h.includes("last")) ?? "");
+    };
+    reader.readAsText(file);
+  };
+
+  const doImport = async () => {
+    if (!emailCol || rows.length === 0) return;
+    setImporting(true);
+    setDone(false);
+    setProgress({ done: 0, total: rows.length, failed: 0 });
+    const BATCH = 20;
+    let done_count = 0, failed_count = 0;
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const batch = rows.slice(i, i + BATCH);
+      await Promise.allSettled(batch.map(async (row) => {
+        const email = row[emailCol]?.trim();
+        if (!email || !email.includes("@")) { failed_count++; return; }
+        const body: Record<string, string | undefined> = { email };
+        if (firstNameCol && row[firstNameCol]) body.first_name = row[firstNameCol];
+        if (lastNameCol && row[lastNameCol]) body.last_name = row[lastNameCol];
+        const res = await fetch(`https://api.continuumapi.com/v1/lists/${list.id}/contacts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) failed_count++;
+        else done_count++;
+      }));
+      setProgress({ done: done_count, total: rows.length, failed: failed_count });
+    }
+    setImporting(false);
+    setDone(true);
+    onDone();
+  };
+
+  const headers = Object.keys(rows[0] ?? {});
+  const colOptions = ["", ...headers];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="rounded-lg border border-border bg-card w-full max-w-lg shadow-xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            <Upload className="h-4 w-4 text-muted-foreground" /> Import subscribers
+          </h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {rows.length === 0 ? (
+            <div
+              className="rounded-lg border-2 border-dashed border-border p-8 text-center cursor-pointer hover:border-foreground/30 transition-colors"
+              onClick={() => fileRef.current?.click()}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
+            >
+              <FileText className="h-8 w-8 text-muted-foreground mx-auto mb-2 opacity-50" />
+              <p className="text-sm text-muted-foreground">Drop your CSV here, or <span className="text-foreground underline underline-offset-2">browse</span></p>
+              <p className="text-xs text-muted-foreground mt-1">Any CSV with an email column — field names auto-detected</p>
+              <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
+            </div>
+          ) : (
+            <>
+              <div className="rounded-md bg-muted/40 border border-border px-3 py-2 flex items-center gap-2 text-sm">
+                <FileText className="h-4 w-4 text-muted-foreground" />
+                <span className="font-medium tabular-nums">{rows.length.toLocaleString()}</span>
+                <span className="text-muted-foreground">rows detected</span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Email column *</Label>
+                  <select className="w-full h-8 rounded-md border border-input bg-background text-sm px-2 focus:outline-none focus:ring-2 focus:ring-ring" value={emailCol} onChange={(e) => setEmailCol(e.target.value)}>
+                    {colOptions.map((c) => <option key={c} value={c}>{c || "— pick —"}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">First name (optional)</Label>
+                  <select className="w-full h-8 rounded-md border border-input bg-background text-sm px-2 focus:outline-none focus:ring-2 focus:ring-ring" value={firstNameCol} onChange={(e) => setFirstNameCol(e.target.value)}>
+                    {colOptions.map((c) => <option key={c} value={c}>{c || "— none —"}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Last name (optional)</Label>
+                  <select className="w-full h-8 rounded-md border border-input bg-background text-sm px-2 focus:outline-none focus:ring-2 focus:ring-ring" value={lastNameCol} onChange={(e) => setLastNameCol(e.target.value)}>
+                    {colOptions.map((c) => <option key={c} value={c}>{c || "— none —"}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Preview rows */}
+              <div className="rounded-md border border-border overflow-hidden">
+                <div className="px-3 py-1.5 bg-muted/30 text-xs font-medium text-muted-foreground">Preview (first 3 rows)</div>
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/20">
+                    <tr>{headers.slice(0, 5).map((h) => <th key={h} className="px-3 py-1.5 text-left font-medium text-muted-foreground">{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {rows.slice(0, 3).map((r, i) => (
+                      <tr key={i} className="border-t border-border">
+                        {headers.slice(0, 5).map((h) => <td key={h} className="px-3 py-1.5 font-mono truncate max-w-[120px]">{r[h]}</td>)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {progress && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">{done ? "Import complete" : "Importing…"}</span>
+                    <span className="tabular-nums font-medium">{progress.done.toLocaleString()} / {progress.total.toLocaleString()}</span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                    <div className="h-full bg-foreground transition-all" style={{ width: `${Math.round((progress.done / progress.total) * 100)}%` }} />
+                  </div>
+                  {progress.failed > 0 && <p className="text-xs text-muted-foreground">{progress.failed.toLocaleString()} skipped (invalid email or already suppressed)</p>}
+                </div>
+              )}
+
+              {done && (
+                <div className="flex items-center gap-2 text-sm text-[oklch(0.55_0.16_145)]">
+                  <CheckCircle2 className="h-4 w-4" />
+                  {progress?.done.toLocaleString()} subscribers imported to "{list.name}"
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-border flex items-center justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
+          {rows.length > 0 && !done && (
+            <Button size="sm" onClick={doImport} disabled={importing || !emailCol}>
+              {importing ? "Importing…" : (
+                <>Import {rows.length.toLocaleString()} subscribers <ArrowRight className="ml-1 h-3.5 w-3.5" /></>
+              )}
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ListsPage() {
   const { primaryKey } = useAuth();
   const [lists, setLists] = useState<MailingList[]>([]);
@@ -262,6 +442,7 @@ function ListsPage() {
   const [form, setForm] = useState({ name: "", description: "" });
   const [saving, setSaving] = useState(false);
   const [hygieneList, setHygieneList] = useState<MailingList | null>(null);
+  const [importList, setImportList] = useState<MailingList | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -358,6 +539,13 @@ function ListsPage() {
                 <span className="text-xs text-muted-foreground">{new Date(l.createdAt).toLocaleDateString()}</span>
                 <div className="flex gap-1">
                   <Button
+                    variant="ghost" size="sm" className="h-7 text-xs gap-1"
+                    title="Import subscribers from CSV"
+                    onClick={() => setImportList(l)}
+                  >
+                    <Upload className="h-3.5 w-3.5" /> Import
+                  </Button>
+                  <Button
                     variant="ghost" size="sm" className="h-7 text-xs gap-1 text-[oklch(0.55_0.16_145)]"
                     title="List hygiene analysis"
                     onClick={() => setHygieneList(l)}
@@ -382,6 +570,15 @@ function ListsPage() {
           list={hygieneList}
           apiKey={primaryKey.keyRaw}
           onClose={() => { setHygieneList(null); load(); }}
+        />
+      )}
+
+      {importList && primaryKey?.keyRaw && (
+        <CsvImportModal
+          list={importList}
+          apiKey={primaryKey.keyRaw}
+          onClose={() => setImportList(null)}
+          onDone={() => load()}
         />
       )}
     </div>
