@@ -2,6 +2,7 @@ import net from 'node:net';
 import type { SmtpProbeResult } from '../types/verification.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { isFreeEmailProvider } from './lookalike.js';
 
 const CATCHALL_PROBE_LOCAL = 'cnt-probe-v1-xq7z2k9m';
 const SMTP_PORT = 25;
@@ -41,12 +42,28 @@ export async function smtpProbe(
   const domain = email.split('@')[1] ?? '';
   if (!domain) return notChecked('Could not extract domain from email');
 
-  // ── Use remote SMTP probe microservice if configured ──────────────────────
-  if (config.SMTP_PROBE_URL) {
-    return remoteProbe(email, mxHost);
-  }
+  const result = config.SMTP_PROBE_URL
+    ? await remoteProbe(email, mxHost)
+    : await localProbe(email, domain, mxHost);
 
-  // ── Local SMTP probe (fallback — may fail on cloud providers) ─────────────
+  // Major consumer webmail providers (Gmail chief among them) commonly
+  // accept RCPT TO for almost any syntactically valid local-part and only
+  // reject nonexistent mailboxes later, asynchronously, via a bounce email —
+  // there is no reliable real-time SMTP signal to probe for a catch-all on
+  // them. Reporting one anyway doesn't detect a real catch-all domain, it
+  // just reliably mislabels ordinary valid Gmail/Outlook/Yahoo addresses as
+  // "risky: catch-all", which is actively harmful given how common these
+  // domains are among real recipients — every serious verification provider
+  // excludes this same domain set from catch-all detection for exactly this
+  // reason. Applied uniformly after either probe path so it can't be
+  // silently lost if the remote microservice is swapped out or bypassed.
+  if (result.checked && result.isCatchAll && isFreeEmailProvider(domain)) {
+    return { ...result, isCatchAll: false };
+  }
+  return result;
+}
+
+async function localProbe(email: string, domain: string, mxHost: string): Promise<SmtpProbeResult> {
   const port = await resolvePort(mxHost);
   if (port === null) {
     return notChecked(`Cannot connect to ${mxHost} on port 25 or 587`);
