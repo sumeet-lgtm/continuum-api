@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target, Play, Trophy } from "lucide-react";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target, Play, Trophy, Sparkles } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
@@ -85,6 +85,9 @@ function CampaignsPage() {
   const [recipientsSearch, setRecipientsSearch] = useState("");
   const [resumingCampaign, setResumingCampaign] = useState<string | null>(null);
   const [pickingWinner, setPickingWinner] = useState<string | null>(null);
+  const [aiBriefText, setAiBriefText] = useState("");
+  const [aiBriefTone, setAiBriefTone] = useState<"professional" | "casual" | "friendly" | "urgent">("professional");
+  const [aiBriefGenerating, setAiBriefGenerating] = useState(false);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -205,6 +208,26 @@ function CampaignsPage() {
       .replace(/\s{2,}/g, " ")
       .trim();
     setForm((f) => ({ ...f, textBody: plain }));
+  };
+
+  const generateCampaignWithAI = async () => {
+    if (!primaryKey?.keyRaw || !aiBriefText.trim()) return;
+    setAiBriefGenerating(true);
+    try {
+      const res = await fetch("https://api.continuumapi.com/v1/ai/generate-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
+        body: JSON.stringify({ type: "newsletter", about: aiBriefText, tone: aiBriefTone, num_variants: 1 }),
+      });
+      if (!res.ok) { toast.error("AI generation failed — check your plan or try again"); return; }
+      const data = await res.json() as { variants?: Array<{ subject: string; body?: string }> };
+      const v = data.variants?.[0];
+      if (v) {
+        setForm((f) => ({ ...f, subject: v.subject ?? f.subject, htmlBody: v.body ?? f.htmlBody }));
+        toast.success("AI draft applied — review and edit before sending");
+      }
+    } catch { toast.error("AI generation failed"); }
+    finally { setAiBriefGenerating(false); }
   };
 
   const create = async (asDraft = true) => {
@@ -356,6 +379,45 @@ function CampaignsPage() {
       {(creating || editingCampaign) && (
         <div className="rounded-lg border border-border bg-card p-6 space-y-4 max-w-2xl">
           <h2 className="text-sm font-semibold">{editingCampaign ? "Edit Campaign" : "New Campaign"}</h2>
+          {!editingCampaign && (
+            <div className="rounded-md border border-dashed border-border bg-muted/20 p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-muted-foreground" />
+                <p className="text-xs font-medium">Generate with AI</p>
+              </div>
+              <textarea
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none"
+                rows={2}
+                placeholder="Describe your campaign — e.g. 'Monthly product update for SaaS customers, highlight new integrations and a 20% annual renewal discount'"
+                value={aiBriefText}
+                onChange={(e) => setAiBriefText(e.target.value)}
+              />
+              <div className="flex items-center gap-2">
+                <select
+                  className="rounded-md border border-input bg-background px-2 py-1 text-xs focus-visible:outline-none"
+                  value={aiBriefTone}
+                  onChange={(e) => setAiBriefTone(e.target.value as typeof aiBriefTone)}
+                >
+                  <option value="professional">Professional</option>
+                  <option value="casual">Casual</option>
+                  <option value="friendly">Friendly</option>
+                  <option value="urgent">Urgent</option>
+                </select>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5 text-xs h-7"
+                  disabled={!aiBriefText.trim() || aiBriefGenerating}
+                  onClick={generateCampaignWithAI}
+                >
+                  <Sparkles className="h-3 w-3" />
+                  {aiBriefGenerating ? "Generating…" : "Draft with AI"}
+                </Button>
+                <p className="text-xs text-muted-foreground">Fills subject + body — you review and edit</p>
+              </div>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label>Campaign name</Label>
             <Input placeholder="May Newsletter" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
