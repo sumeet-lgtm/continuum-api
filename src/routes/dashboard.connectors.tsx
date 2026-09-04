@@ -34,9 +34,9 @@ interface ConnectorEvent {
   id: string;
   connector: string;
   event_type: string;
-  customer_email?: string | null;
-  processed: boolean;
-  error?: string | null;
+  normalized: { customer_email?: string | null } | null;
+  status: string;
+  error_msg?: string | null;
   created_at: string;
 }
 
@@ -380,11 +380,11 @@ function PaymentConnectorCard({
                           {new Date(ev.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                         </td>
                         <td className="py-1.5 px-3"><code className="font-mono">{ev.event_type}</code></td>
-                        <td className="py-1.5 px-3 text-muted-foreground">{ev.customer_email ?? "—"}</td>
+                        <td className="py-1.5 px-3 text-muted-foreground">{ev.normalized?.customer_email ?? "—"}</td>
                         <td className="py-1.5 px-3">
-                          {ev.processed
+                          {ev.status === "ok"
                             ? <span className="inline-flex items-center gap-1 text-green-600 dark:text-green-400"><Check className="h-3 w-3" /> OK</span>
-                            : <span className="text-destructive">{ev.error ? "Error" : "Pending"}</span>
+                            : <span className="text-destructive">{ev.status === "error" ? "Error" : ev.status}</span>
                           }
                         </td>
                       </tr>
