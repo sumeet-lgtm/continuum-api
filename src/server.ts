@@ -51,6 +51,7 @@ import { inboxTestRoutes } from './routes/inbox-test/index.js';
 import { aiRoutes } from './routes/ai/index.js';
 import { mcpRoutes } from './routes/mcp/index.js';
 import { connectorRoutes } from './routes/connectors/index.js';
+import { paymentConnectorRoutes } from './routes/connectors/payment.js';
 import { teamRoutes } from './routes/team/index.js';
 import { automationRoutes } from './routes/automations/index.js';
 import { toolRoutes } from './routes/tools/index.js';
@@ -210,6 +211,7 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(logsRoutes, { prefix: '/v1' });
   await app.register(privacyRoutes, { prefix: '/v1' });
   await app.register(connectorRoutes, { prefix: '/v1' });
+  await app.register(paymentConnectorRoutes, { prefix: '/v1' });
   await app.register(teamRoutes, { prefix: '/v1' });
   // MCP at root (no /v1 prefix — standard MCP endpoint is /mcp)
   await app.register(mcpRoutes);
