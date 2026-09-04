@@ -227,6 +227,9 @@ function CampaignsPage() {
   const [aiBriefText, setAiBriefText] = useState("");
   const [aiBriefTone, setAiBriefTone] = useState<"professional" | "casual" | "friendly" | "urgent">("professional");
   const [aiBriefGenerating, setAiBriefGenerating] = useState(false);
+  const [subjectIdeas, setSubjectIdeas] = useState<string[]>([]);
+  const [subjectIdeasLoading, setSubjectIdeasLoading] = useState(false);
+  const [showSubjectIdeas, setShowSubjectIdeas] = useState(false);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -367,6 +370,28 @@ function CampaignsPage() {
       }
     } catch { toast.error("AI generation failed"); }
     finally { setAiBriefGenerating(false); }
+  };
+
+  const generateSubjectIdeas = async () => {
+    if (!primaryKey?.keyRaw) return;
+    setSubjectIdeasLoading(true);
+    setShowSubjectIdeas(true);
+    setSubjectIdeas([]);
+    try {
+      const about = form.htmlBody.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 300).trim()
+        || form.subject || "email campaign";
+      const res = await fetch("https://api.continuumapi.com/v1/ai/generate-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
+        body: JSON.stringify({ type: "newsletter", about, tone: aiBriefTone, subject_only: true, num_variants: 5 }),
+      });
+      if (!res.ok) { toast.error("Subject generation failed"); setShowSubjectIdeas(false); return; }
+      const data = await res.json() as { variants?: Array<{ subject: string }> };
+      const ideas = (data.variants ?? []).map((v) => v.subject).filter(Boolean);
+      setSubjectIdeas(ideas);
+      if (ideas.length === 0) toast.info("No ideas generated — try adding more email content first.");
+    } catch { toast.error("Subject generation failed"); setShowSubjectIdeas(false); }
+    finally { setSubjectIdeasLoading(false); }
   };
 
   const create = async (asDraft = true) => {
@@ -589,8 +614,49 @@ function CampaignsPage() {
             <Input placeholder="replies@acme.com" type="email" value={form.replyTo} onChange={(e) => setForm((f) => ({ ...f, replyTo: e.target.value }))} />
           </div>
           <div className="space-y-1.5">
-            <Label>Subject <span className="text-muted-foreground font-normal">(Variant A)</span></Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label>Subject <span className="text-muted-foreground font-normal">(Variant A)</span></Label>
+              <button
+                type="button"
+                onClick={generateSubjectIdeas}
+                disabled={subjectIdeasLoading}
+                className="flex items-center gap-1 text-xs text-violet-600 dark:text-violet-400 hover:underline disabled:opacity-50"
+              >
+                <Sparkles className="h-3 w-3" />
+                {subjectIdeasLoading ? "Generating…" : "Get AI ideas"}
+              </button>
+            </div>
             <Input placeholder="Your May update is here" value={form.subject} onChange={(e) => setForm((f) => ({ ...f, subject: e.target.value }))} />
+            {showSubjectIdeas && (
+              <div className="rounded-md border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-950/30 p-3 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-violet-700 dark:text-violet-300">AI subject ideas — click to use</p>
+                  <button type="button" onClick={() => setShowSubjectIdeas(false)} className="text-muted-foreground hover:text-foreground">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {subjectIdeasLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+                    <Sparkles className="h-3.5 w-3.5 animate-pulse text-violet-500" /> Generating 5 subject ideas…
+                  </div>
+                ) : subjectIdeas.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No ideas yet.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {subjectIdeas.map((idea, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => { setForm((f) => ({ ...f, subject: idea })); setShowSubjectIdeas(false); }}
+                        className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-violet-100 dark:hover:bg-violet-900/40 text-foreground transition-colors"
+                      >
+                        {idea}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label>Subject B <span className="text-muted-foreground font-normal">(optional — leave blank to skip A/B test)</span></Label>
