@@ -672,7 +672,7 @@ function SequencesPage() {
                     <button
                       key={mb.id}
                       type="button"
-                      onClick={() => setForm((f) => ({ ...f, mailboxId: isSelected ? "" : mb.id, fromEmail: isSelected ? f.fromEmail : mb.username, fromName: isSelected ? f.fromName : mb.username.split("@")[0] }))}
+                      onClick={() => setForm((f) => ({ ...f, mailboxId: isSelected ? "" : mb.id, fromEmail: isSelected ? "" : mb.username, fromName: isSelected ? "" : mb.username.split("@")[0] }))}
                       className={`flex items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors hover:bg-muted/40 ${isSelected ? "border-foreground/40 bg-muted/30" : "border-border"}`}
                     >
                       <InboxIcon className={`h-4 w-4 shrink-0 ${mb.status === "active" ? "text-emerald-500" : "text-muted-foreground"}`} />

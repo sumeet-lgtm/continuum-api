@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -124,14 +124,14 @@ function TransactionalPage() {
       .catch(() => {});
   }, [primaryKey]);
 
-  const fetchLog = useCallback(async (page = 1) => {
+  const fetchLog = useCallback(async (page = 1, filter = logFilter) => {
     if (!primaryKey?.keyRaw) return;
     setLogLoading(true);
     try {
       const params = new URLSearchParams({ page: String(page), limit: String(LOG_LIMIT) });
-      if (logFilter.status) params.set("status", logFilter.status);
-      if (logFilter.to) params.set("to", logFilter.to);
-      if (logFilter.subject) params.set("subject", logFilter.subject);
+      if (filter.status) params.set("status", filter.status);
+      if (filter.to) params.set("to", filter.to);
+      if (filter.subject) params.set("subject", filter.subject);
       const [logRes, statsRes] = await Promise.all([
         fetch(`https://api.continuumapi.com/v1/messages?${params}`, { headers: { "X-API-Key": primaryKey.keyRaw } }),
         fetch("https://api.continuumapi.com/v1/messages/stats", { headers: { "X-API-Key": primaryKey.keyRaw } }),
@@ -144,7 +144,7 @@ function TransactionalPage() {
       if (statsRes.ok) setLogStats(await statsRes.json() as MsgStats);
     } catch { /* network hiccup */ }
     finally { setLogLoading(false); }
-  }, [primaryKey, logFilter, LOG_LIMIT]);
+  }, [primaryKey, LOG_LIMIT]);
 
   useEffect(() => { fetchLog(1); setLogPage(1); }, [primaryKey?.keyRaw]);
 
@@ -496,7 +496,7 @@ X-API-Key: ${primaryKey?.keyRaw ?? "<your-api-key>"}
           <select
             className="h-8 rounded-md border border-input bg-background text-sm px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             value={logFilter.status}
-            onChange={(e) => { setLogFilter((f) => ({ ...f, status: e.target.value })); setTimeout(() => fetchLog(1), 0); }}
+            onChange={(e) => { const newFilter = { ...logFilter, status: e.target.value }; setLogFilter(newFilter); fetchLog(1, newFilter); }}
           >
             <option value="">All statuses</option>
             <option value="sent">Sent</option>
@@ -544,9 +544,8 @@ X-API-Key: ${primaryKey?.keyRaw ?? "<your-api-key>"}
                 </thead>
                 <tbody>
                   {logItems.map((msg) => (
-                    <>
+                    <React.Fragment key={msg.id}>
                       <tr
-                        key={msg.id}
                         onClick={() => fetchMsgDetail(msg.id)}
                         className={cn("border-b border-border last:border-0 cursor-pointer hover:bg-muted/30 transition-colors", expandedId === msg.id && "bg-muted/40")}
                       >
@@ -561,7 +560,7 @@ X-API-Key: ${primaryKey?.keyRaw ?? "<your-api-key>"}
                         </td>
                       </tr>
                       {expandedId === msg.id && (
-                        <tr key={`${msg.id}-detail`} className="bg-muted/20 border-b border-border">
+                        <tr className="bg-muted/20 border-b border-border">
                           <td colSpan={5} className="px-4 py-3">
                             {!expandedMsg ? (
                               <p className="text-xs text-muted-foreground animate-pulse">Loading events…</p>
@@ -587,7 +586,7 @@ X-API-Key: ${primaryKey?.keyRaw ?? "<your-api-key>"}
                           </td>
                         </tr>
                       )}
-                    </>
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>

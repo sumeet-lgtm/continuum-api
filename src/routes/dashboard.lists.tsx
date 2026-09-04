@@ -254,13 +254,34 @@ function ListHygieneModal({
   );
 }
 
+function parseCsvLine(line: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { current += '"'; i++; }
+        else inQuotes = false;
+      } else { current += ch; }
+    } else {
+      if (ch === '"') { inQuotes = true; }
+      else if (ch === ',') { result.push(current); current = ""; }
+      else { current += ch; }
+    }
+  }
+  result.push(current);
+  return result;
+}
+
 function parseCsvToRows(text: string): Array<Record<string, string>> {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
   if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, "").toLowerCase());
+  const headers = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
   return lines.slice(1).map((line) => {
-    const vals = line.split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
-    return Object.fromEntries(headers.map((h, i) => [h, vals[i] ?? ""]));
+    const vals = parseCsvLine(line);
+    return Object.fromEntries(headers.map((h, i) => [h, (vals[i] ?? "").trim()]));
   });
 }
 
@@ -304,18 +325,20 @@ function CsvImportModal({ list, apiKey, onClose, onDone }: { list: MailingList; 
     for (let i = 0; i < rows.length; i += BATCH) {
       const batch = rows.slice(i, i + BATCH);
       await Promise.allSettled(batch.map(async (row) => {
-        const email = row[emailCol]?.trim();
-        if (!email || !email.includes("@")) { failed_count++; return; }
-        const body: Record<string, string | undefined> = { email };
-        if (firstNameCol && row[firstNameCol]) body.first_name = row[firstNameCol];
-        if (lastNameCol && row[lastNameCol]) body.last_name = row[lastNameCol];
-        const res = await fetch(`https://api.continuumapi.com/v1/lists/${list.id}/contacts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) failed_count++;
-        else done_count++;
+        try {
+          const email = row[emailCol]?.trim();
+          if (!email || !email.includes("@")) { failed_count++; return; }
+          const body: Record<string, string | undefined> = { email };
+          if (firstNameCol && row[firstNameCol]) body.first_name = row[firstNameCol];
+          if (lastNameCol && row[lastNameCol]) body.last_name = row[lastNameCol];
+          const res = await fetch(`https://api.continuumapi.com/v1/lists/${list.id}/contacts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+            body: JSON.stringify(body),
+          });
+          if (!res.ok) failed_count++;
+          else done_count++;
+        } catch { failed_count++; }
       }));
       setProgress({ done: done_count, total: rows.length, failed: failed_count });
     }

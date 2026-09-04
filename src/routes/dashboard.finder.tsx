@@ -577,7 +577,7 @@ function FinderPage() {
               <button
                 key={sig}
                 type="button"
-                onClick={() => setMinResponseSignal(sig)}
+                onClick={() => { setMinResponseSignal(sig); setSelected(new Set()); }}
                 className={`flex-1 h-7 rounded-md text-xs border transition-colors ${minResponseSignal === sig
                   ? sig === "high" ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
                   : sig === "medium" ? "bg-amber-500/20 border-amber-500/40 text-amber-600 dark:text-amber-400"
