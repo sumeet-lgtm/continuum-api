@@ -13,6 +13,7 @@
 import { prisma } from '../lib/prisma.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { isFreeEmailProvider } from './lookalike.js';
 
 export interface SmtpCacheResult {
   checked:     boolean;
@@ -125,18 +126,32 @@ async function storeCache(email: string, result: SmtpCacheResult): Promise<void>
   try {
     const now = new Date();
     let ttl = TTL.UNKNOWN;
-    
+
     if (result.reachable === true)  ttl = TTL.VALID;
     if (result.reachable === false) ttl = TTL.INVALID;
 
     const expiresAt = new Date(now.getTime() + ttl);
+
+    // The single choke point every caller's catch-all verdict passes
+    // through on its way into the shared cache — own-probe results,
+    // ZeroBounce, and MillionVerifier all land here. Correcting it once
+    // here (rather than in each caller, or only on the response after
+    // storing) means a bad verdict can never actually reach the cache in
+    // the first place, for any current or future source. See engine/index.ts
+    // for why: major webmail providers accept RCPT TO for nearly any
+    // syntactically valid local-part and only bounce a nonexistent mailbox
+    // later, asynchronously, so no real-time SMTP-layer signal can detect
+    // a genuine catch-all on them.
+    const isCatchAll = result.isCatchAll && isFreeEmailProvider(email.split('@')[1] ?? '')
+      ? false
+      : result.isCatchAll;
 
     await prisma.smtpCache.upsert({
       where: { email: email.toLowerCase() },
       create: {
         email:      email.toLowerCase(),
         reachable:  result.reachable,
-        isCatchAll: result.isCatchAll,
+        isCatchAll,
         resultCode: 0,
         result:     result.reachable === true ? 'ok' : result.reachable === false ? 'error' : 'unknown',
         checkedAt:  now,
@@ -144,7 +159,7 @@ async function storeCache(email: string, result: SmtpCacheResult): Promise<void>
       },
       update: {
         reachable:  result.reachable,
-        isCatchAll: result.isCatchAll,
+        isCatchAll,
         checkedAt:  now,
         expiresAt,
       },
