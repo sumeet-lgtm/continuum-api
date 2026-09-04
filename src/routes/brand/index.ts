@@ -78,11 +78,11 @@ export async function brandRoutes(fastify: FastifyInstance): Promise<void> {
 
     const gfMatch    = html.match(/fonts\.googleapis\.com\/css[^"']*[?&]family=([^&"'|:]+)/i);
     const googleFont = gfMatch?.[1]?.split(':')[0]?.replace(/\+/g, ' ').trim() ?? null;
-    const bodyFont   = html.match(/body\s*\{[^}]*font-family\s*:\s*([^;},]+)/i)?.[1]?.trim().split(',')[0].replace(/['"]/g, '').trim() ?? null;
+    const bodyFont   = html.match(/body\s*\{[^}]*font-family\s*:\s*([^;},]+)/i)?.[1]?.trim().split(',')[0]?.replace(/['"]/g, '').trim() ?? null;
     const fontFamily = googleFont ?? bodyFont ?? null;
 
     const themeColor    = html.match(/<meta[^>]+name=["']theme-color["'][^>]+content=["'](#[0-9a-fA-F]{3,6})["']/i)?.[1]?.toLowerCase() ?? null;
-    const hexMatches    = [...html.matchAll(/(?:color|background(?:-color)?)\s*:\s*(#[0-9a-fA-F]{6})\b/gi)].map(m => m[1].toLowerCase());
+    const hexMatches    = [...html.matchAll(/(?:color|background(?:-color)?)\s*:\s*(#[0-9a-fA-F]{6})\b/gi)].map(m => m[1]?.toLowerCase()).filter((c): c is string => c != null);
     const freq: Record<string, number> = {};
     for (const c of hexMatches) {
       if (!['#ffffff','#000000','#eeeeee','#dddddd'].includes(c)) freq[c] = (freq[c] ?? 0) + 1;
@@ -91,7 +91,7 @@ export async function brandRoutes(fastify: FastifyInstance): Promise<void> {
     const primaryColor   = themeColor ?? dominantColors[0] ?? null;
 
     const ogSiteName = html.match(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)["']/i)?.[1] ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:site_name["']/i)?.[1];
-    const titleTag   = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.split(/[|\-–•]/)[0].trim();
+    const titleTag   = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.split(/[|\-–•]/)[0]?.trim();
     const companyName = ogSiteName?.trim() ?? titleTag ?? null;
 
     return reply.send({ logo, primaryColor, colors: dominantColors, fontFamily, companyName, sourceUrl: targetUrl });

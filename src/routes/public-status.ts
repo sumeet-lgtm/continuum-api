@@ -100,9 +100,7 @@ async function computeDailyUptime(days: number): Promise<Array<{ date: string; u
 
 export async function publicStatusRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /v1/public/status — unauthenticated, CORS-open, cached 30s
-  fastify.get('/v1/public/status', {
-    schema: { hide: true },
-  }, async (_request, reply) => {
+  fastify.get('/v1/public/status', {}, async (_request, reply) => {
     const [[db, redis, email, dashboard], dailyUptime] = await Promise.all([
       Promise.all([dbCheck(), redisCheck(), emailCheck(), dashboardCheck()]),
       computeDailyUptime(90),
@@ -146,7 +144,6 @@ export async function publicStatusRoutes(fastify: FastifyInstance): Promise<void
   // POST /v1/status/subscribe — store email for status notifications
   fastify.post('/v1/status/subscribe', {
     schema: {
-      hide: true,
       body: { type: 'object', required: ['email'], properties: { email: { type: 'string', format: 'email' } } },
     },
   }, async (request, reply) => {

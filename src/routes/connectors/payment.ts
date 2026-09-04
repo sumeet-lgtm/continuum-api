@@ -228,10 +228,10 @@ async function executeRule(apiKeyId: string, connector: string, normalized: Norm
   if (!rule) return { status: 'no_rule' };
 
   if (rule.action === 'send_template' && rule.template_id && normalized.customer_email) {
-    const template = await prisma.email_templates.findFirst({ where: { id: rule.template_id, apiKeyId } });
+    const template = await prisma.emailTemplate.findFirst({ where: { id: rule.template_id, apiKeyId } });
     if (!template) return { status: 'error', error: 'template not found' };
 
-    const apiKey = await prisma.api_keys.findUnique({ where: { id: apiKeyId }, select: { keyRaw: true } });
+    const apiKey = await prisma.apiKey.findUnique({ where: { id: apiKeyId }, select: { keyRaw: true } });
     if (!apiKey?.keyRaw) return { status: 'error', error: 'api key not found' };
 
     const variables: Record<string, string> = {
@@ -349,7 +349,7 @@ export async function paymentConnectorRoutes(fastify: FastifyInstance): Promise<
   fastify.post('/connectors/hubspot/webhook', { preHandler: [requireAuth] }, async (req, reply) => {
     const body = req.body as unknown[];
     const events = normalizeHubSpot(Array.isArray(body) ? body : [body]);
-    await handlePaymentWebhook(req, reply, 'hubspot', () => events[0]);
+    await handlePaymentWebhook(req, reply, 'hubspot', () => events);
   });
 
   // ── Rules CRUD ──────────────────────────────────────────────────────────────

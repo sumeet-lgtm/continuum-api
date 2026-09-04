@@ -33,7 +33,7 @@ const subsequenceSchema = z.object({
   stop_on_reply: z.boolean().default(true),
 });
 
-const stepSchema = z.object({
+const stepBaseSchema = z.object({
   type: z.enum(['email', 'linkedin', 'task']).default('email'),
   delay_days: z.coerce.number().int().min(0).max(365),
   delay_hours: z.coerce.number().int().min(0).max(23).default(0),
@@ -42,7 +42,14 @@ const stepSchema = z.object({
   text_body: z.string().optional(),
   task_note: z.string().max(2000).optional(),
   condition: z.enum(['always', 'if_not_opened', 'if_opened', 'if_not_clicked', 'if_not_replied']).default('always'),
-}).superRefine((data, ctx) => {
+});
+
+// The create-time schema enforces type-specific required fields; the PATCH
+// schema below is a .partial() of the base object instead, since ZodEffects
+// (what .superRefine() returns) has no .partial() — and superRefine's
+// all-fields-present checks don't make sense against a partial update
+// anyway (a field an existing step already has doesn't need to be resent).
+const stepSchema = stepBaseSchema.superRefine((data, ctx) => {
   if (data.type === 'email') {
     if (!data.subject || data.subject.trim() === '') ctx.addIssue({ code: 'custom', path: ['subject'], message: 'Subject is required for email steps.' });
     if (!data.html_body || data.html_body.trim() === '') ctx.addIssue({ code: 'custom', path: ['html_body'], message: 'Body is required for email steps.' });
@@ -188,7 +195,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const step = await prisma.sequenceStep.findFirst({ where: { id: stepId, sequenceId: id } });
     if (!step) throw Errors.notFound('Step not found.');
 
-    const patchSchema = stepSchema.partial();
+    const patchSchema = stepBaseSchema.partial();
     const parsed = patchSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 

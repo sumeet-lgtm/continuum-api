@@ -7,109 +7,1173 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model CampaignLists {
-  A             String
-  B             String
-  campaigns     campaigns     @relation(fields: [A], references: [id], onDelete: Cascade)
-  mailing_lists mailing_lists @relation(fields: [B], references: [id], onDelete: Cascade)
+// ─── Users (WorkOS SSO) ──────────────────────────────────────────────────────
 
-  @@id([A, B], map: "_CampaignLists_AB_pkey")
-  @@index([B], map: "_CampaignLists_B_index")
-  @@map("_CampaignLists")
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  workosId  String?  @unique @map("workos_id")
+  firstName String?  @map("first_name")
+  lastName  String?  @map("last_name")
+  orgId     String?  @map("org_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  orgMemberships OrgMember[]
+
+  @@map("users")
 }
 
-model CampaignSegments {
-  A         String
-  B         String
-  campaigns campaigns @relation(fields: [A], references: [id], onDelete: Cascade)
-  segments  segments  @relation(fields: [B], references: [id], onDelete: Cascade)
+// ─── Org Members (WorkOS org memberships) ────────────────────────────────────
 
-  @@id([A, B], map: "_CampaignSegments_AB_pkey")
-  @@index([B], map: "_CampaignSegments_B_index")
-  @@map("_CampaignSegments")
+model OrgMember {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  orgId        String   @map("org_id")
+  membershipId String   @unique @map("membership_id")
+  role         String   @default("member")
+  email        String
+  status       String   @default("active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, orgId])
+  @@index([orgId])
+  @@map("org_members")
 }
 
-model accounts {
-  id        String   @id
+// ─── Org Settings ─────────────────────────────────────────────────────────────
+
+model OrgSettings {
+  id          String   @id @default(cuid())
+  orgId       String   @unique @map("org_id")
+  name        String?
+  domain      String?
+  mfaRequired Boolean  @default(false) @map("mfa_required")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("org_settings")
+}
+
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+// logAudit() previously no-op'd entirely whenever orgId was null or
+// WORKOS_API_KEY was unset — meaning any customer not on the org/SSO flow
+// (most customers) got zero audit trail, and even org customers had no
+// audit record visible except inside WorkOS's own dashboard. This table
+// is written for every audited action regardless of org/WorkOS config;
+// the WorkOS mirror (when applicable) is additive, not a replacement.
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  orgId      String?  @map("org_id")
+  apiKeyId   String?  @map("api_key_id")
+  action     String
+  actorId    String   @map("actor_id")
+  actorEmail String   @map("actor_email")
+  actorIp    String?  @map("actor_ip")
+  targets    Json
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([orgId])
+  @@index([apiKeyId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─── API Keys ────────────────────────────────────────────────────────────────
+
+model ApiKey {
+  id                 String    @id @default(cuid())
+  keyHash            String    @unique // SHA-256(salt + raw_key)
+  keyPrefix          String    // first 8 chars of raw key for display/support
+  label              String?
+  ownerId            String? // external user/org ID from the calling system
+  userId             String? // Supabase auth user ID
+  // WorkOS org this key belongs to, when the owning user signed in via an
+  // org SSO connection. Previously nothing tied an API key to an org at
+  // all — org admin/member roles governed the WorkOS-managed dashboard
+  // shell (invites, role changes) but had no bearing on the actual
+  // product resources (verifications, sends, contacts, ...) every one of
+  // those keys owns. See routes/org/index.ts's api-keys endpoints.
+  orgId              String?   @map("org_id")
+  keyRaw             String? // full raw key stored for dashboard use
+  rateLimit          Int       @default(1000) // requests per minute ceiling
+  monthlyLimit       Int       @default(1000) // max verifications per month
+  currentMonthUsage  Int       @default(0) // verifications used this month
+  usageResetAt       DateTime  @default(dbgenerated("date_trunc('month', now() + interval '1 month')"))
+  plan               String    @default("free") // free, starter, growth, scale
+  isActive           Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  revokedAt          DateTime?
+
+  monthlySendLimit      Int @default(500) // max /v1/send calls per month
+  currentMonthSendUsage Int @default(0)   // sends used this month — separate counter from verification usage
+  sendUsageResetAt DateTime @default(dbgenerated("date_trunc('month', now() + interval '1 month')"))
+
+  // Pay-per-use credit packs (non-expiring top-ups on top of monthly quota)
+  extraVerificationCredits Int @default(0) @map("extra_verification_credits")
+  extraSendCredits         Int @default(0) @map("extra_send_credits")
+
+  // Self-service key management
+  name               String?   // human label for this key
+  permission         String    @default("full_access") // full_access | sending_access
+  restrictedDomainId String?   // if set, sending_access key is pinned to this domain
+  lastUsedAt         DateTime?
+
+  // Security: IP allowlist (empty = allow all IPs)
+  allowedIps         String[]  @default([]) @map("allowed_ips")
+
+  // Usage alerts: email owner at 80% of monthly quota
+  usageAlertEnabled  Boolean   @default(true)  @map("usage_alert_enabled")
+  usageAlertSentAt   DateTime? @map("usage_alert_sent_at")
+
+  // Key expiry: auto-revoke at this UTC datetime (null = never expires)
+  expiresAt          DateTime? @map("expires_at")
+
+  verifications  Verification[]
+  bulkJobs       BulkJob[]
+  monitors       Monitor[]
+  webhooks       Webhook[]
+  sendMessages   SendMessage[]
+  sendingDomains SendingDomain[]
+  emailTemplates EmailTemplate[]
+  mailingLists   MailingList[]
+  contacts       Contact[]
+  segments       Segment[]
+  campaigns      Campaign[]
+  mailboxes      Mailbox[]
+  sequences      Sequence[]
+  leads          Lead[]
+  accounts       Account[]
+  inboxTests     InboxTest[]
+  automations    Automation[]
+  requestLogs    ApiRequestLog[]
+  teamMembers    TeamMember[]
+  teamInvites    TeamInvite[]
+
+  // Added 2026-09-04 alongside the brand_kits/connector_* tables above —
+  // those models are kept snake_case, so these back-relations are too.
+  brand_kits        brand_kits?
+  connector_secrets connector_secrets[]
+  connector_rules   connector_rules[]
+  connector_events  connector_events[]
+
+  @@index([orgId])
+  @@map("api_keys")
+}
+
+// ─── Team (workspace multi-user RBAC) ────────────────────────────────────────
+
+model TeamMember {
+  id             String   @id @default(cuid())
+  workspaceKeyId String
+  email          String
+  role           String   @default("member") // admin | member (owner = ApiKey creator)
+  invitedBy      String?
+  joinedAt       DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  workspaceKey   ApiKey   @relation(fields: [workspaceKeyId], references: [id])
+
+  @@unique([workspaceKeyId, email])
+  @@index([email])
+  @@map("team_members")
+}
+
+model TeamInvite {
+  id             String   @id @default(cuid())
+  workspaceKeyId String
+  inviteeEmail   String
+  role           String   @default("member")
+  token          String   @unique @default(cuid())
+  status         String   @default("pending") // pending | accepted | revoked
+  expiresAt      DateTime
+  invitedBy      String
+  createdAt      DateTime @default(now())
+
+  workspaceKey   ApiKey   @relation(fields: [workspaceKeyId], references: [id])
+
+  @@index([token])
+  @@index([workspaceKeyId])
+  @@index([inviteeEmail])
+  @@map("team_invites")
+}
+
+// ─── API Request Logs ────────────────────────────────────────────────────────
+// Best-effort log of every authenticated API call — written fire-and-forget
+// in an onResponse hook. Primary use-case: developer debugging in the
+// dashboard ("why did this request fail?"). Retention is 30 days.
+
+model ApiRequestLog {
+  id         String   @id @default(cuid())
+  apiKeyId   String   @map("api_key_id")
+  method     String   // GET | POST | PATCH | DELETE
+  path       String   // cleaned path, e.g. /v1/send (no query string)
+  statusCode Int      @map("status_code")
+  durationMs Int      @map("duration_ms")
+  sourceIp   String?  @map("source_ip")
+  requestId  String?  @map("request_id")
+  errorCode  String?  @map("error_code")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@index([apiKeyId, createdAt(sort: Desc)])
+  @@index([createdAt])
+  @@map("api_request_logs")
+}
+
+// ─── Verification Results ────────────────────────────────────────────────────
+
+model Verification {
+  id              String             @id @default(cuid())
+  email           String
+  domain          String
+  status          VerificationStatus
+  subStatus       String? // granular reason: smtp_timeout, catch_all, dns_error, etc.
+  syntaxValid     Boolean
+  mxFound         Boolean
+  mxRecords       String[]
+  isDisposable    Boolean
+  isRoleAccount   Boolean
+  smtpChecked     Boolean
+  smtpReachable   Boolean? // null when smtpChecked = false
+  smtpRawResponse String?
+  isCatchAll      Boolean?
+  greylisted      Boolean  @default(false) // 4xx RCPT TO — address may exist, retry later
+  score           Int // 0-100 internal confidence
+  durationMs      Int
+  checkedAt       DateTime @default(now())
+  apiKeyId        String
+  bulkJobId       String?
+  sourceIp        String?
+
+  apiKey  ApiKey   @relation(fields: [apiKeyId], references: [id])
+  bulkJob BulkJob? @relation(fields: [bulkJobId], references: [id])
+  sendMessages SendMessage[]
+
+  @@index([email])
+  @@index([apiKeyId])
+  @@index([checkedAt])
+  @@index([bulkJobId])
+  @@map("verifications")
+}
+
+enum VerificationStatus {
+  valid
+  invalid
+  risky
+  unknown
+}
+
+// ─── Bulk CSV Jobs ────────────────────────────────────────────────────────────
+
+model BulkJob {
+  id             String        @id @default(cuid())
+  apiKeyId       String
+  fileName       String // original filename from upload
+  storagePath    String // Supabase Storage object path in uploads bucket
+  totalEmails    Int
+  processedCount Int           @default(0)
+  validCount     Int           @default(0)
+  invalidCount   Int           @default(0)
+  riskyCount     Int           @default(0)
+  unknownCount   Int           @default(0)
+  duplicateCount Int           @default(0) // rows skipped as duplicates of earlier rows
+  errorCount     Int           @default(0) // rows where the engine threw unexpectedly
+  status         BulkJobStatus @default(pending)
+  errorMessage   String?
+  exportPath     String? // Supabase Storage path in exports bucket (optional — results also in DB)
+  createdAt      DateTime      @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  cancelledAt    DateTime?
+  webhookSent    Boolean       @default(false)
+
+  apiKey        ApiKey          @relation(fields: [apiKeyId], references: [id])
+  verifications Verification[]
+  emailRows     BulkJobEmail[]
+
+  @@index([apiKeyId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("bulk_jobs")
+}
+
+// ─── Per-row result tracking ──────────────────────────────────────────────────
+
+model BulkJobEmail {
+  id             String    @id @default(cuid())
+  bulkJobId      String
+  email          String
+  rowIndex       Int       // 0-based position in the original CSV (after header strip)
+  isDuplicate    Boolean   @default(false)
+
+  // Populated after verification completes (null while pending/duplicate)
+  status         String?
+  subStatus      String?
+  score          Int?
+  domain         String?
+  syntaxValid    Boolean?
+  isDisposable   Boolean?
+  isRoleAccount  Boolean?
+  mxFound        Boolean?
+  smtpChecked    Boolean?
+  smtpReachable  Boolean?
+  isCatchAll     Boolean?
+  greylisted     Boolean   @default(false)
+  spfValid       Boolean?
+  dkimFound      Boolean?
+  dmarcValid     Boolean?
+  blacklisted    Boolean?
+  durationMs     Int?
+  verificationId String?   // FK to Verification.id — nullable because engine may fail
+  errorMessage   String?   // set only if engine threw an unexpected error
+  processedAt    DateTime?
+
+  bulkJob BulkJob @relation(fields: [bulkJobId], references: [id], onDelete: Cascade)
+
+  @@index([bulkJobId])
+  @@index([bulkJobId, status])
+  @@index([bulkJobId, rowIndex])
+  @@map("bulk_job_emails")
+}
+
+enum BulkJobStatus {
+  pending
+  processing
+  completed
+  failed
+  cancelled
+}
+
+// ─── Monitored Emails ─────────────────────────────────────────────────────────
+
+model Monitor {
+  id                   String              @id @default(cuid())
+  apiKeyId             String
+  email                String
+  intervalHours        Int                 @default(24)
+  isActive             Boolean             @default(true)
+  lastCheckedAt        DateTime?
+  nextCheckAt          DateTime
+  lastStatus           VerificationStatus?
+  consecutiveFailures  Int                 @default(0) // incremented on engine error, reset on success
+  pausedAt             DateTime?           // set when consecutiveFailures >= MAX_FAILURES
+  failureReason        String?             // last error message when paused
+  tags                 String[]            // caller-defined labels for filtering
+  notifyOnAnyChange    Boolean             @default(true) // fire webhook on every status change
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  apiKey ApiKey         @relation(fields: [apiKeyId], references: [id])
+  checks MonitorCheck[]
+
+  @@unique([apiKeyId, email])
+  @@index([nextCheckAt])
+  @@index([isActive, nextCheckAt])
+  @@map("monitors")
+}
+
+// ─── Monitor Check History ────────────────────────────────────────────────────
+
+model MonitorCheck {
+  id             String              @id @default(cuid())
+  monitorId      String
+  verificationId String
+  statusChanged  Boolean
+  previousStatus VerificationStatus?
+  newStatus      VerificationStatus
+  source         String              @default("scheduled") // "scheduled" | "manual_recheck"
+  checkedAt      DateTime            @default(now())
+  durationMs     Int?                // total wall time for this check in ms
+  webhookSent    Boolean             @default(false)
+
+  monitor Monitor @relation(fields: [monitorId], references: [id])
+
+  @@index([monitorId])
+  @@index([monitorId, checkedAt])
+  @@index([checkedAt])
+  @@map("monitor_checks")
+}
+
+// ─── Webhook Endpoints ────────────────────────────────────────────────────────
+
+model Webhook {
+  id              String         @id @default(cuid())
+  apiKeyId        String
+  url             String
+  secret          String         // random 32-byte hex; used for HMAC-SHA256 signature
+  events          WebhookEvent[]
+  label           String?        // human-readable name for the endpoint
+  description     String?        // optional description
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  lastPingAt      DateTime?
+  lastPingOk      Boolean?
+  // Aggregate delivery stats — updated on each attempt
+  totalDeliveries      Int       @default(0)
+  successCount         Int       @default(0)
+  failureCount         Int       @default(0)
+  // Consecutive permanent failures since last success (resets to 0 on any success)
+  consecutiveFailures  Int       @default(0)  @map("consecutive_failures")
+  // When we last sent a failure-threshold alert — debounces repeated emails
+  failureAlertSentAt   DateTime? @map("failure_alert_sent_at")
+
+  apiKey     ApiKey            @relation(fields: [apiKeyId], references: [id])
+  deliveries WebhookDelivery[]
+
+  @@index([apiKeyId])
+  @@map("webhooks")
+}
+
+enum WebhookEvent {
+  // Phase 5 canonical names (stored as underscore in DB; dot-style is API-only)
+  verification_complete    // emitted as "verification.completed" in payloads
+  bulk_job_complete        // emitted as "bulk_job.completed" in payloads
+  monitor_status_change    // emitted as "email.status_changed" in payloads
+  // Phase 6 (Send)
+  email_sent                // emitted as "email.sent"
+  email_delivered           // emitted as "email.delivered"
+  email_bounced             // emitted as "email.bounced"
+  email_complained          // emitted as "email.complained"
+  email_send_failed         // emitted as "email.send_failed"
+}
+
+// ─── Webhook Delivery Log ─────────────────────────────────────────────────────
+
+model WebhookDelivery {
+  id                String       @id @default(cuid())
+  webhookId         String
+  event             WebhookEvent
+  eventId           String?      // idempotency key: "<event>:<sourceId>"
+  payload           Json
+  attempts          Int          @default(0)
+  maxAttempts       Int          @default(5)
+  nextRetryAt       DateTime?
+  lastAttemptAt     DateTime?
+  statusCode        Int?
+  responseBody      String?
+  errorMessage      String?      // last failure reason in human-readable form
+  delivered         Boolean      @default(false)
+  failedPermanently Boolean      @default(false) // true when maxAttempts exhausted
+  createdAt         DateTime     @default(now())
+
+  webhook  Webhook          @relation(fields: [webhookId], references: [id])
+  attempts_ WebhookAttempt[] @relation("DeliveryAttempts")
+
+  @@index([delivered, nextRetryAt])
+  @@index([webhookId])
+  @@index([eventId])
+  @@map("webhook_deliveries")
+}
+
+// ─── Per-attempt HTTP log ─────────────────────────────────────────────────────
+
+model WebhookAttempt {
+  id            String    @id @default(cuid())
+  deliveryId    String
+  attemptNumber Int
+  requestedAt   DateTime
+  respondedAt   DateTime?
+  durationMs    Int?
+  statusCode    Int?
+  responseBody  String?
+  // Structured error classification
+  errorType     String?   // "timeout" | "connection_refused" | "http_error" | "network_error"
+  errorMessage  String?
+  success       Boolean   @default(false)
+
+  delivery WebhookDelivery @relation("DeliveryAttempts", fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId])
+  @@index([deliveryId, attemptNumber])
+  @@map("webhook_attempts")
+}
+
+// ─── SMTP Result Cache ────────────────────────────────────────────────────────
+// Stores SMTP verification results to avoid redundant API calls
+// Results are reused across all users — shared cache builds moat over time
+
+model SmtpCache {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  reachable     Boolean?
+  isCatchAll    Boolean?
+  resultCode    Int      // MillionVerifier result code
+  result        String   // ok, error, unknown, disposable
+  subResult     String?
+  checkedAt     DateTime @default(now())
+  expiresAt     DateTime // TTL: 30d valid, 7d invalid, 1d unknown
+
+  @@index([email])
+  @@index([expiresAt])
+  @@map("smtp_cache")
+}
+
+// ─── Phase 6: Send ────────────────────────────────────────────────────────────
+// Transactional sending on top of verification. verifyEmail() already exists
+// and stores per-address history — SendMessage reads from it (verify-before-send)
+// so a send can be checked against the same dataset instead of a second product.
+
+model SendMessage {
+  id             String     @id @default(cuid())
+  apiKeyId       String
+  to             String
+  from           String
+  replyTo        String?
+  cc             String[]   @default([])
+  bcc            String[]   @default([])
+  subject        String
+  sesMessageId   String?    @unique
+  status         SendStatus @default(queued)
+  errorMessage   String?
+  verificationId String?
+  domainId       String?
+  templateId      String?
+  sequenceStepId  String?                // set for sequence sends — used in funnel analytics
+  tags            Json?
+  trackingToken   String?    @unique
+  idempotencyKey  String?    @unique
+  scheduledAt     DateTime?
+  createdAt       DateTime   @default(now())
+  sentAt          DateTime?
+
+  apiKey         ApiKey        @relation(fields: [apiKeyId], references: [id])
+  verification   Verification? @relation(fields: [verificationId], references: [id])
+  events         SendEvent[]
+  trackingEvents TrackingEvent[]
+
+  @@index([apiKeyId])
+  @@index([apiKeyId, createdAt])
+  @@index([sesMessageId])
+  @@index([sequenceStepId])
+  @@map("send_messages")
+}
+
+enum SendStatus {
+  queued
+  scheduled
+  sent
+  delivered
+  opened
+  clicked
+  bounced
+  complained
+  failed
+  cancelled
+}
+
+// ─── Per-message delivery event log (from SES → SNS) ─────────────────────────
+
+model SendEvent {
+  id            String        @id @default(cuid())
+  sendMessageId String
+  type          SendEventType
+  rawPayload    Json          // the raw SES/SNS notification, kept for debugging
+  occurredAt    DateTime      @default(now())
+
+  sendMessage SendMessage @relation(fields: [sendMessageId], references: [id], onDelete: Cascade)
+
+  @@index([sendMessageId])
+  @@map("send_events")
+}
+
+enum SendEventType {
+  sent
+  delivered
+  bounced
+  complained
+  failed
+}
+
+// ─── Suppression list ─────────────────────────────────────────────────────────
+// GLOBAL, not per-key: v1 shares one SES sending domain/reputation across every
+// customer, so a hard bounce or complaint under any one apiKeyId threatens
+// everyone's deliverability. apiKeyId is kept only to show each customer which
+// of their own sends triggered a global suppression, never to scope the check.
+
+model Suppression {
+  id        String            @id @default(cuid())
+  email     String            @unique
+  reason    SuppressionReason
+  apiKeyId  String?           // which customer's send (if any) triggered this
+  createdAt DateTime          @default(now())
+
+  @@index([email])
+  @@map("suppressions")
+}
+
+enum SuppressionReason {
+  hard_bounce
+  complaint
+  manual
+  soft_bounce
+  unsubscribed
+}
+
+// ─── Soft Bounce Tracker (3-strike suppression) ──────────────────────────────
+
+model SoftBounceTrack {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  apiKeyId      String?
+  bounceCount   Int      @default(1)
+  lastBounceAt  DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  @@index([email])
+  @@map("soft_bounce_tracks")
+}
+
+// ─── Custom Sending Domains ───────────────────────────────────────────────────
+
+model SendingDomain {
+  id                String    @id @default(cuid())
+  apiKeyId          String
+  name              String
+  status            String    @default("pending") // pending|verified|failed
+  region            String    @default("us-east-1")
+  dkimSelector      String
+  dkimPublicKey     String
+  dkimPrivateKeyEnc String
+  spfStatus         String    @default("pending")
+  dkimStatus        String    @default("pending")
+  returnPathStatus  String    @default("pending")
+  trackOpens        Boolean   @default(true)
+  trackClicks       Boolean   @default(true)
+  trackingDomain    String?   // custom tracking domain e.g. "track.yourdomain.com" — overrides api.continuumapi.com for pixels/redirects
+  createdAt         DateTime  @default(now())
+  verifiedAt        DateTime?
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+
+  @@unique([apiKeyId, name])
+  @@index([apiKeyId])
+  @@map("sending_domains")
+}
+
+// ─── Email Templates ──────────────────────────────────────────────────────────
+
+model EmailTemplate {
+  id        String   @id @default(cuid())
   apiKeyId  String
   name      String
-  domain    String?
-  industry  String?
-  employees Int?
-  revenue   String?
-  website   String?
-  linkedin  String?
-  city      String?
-  country   String?
-  notes     String?
+  subject   String
+  htmlBody  String
+  textBody  String?
+  preheader String?
+  variables Json?
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now())
-  api_keys  api_keys @relation(fields: [apiKeyId], references: [id])
-  leads     leads[]
+  updatedAt DateTime @updatedAt
+
+  apiKey   ApiKey                 @relation(fields: [apiKeyId], references: [id])
+  versions EmailTemplateVersion[]
+
+  @@index([apiKeyId])
+  @@map("email_templates")
+}
+
+model EmailTemplateVersion {
+  id         String   @id @default(cuid())
+  templateId String
+  version    Int
+  name       String
+  subject    String
+  htmlBody   String
+  textBody   String?
+  variables  Json?
+  savedAt    DateTime @default(now())
+  savedBy    String?  // email of user who made the change
+
+  template EmailTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, version])
+  @@map("email_template_versions")
+}
+
+// ─── Open / Click Tracking Events ────────────────────────────────────────────
+
+model TrackingEvent {
+  id            String   @id @default(cuid())
+  sendMessageId String?
+  campaignId    String?
+  sequenceId    String?
+  email         String
+  type          String   // open|click
+  linkUrl       String?
+  userAgent     String?
+  ip            String?
+  occurredAt    DateTime @default(now())
+
+  sendMessage SendMessage? @relation(fields: [sendMessageId], references: [id])
+
+  @@index([sendMessageId])
+  @@index([campaignId])
+  @@index([sequenceId])
+  @@map("tracking_events")
+}
+
+// ─── Mailing Lists (newsletter / permission-based) ────────────────────────────
+
+model MailingList {
+  id           String   @id @default(cuid())
+  apiKeyId     String
+  name         String
+  description  String?
+  contactCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  apiKey      ApiKey                  @relation(fields: [apiKeyId], references: [id])
+  memberships ContactListMembership[]
+  campaigns   Campaign[]              @relation("CampaignLists")
+
+  @@index([apiKeyId])
+  @@map("mailing_lists")
+}
+
+// ─── Contacts (opt-in subscribers) ───────────────────────────────────────────
+
+model Contact {
+  id           String   @id @default(cuid())
+  apiKeyId     String
+  email        String
+  firstName    String?
+  lastName     String?
+  customFields Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  apiKey      ApiKey                  @relation(fields: [apiKeyId], references: [id])
+  memberships ContactListMembership[]
+
+  @@unique([apiKeyId, email])
+  @@index([apiKeyId])
+  @@map("contacts")
+}
+
+model ContactListMembership {
+  id             String    @id @default(cuid())
+  contactId      String
+  listId         String
+  status         String    @default("subscribed") // subscribed|unsubscribed|bounced|complained
+  gdprConsent    Boolean   @default(false)
+  subscribedAt   DateTime  @default(now())
+  unsubscribedAt DateTime?
+
+  contact Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  list    MailingList @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, listId])
+  @@index([listId, status])
+  @@map("contact_list_memberships")
+}
+
+// ─── Segments ─────────────────────────────────────────────────────────────────
+
+model Segment {
+  id          String   @id @default(cuid())
+  apiKeyId    String
+  listId      String?
+  name        String
+  filterRules Json
+  createdAt   DateTime @default(now())
+
+  apiKey    ApiKey       @relation(fields: [apiKeyId], references: [id])
+  campaigns Campaign[]  @relation("CampaignSegments")
+
+  @@index([apiKeyId])
+  @@map("segments")
+}
+
+// ─── Campaigns ────────────────────────────────────────────────────────────────
+
+model Campaign {
+  id             String    @id @default(cuid())
+  apiKeyId       String
+  name           String    @default("")
+  fromName       String
+  fromEmail      String
+  domainId       String?
+  replyTo        String?
+  subject        String
+  htmlBody       String
+  textBody       String?
+  preheader      String?
+  status         String    @default("draft") // draft|scheduled|sending|sent|failed|cancelled
+  listIds        String[]  @default([])
+  segmentIds     String[]  @default([])
+  excludeListIds String[]  @default([])
+  trackOpens     Boolean   @default(true)
+  trackClicks    Boolean   @default(true)
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  totalRecipients Int      @default(0)
+  sentCount      Int       @default(0)
+  deliveredCount Int       @default(0)
+  openCount      Int       @default(0)
+  clickCount     Int       @default(0)
+  bounceCount    Int       @default(0)
+  complaintCount Int       @default(0)
+  subjectB       String?                       // A/B test: variant B subject line
+  openCountB     Int       @default(0)         // A/B test: opens from B variant
+  clickCountB    Int       @default(0)         // A/B test: clicks from B variant
+  excludedEmails String[]  @default([])        // retarget: emails to skip (openers of source campaign)
+  retargetOfId   String?                       // retarget: source campaign ID
+  sendRatePerHour Int?                          // drip: max emails/hr; null = unlimited
+  sendDays       String[]  @default(["monday","tuesday","wednesday","thursday","friday"])
+  sendStartHour  Int       @default(8)
+  sendEndHour    Int       @default(17)
+  timezone       String    @default("UTC")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  apiKey     ApiKey              @relation(fields: [apiKeyId], references: [id])
+  recipients CampaignRecipient[]
+  lists      MailingList[]       @relation("CampaignLists")
+  segments   Segment[]           @relation("CampaignSegments")
+
+  @@index([apiKeyId, status])
+  @@map("campaigns")
+}
+
+model CampaignRecipient {
+  id           String    @id @default(cuid())
+  campaignId   String
+  contactId    String?
+  email        String
+  status       String    @default("pending") // pending|sent|delivered|bounced|complained|failed
+  variant      String    @default("a")       // a|b for A/B test campaigns
+  sesMessageId String?
+  sentAt       DateTime?
+  deliveredAt  DateTime?
+  openedAt     DateTime?
+  clickedAt    DateTime?
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, status])
+  @@index([sesMessageId])
+  @@map("campaign_recipients")
+}
+
+// ─── Mailboxes (cold outreach / multi-sender) ─────────────────────────────────
+
+model Mailbox {
+  id               String    @id @default(cuid())
+  apiKeyId         String
+  type             String    // smtp|gmail|outlook
+  label            String?
+  host             String?
+  port             Int?
+  username         String
+  passwordEnc      String?
+  oauthTokenEnc    String?
+  dailyLimit       Int       @default(200)
+  sendDelayMinMs   Int       @default(30000)
+  sendDelayMaxMs   Int       @default(120000)
+  sentToday        Int       @default(0)
+  sentTodayResetAt DateTime  @default(now())
+  status           String    @default("active") // active|paused|error
+  lastErrorMsg     String?
+  lastCheckedAt    DateTime?
+  createdAt        DateTime  @default(now())
+
+  apiKey       ApiKey        @relation(fields: [apiKeyId], references: [id])
+  warmupConfig WarmupConfig?
+  replyEvents  ReplyEvent[]
+
+  @@index([apiKeyId, status])
+  @@map("mailboxes")
+}
+
+model WarmupConfig {
+  id            String   @id @default(cuid())
+  mailboxId     String   @unique
+  enabled       Boolean  @default(true)
+  targetPerDay  Int      @default(40)
+  currentPerDay Int      @default(5)
+  rampUpDays    Int      @default(30)
+  dailyRampUp   Int      @default(2)   // emails to add per day
+  replyRatePct  Int      @default(20)  // % of warmup emails that get auto-replied
+  lastRampDate  String?  // ISO date YYYY-MM-DD; prevents double-ramp per day
+  poolTier      String   @default("standard") // basic|standard|premium
+  startedAt     DateTime @default(now())
+
+  mailbox Mailbox @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+
+  @@map("warmup_configs")
+}
+
+// ─── Sequences (cold outreach drip campaigns) ─────────────────────────────────
+
+model Sequence {
+  id           String   @id @default(cuid())
+  apiKeyId     String
+  mailboxId    String?
+  name         String
+  fromName     String
+  fromEmail    String
+  status       String   @default("active") // active|paused|archived
+  trackOpens   Boolean  @default(true)
+  trackClicks  Boolean  @default(true)
+  stopOnReply       Boolean  @default(true)
+  stopOnOpen        Boolean  @default(false)
+  stopOnClick       Boolean  @default(false)
+  sendDays          String[] @default(["monday","tuesday","wednesday","thursday","friday"])
+  sendStartHour     Int      @default(8)
+  sendEndHour       Int      @default(17)
+  timezone          String   @default("UTC")
+  parentSequenceId  String?  // subsequence: links to parent sequence
+  triggerEvent      String?  // REPLIED|OPENED|CLICKED|NOT_REPLIED_IN_DAYS|NOT_OPENED_IN_DAYS
+  triggerDelayDays  Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  apiKey      ApiKey               @relation(fields: [apiKeyId], references: [id])
+  steps       SequenceStep[]
+  enrollments SequenceEnrollment[]
+
+  @@index([apiKeyId])
+  @@index([parentSequenceId])
+  @@map("sequences")
+}
+
+model SequenceStep {
+  id         String   @id @default(cuid())
+  sequenceId String
+  stepOrder  Int
+  delayDays  Int      @default(0)
+  delayHours Int      @default(0)
+  type       String   @default("email") // email | call | linkedin | task
+  subject    String   @default("")
+  htmlBody   String   @default("")
+  textBody   String?
+  taskNote   String?  // instructions for manual steps (call/linkedin/task)
+  condition  String   @default("always") // always|if_not_opened|if_opened|if_not_clicked|if_not_replied
+  createdAt  DateTime @default(now())
+
+  sequence Sequence          @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  variants SequenceVariant[]
+
+  @@unique([sequenceId, stepOrder])
+  @@map("sequence_steps")
+}
+
+model SequenceVariant {
+  id           String @id @default(cuid())
+  stepId       String
+  variantLabel String // "A", "B", "C"
+  subject      String
+  htmlBody     String
+  textBody     String?
+  weight       Int    @default(50)
+
+  step SequenceStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([stepId])
+  @@map("sequence_variants")
+}
+
+model SequenceEnrollment {
+  id                               String    @id @default(cuid())
+  sequenceId                       String
+  email                            String
+  leadId                           String?
+  mailboxId                        String?   // mailbox used for step 0 — reused for all follow-ups (thread coherence)
+  status                           String    @default("active") // active|paused|completed|unsubscribed|bounced|replied
+  currentStep                      Int       @default(0)
+  nextSendAt                       DateTime?
+  variables                        Json?
+  enrolledAt                       DateTime  @default(now())
+  completedAt                      DateTime?
+  repliedAt                        DateTime?
+  ignoreBlockList                  Boolean   @default(false)
+  ignoreDuplicateInOtherSequences  Boolean   @default(false)
+
+  sequence    Sequence     @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  replyEvents ReplyEvent[]
+
+  @@unique([sequenceId, email])
+  @@index([sequenceId, status, nextSendAt])
+  @@map("sequence_enrollments")
+}
+
+// ─── Leads (cold outreach targets, distinct from newsletter contacts) ─────────
+
+model Lead {
+  id             String    @id @default(cuid())
+  apiKeyId       String
+  email          String
+  firstName      String?
+  lastName       String?
+  company        String?
+  title          String?
+  tags           String[]  @default([])
+  customVars     Json?
+  status         String    @default("active") // active|interested|not_interested|replied|unsubscribed|bounced|do_not_contact
+  repliedAt      DateTime?
+  unsubscribedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  accountId  String?
+  account    Account? @relation(fields: [accountId], references: [id])
+  apiKey     ApiKey   @relation(fields: [apiKeyId], references: [id])
+
+  @@unique([apiKeyId, email])
+  @@index([apiKeyId, status])
+  @@index([accountId])
+  @@map("leads")
+}
+
+// ─── Accounts (company entities that group multiple leads) ────────────────────
+
+model Account {
+  id          String   @id @default(cuid())
+  apiKeyId    String
+  name        String
+  domain      String?
+  industry    String?
+  employees   Int?
+  revenue     String?
+  website     String?
+  linkedin    String?
+  city        String?
+  country     String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+  leads  Lead[]
 
   @@unique([apiKeyId, domain])
   @@index([apiKeyId])
+  @@map("accounts")
 }
 
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model api_keys {
-  id                         String             @id @default(dbgenerated("(gen_random_uuid())::text"))
-  keyHash                    String             @unique
-  keyPrefix                  String
-  label                      String?
-  ownerId                    String?
-  rateLimit                  Int                @default(1000)
-  isActive                   Boolean            @default(true)
-  createdAt                  DateTime           @default(now())
-  revokedAt                  DateTime?
-  userId                     String?
-  keyRaw                     String?
-  monthlyLimit               Int                @default(1000)
-  currentMonthUsage          Int                @default(0)
-  usageResetAt               DateTime?          @default(dbgenerated("date_trunc('month'::text, (now() + '1 mon'::interval))")) @db.Timestamp(6)
-  plan                       String             @default("free")
-  monthlySendLimit           Int                @default(500)
-  currentMonthSendUsage      Int                @default(0)
-  sendUsageResetAt           DateTime           @default(dbgenerated("date_trunc('month'::text, (now() + '1 mon'::interval))"))
-  name                       String?
-  permission                 String             @default("full_access")
-  restrictedDomainId         String?
-  lastUsedAt                 DateTime?
-  org_id                     String?
-  extra_verification_credits Int                @default(0)
-  extra_send_credits         Int                @default(0)
-  allowed_ips                String[]           @default([])
-  usage_alert_enabled        Boolean            @default(true)
-  usage_alert_sent_at        DateTime?          @db.Timestamptz(6)
-  expires_at                 DateTime?          @db.Timestamptz(6)
-  accounts                   accounts[]
-  api_request_logs           api_request_logs[]
-  automations                automations[]
-  bulk_jobs                  bulk_jobs[]
-  campaigns                  campaigns[]
-  contacts                   contacts[]
-  email_templates            email_templates[]
-  inbox_tests                inbox_tests[]
-  leads                      leads[]
-  mailboxes                  mailboxes[]
-  mailing_lists              mailing_lists[]
-  monitors                   monitors[]
-  segments                   segments[]
-  send_messages              send_messages[]
-  sending_domains            sending_domains[]
-  sequences                  sequences[]
-  team_invites               team_invites[]
-  team_members               team_members[]
-  verifications              verifications[]
-  webhooks                   webhooks[]
-  brand_kits                 brand_kits?
-  connector_secrets          connector_secrets[]
-  connector_rules            connector_rules[]
-  connector_events           connector_events[]
+// ─── Reply Events (IMAP-detected replies) ────────────────────────────────────
 
-  @@index([org_id])
-  @@index([userId])
+model ReplyEvent {
+  id                   String    @id @default(cuid())
+  mailboxId            String
+  fromEmail            String
+  inReplyToMessageId   String?
+  enrollmentId         String?
+  campaignRecipientId  String?
+  subject              String?
+  bodySnippet          String?
+  isRead               Boolean   @default(false)
+  status               String    @default("new") // new|interested|not_interested|archived
+  receivedAt           DateTime  @default(now())
+
+  mailbox    Mailbox             @relation(fields: [mailboxId], references: [id])
+  enrollment SequenceEnrollment? @relation(fields: [enrollmentId], references: [id])
+
+  @@index([mailboxId])
+  @@index([enrollmentId])
+  @@map("reply_events")
 }
+
+// ─── Inbox Placement Tests ────────────────────────────────────────────────────
+
+model InboxTest {
+  id        String   @id @default(cuid())
+  apiKeyId  String
+  subject   String
+  fromEmail String
+  domainId  String?
+  status    String   @default("pending") // pending|checking|complete|failed
+  results   Json?
+  score     Int?
+  createdAt DateTime @default(now())
+  checkedAt DateTime?
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+
+  @@index([apiKeyId])
+  @@map("inbox_tests")
+}
+
+// ─── Sequence Templates (curated library) ────────────────────────────────────
+
+model SequenceTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  category    String   @default("cold_outreach") // cold_outreach|follow_up|re_engagement
+  steps       Json
+  createdAt   DateTime @default(now())
+
+  @@map("sequence_templates")
+}
+
+// ─── Email Automations (event-triggered drip — Resend parity) ────────────────
+
+model Automation {
+  id           String   @id @default(cuid())
+  apiKeyId     String   @map("api_key_id")
+  name         String
+  triggerEvent String   @map("trigger_event")
+  status       String   @default("active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  apiKey      ApiKey   @relation(fields: [apiKeyId], references: [id])
+  steps       AutomationStep[]
+  enrollments AutomationEnrollment[]
+
+  @@index([apiKeyId])
+  @@index([apiKeyId, triggerEvent])
+  @@map("automations")
+}
+
+model AutomationStep {
+  id           String  @id @default(cuid())
+  automationId String  @map("automation_id")
+  stepOrder    Int     @map("step_order")
+  delayHours   Int     @default(0) @map("delay_hours")
+  subject      String
+  htmlBody     String  @map("html_body")
+  textBody     String? @map("text_body")
+  fromName     String? @map("from_name")
+  fromEmail    String? @map("from_email")
+  domainId     String? @map("domain_id")
+
+  automation    Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@unique([automationId, stepOrder])
+  @@map("automation_steps")
+}
+
+model AutomationEnrollment {
+  id           String    @id @default(cuid())
+  automationId String    @map("automation_id")
+  email        String
+  data         Json?
+  status       String    @default("active")
+  currentStep  Int       @default(0) @map("current_step")
+  nextSendAt   DateTime? @map("next_send_at")
+  enrolledAt   DateTime  @default(now()) @map("enrolled_at")
+  completedAt  DateTime? @map("completed_at")
+
+  automation    Automation @relation(fields: [automationId], references: [id])
+
+  @@unique([automationId, email])
+  @@index([status, nextSendAt])
+  @@map("automation_enrollments")
+}
+
+// ─── Brand kit + payment connectors (added 2026-09-04, migration
+// 20260904_brand_kit_connectors.sql) — written against, and left in,
+// snake_case model/field naming since that's how routes/brand/index.ts and
+// routes/connectors/payment.ts already call them; unlike the models above,
+// there is no camelCase convention to restore here. ──────────────────────
 
 model brand_kits {
   id            String   @id @default(dbgenerated("(gen_random_uuid())::text"))
@@ -123,7 +1187,7 @@ model brand_kits {
   website_url   String?
   created_at    DateTime @default(now()) @db.Timestamptz(6)
   updated_at    DateTime @default(now()) @updatedAt @db.Timestamptz(6)
-  api_keys      api_keys @relation(fields: [api_key_id], references: [id], onDelete: Cascade)
+  api_keys      ApiKey   @relation(fields: [api_key_id], references: [id], onDelete: Cascade)
 
   @@map("brand_kits")
 }
@@ -134,7 +1198,7 @@ model connector_secrets {
   connector    String
   secret       String
   created_at   DateTime @default(now()) @db.Timestamptz(6)
-  api_keys     api_keys @relation(fields: [api_key_id], references: [id], onDelete: Cascade)
+  api_keys     ApiKey   @relation(fields: [api_key_id], references: [id], onDelete: Cascade)
 
   @@unique([api_key_id, connector])
   @@map("connector_secrets")
@@ -150,7 +1214,7 @@ model connector_rules {
   sequence_id String?
   enabled     Boolean  @default(true)
   created_at  DateTime @default(now()) @db.Timestamptz(6)
-  api_keys    api_keys @relation(fields: [api_key_id], references: [id], onDelete: Cascade)
+  api_keys    ApiKey   @relation(fields: [api_key_id], references: [id], onDelete: Cascade)
 
   @@unique([api_key_id, connector, event_type])
   @@index([api_key_id])
@@ -166,930 +1230,9 @@ model connector_events {
   status       String   @default("received")
   error_msg    String?
   created_at   DateTime @default(now()) @db.Timestamptz(6)
-  api_keys     api_keys @relation(fields: [api_key_id], references: [id], onDelete: Cascade)
+  api_keys     ApiKey   @relation(fields: [api_key_id], references: [id], onDelete: Cascade)
 
   @@index([api_key_id, created_at(sort: Desc)])
   @@index([api_key_id, connector])
   @@map("connector_events")
-}
-
-model api_request_logs {
-  id          String   @id
-  api_key_id  String
-  method      String
-  path        String
-  status_code Int
-  duration_ms Int
-  source_ip   String?
-  request_id  String?
-  error_code  String?
-  created_at  DateTime @default(now()) @db.Timestamptz(6)
-  api_keys    api_keys @relation(fields: [api_key_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-
-  @@index([api_key_id, created_at(sort: Desc)], map: "api_request_logs_api_key_created")
-  @@index([created_at(sort: Desc)], map: "api_request_logs_created")
-}
-
-model audit_logs {
-  id          String   @id
-  org_id      String?
-  api_key_id  String?
-  action      String
-  actor_id    String
-  actor_email String
-  actor_ip    String?
-  targets     Json
-  created_at  DateTime @default(now())
-
-  @@index([api_key_id])
-  @@index([created_at])
-  @@index([org_id])
-}
-
-model automation_enrollments {
-  id            String      @id @default(dbgenerated("(gen_random_uuid())::text"))
-  automation_id String
-  email         String
-  data          Json?
-  status        String      @default("active")
-  current_step  Int         @default(0)
-  next_send_at  DateTime?   @db.Timestamptz(6)
-  enrolled_at   DateTime    @default(now()) @db.Timestamptz(6)
-  completed_at  DateTime?   @db.Timestamptz(6)
-  automations   automations @relation(fields: [automation_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@unique([automation_id, email])
-}
-
-model automation_steps {
-  id            String      @id @default(dbgenerated("(gen_random_uuid())::text"))
-  automation_id String
-  step_order    Int
-  delay_hours   Int         @default(0)
-  subject       String
-  html_body     String
-  text_body     String?
-  from_name     String?
-  from_email    String?
-  domain_id     String?
-  automations   automations @relation(fields: [automation_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-
-  @@unique([automation_id, step_order])
-}
-
-model automations {
-  id                     String                   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  api_key_id             String
-  name                   String
-  trigger_event          String
-  status                 String                   @default("active")
-  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
-  updated_at             DateTime                 @default(now()) @db.Timestamptz(6)
-  automation_enrollments automation_enrollments[]
-  automation_steps       automation_steps[]
-  api_keys               api_keys                 @relation(fields: [api_key_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@index([api_key_id], map: "idx_automations_api_key_id")
-  @@index([api_key_id, trigger_event], map: "idx_automations_api_key_trigger")
-}
-
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model bulk_job_emails {
-  id             String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  bulkJobId      String
-  email          String
-  rowIndex       Int
-  isDuplicate    Boolean   @default(false)
-  status         String?
-  subStatus      String?
-  score          Int?
-  domain         String?
-  isDisposable   Boolean?
-  isRoleAccount  Boolean?
-  mxFound        Boolean?
-  smtpChecked    Boolean?
-  smtpReachable  Boolean?
-  isCatchAll     Boolean?
-  greylisted     Boolean   @default(false)
-  durationMs     Int?
-  verificationId String?
-  errorMessage   String?
-  processedAt    DateTime?
-  syntaxValid    Boolean?
-  spfValid       Boolean?
-  dkimFound      Boolean?
-  dmarcValid     Boolean?
-  blacklisted    Boolean?
-  bulk_jobs      bulk_jobs @relation(fields: [bulkJobId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-
-  @@index([bulkJobId])
-  @@index([bulkJobId, rowIndex], map: "bulk_job_emails_rowIndex_idx")
-  @@index([bulkJobId, status], map: "bulk_job_emails_status_idx")
-}
-
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model bulk_jobs {
-  id              String            @id @default(dbgenerated("(gen_random_uuid())::text"))
-  apiKeyId        String
-  fileName        String
-  storagePath     String
-  totalEmails     Int
-  processedCount  Int               @default(0)
-  validCount      Int               @default(0)
-  invalidCount    Int               @default(0)
-  riskyCount      Int               @default(0)
-  unknownCount    Int               @default(0)
-  duplicateCount  Int               @default(0)
-  errorCount      Int               @default(0)
-  status          BulkJobStatus     @default(pending)
-  errorMessage    String?
-  exportPath      String?
-  createdAt       DateTime          @default(now())
-  startedAt       DateTime?
-  completedAt     DateTime?
-  cancelledAt     DateTime?
-  webhookSent     Boolean           @default(false)
-  bulk_job_emails bulk_job_emails[]
-  api_keys        api_keys          @relation(fields: [apiKeyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  verifications   verifications[]
-
-  @@index([apiKeyId])
-  @@index([createdAt])
-  @@index([status])
-}
-
-model campaign_recipients {
-  id           String    @id
-  campaignId   String
-  contactId    String?
-  email        String
-  status       String    @default("pending")
-  sesMessageId String?
-  sentAt       DateTime?
-  deliveredAt  DateTime?
-  openedAt     DateTime?
-  clickedAt    DateTime?
-  variant      String    @default("a")
-  campaigns    campaigns @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-
-  @@index([campaignId, status])
-  @@index([sesMessageId])
-}
-
-model campaigns {
-  id                  String                @id
-  apiKeyId            String
-  fromName            String
-  fromEmail           String
-  domainId            String?
-  replyTo             String?
-  subject             String
-  htmlBody            String
-  textBody            String?
-  status              String                @default("draft")
-  trackOpens          Boolean               @default(true)
-  trackClicks         Boolean               @default(true)
-  scheduledAt         DateTime?
-  sentAt              DateTime?
-  totalRecipients     Int                   @default(0)
-  sentCount           Int                   @default(0)
-  deliveredCount      Int                   @default(0)
-  openCount           Int                   @default(0)
-  clickCount          Int                   @default(0)
-  bounceCount         Int                   @default(0)
-  complaintCount      Int                   @default(0)
-  sendDays            String[]              @default(["monday", "tuesday", "wednesday", "thursday", "friday"])
-  sendStartHour       Int                   @default(8)
-  sendEndHour         Int                   @default(17)
-  timezone            String                @default("UTC")
-  createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @default(now())
-  name                String                @default("")
-  listIds             String[]              @default([])
-  segmentIds          String[]              @default([])
-  excludeListIds      String[]              @default([])
-  preheader           String?
-  send_days           String[]              @default(["monday", "tuesday", "wednesday", "thursday", "friday"])
-  send_start_hour     Int                   @default(8)
-  send_end_hour       Int                   @default(17)
-  subject_b           String?
-  open_count_b        Int                   @default(0)
-  click_count_b       Int                   @default(0)
-  excluded_emails     String[]              @default([])
-  retarget_of_id      String?
-  send_rate_per_hour  Int?
-  CampaignLists       CampaignLists[]
-  CampaignSegments    CampaignSegments[]
-  campaign_recipients campaign_recipients[]
-  api_keys            api_keys              @relation(fields: [apiKeyId], references: [id])
-
-  @@index([apiKeyId, status])
-}
-
-model contact_list_memberships {
-  id             String        @id
-  contactId      String
-  listId         String
-  status         String        @default("subscribed")
-  gdprConsent    Boolean       @default(false)
-  subscribedAt   DateTime      @default(now())
-  unsubscribedAt DateTime?
-  contacts       contacts      @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  mailing_lists  mailing_lists @relation(fields: [listId], references: [id], onDelete: Cascade)
-
-  @@unique([contactId, listId])
-  @@index([listId, status])
-}
-
-model contacts {
-  id                       String                     @id
-  apiKeyId                 String
-  email                    String
-  firstName                String?
-  lastName                 String?
-  customFields             Json?
-  createdAt                DateTime                   @default(now())
-  updatedAt                DateTime                   @default(now())
-  contact_list_memberships contact_list_memberships[]
-  api_keys                 api_keys                   @relation(fields: [apiKeyId], references: [id])
-
-  @@unique([apiKeyId, email])
-  @@index([apiKeyId])
-}
-
-model email_template_versions {
-  id              String          @id @default(dbgenerated("(gen_random_uuid())::text"))
-  templateId      String
-  version         Int
-  name            String
-  subject         String
-  htmlBody        String
-  textBody        String?
-  variables       Json?
-  savedAt         DateTime        @default(now()) @db.Timestamptz(6)
-  savedBy         String?
-  email_templates email_templates @relation(fields: [templateId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-
-  @@index([templateId, version(sort: Desc)], map: "idx_template_versions_template")
-}
-
-model email_templates {
-  id                      String                    @id
-  apiKeyId                String
-  name                    String
-  subject                 String
-  htmlBody                String
-  textBody                String?
-  variables               Json?
-  createdAt               DateTime                  @default(now())
-  updatedAt               DateTime                  @default(now())
-  preheader               String?
-  email_template_versions email_template_versions[]
-  api_keys                api_keys                  @relation(fields: [apiKeyId], references: [id])
-
-  @@index([apiKeyId])
-}
-
-model inbox_tests {
-  id        String    @id
-  apiKeyId  String
-  subject   String
-  fromEmail String
-  domainId  String?
-  status    String    @default("pending")
-  results   Json?
-  score     Int?
-  createdAt DateTime  @default(now())
-  checkedAt DateTime?
-  api_keys  api_keys  @relation(fields: [apiKeyId], references: [id])
-
-  @@index([apiKeyId])
-}
-
-model leads {
-  id             String    @id
-  apiKeyId       String
-  email          String
-  firstName      String?
-  lastName       String?
-  company        String?
-  title          String?
-  customVars     Json?
-  status         String    @default("active")
-  repliedAt      DateTime?
-  unsubscribedAt DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @default(now())
-  tags           String[]  @default([])
-  accountId      String?
-  accounts       accounts? @relation(fields: [accountId], references: [id])
-  api_keys       api_keys  @relation(fields: [apiKeyId], references: [id])
-
-  @@unique([apiKeyId, email])
-  @@index([accountId])
-  @@index([apiKeyId, status])
-}
-
-model mailboxes {
-  id               String          @id
-  apiKeyId         String
-  type             String
-  label            String?
-  host             String?
-  port             Int?
-  username         String
-  passwordEnc      String?
-  oauthTokenEnc    String?
-  dailyLimit       Int             @default(200)
-  sendDelayMinMs   Int             @default(30000)
-  sendDelayMaxMs   Int             @default(120000)
-  sentToday        Int             @default(0)
-  sentTodayResetAt DateTime        @default(now())
-  status           String          @default("active")
-  lastErrorMsg     String?
-  lastCheckedAt    DateTime?
-  createdAt        DateTime        @default(now())
-  api_keys         api_keys        @relation(fields: [apiKeyId], references: [id])
-  reply_events     reply_events[]
-  warmup_configs   warmup_configs?
-
-  @@index([apiKeyId, status])
-}
-
-model mailing_lists {
-  id                       String                     @id
-  apiKeyId                 String
-  name                     String
-  description              String?
-  contactCount             Int                        @default(0)
-  createdAt                DateTime                   @default(now())
-  updatedAt                DateTime                   @default(now())
-  CampaignLists            CampaignLists[]
-  contact_list_memberships contact_list_memberships[]
-  api_keys                 api_keys                   @relation(fields: [apiKeyId], references: [id])
-
-  @@index([apiKeyId])
-}
-
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model monitor_checks {
-  id             String              @id @default(dbgenerated("(gen_random_uuid())::text"))
-  monitorId      String
-  verificationId String
-  statusChanged  Boolean
-  previousStatus VerificationStatus?
-  newStatus      VerificationStatus
-  source         String              @default("scheduled")
-  checkedAt      DateTime            @default(now())
-  durationMs     Int?
-  webhookSent    Boolean             @default(false)
-  monitors       monitors            @relation(fields: [monitorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@index([checkedAt])
-  @@index([monitorId, checkedAt])
-  @@index([monitorId])
-}
-
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model monitors {
-  id                  String              @id @default(dbgenerated("(gen_random_uuid())::text"))
-  apiKeyId            String
-  email               String
-  intervalHours       Int                 @default(24)
-  isActive            Boolean             @default(true)
-  lastCheckedAt       DateTime?
-  nextCheckAt         DateTime
-  lastStatus          VerificationStatus?
-  consecutiveFailures Int                 @default(0)
-  pausedAt            DateTime?
-  failureReason       String?
-  tags                String[]            @default([])
-  notifyOnAnyChange   Boolean             @default(true)
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @default(now())
-  isPaused            Boolean             @default(false)
-  monitor_checks      monitor_checks[]
-  api_keys            api_keys            @relation(fields: [apiKeyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@unique([apiKeyId, email])
-  @@index([isActive, nextCheckAt])
-  @@index([nextCheckAt])
-}
-
-model org_members {
-  id            String   @id
-  user_id       String
-  org_id        String
-  membership_id String   @unique
-  role          String   @default("member")
-  email         String
-  status        String   @default("active")
-  created_at    DateTime @default(now())
-  updated_at    DateTime @default(now())
-  users         users    @relation(fields: [user_id], references: [id])
-
-  @@unique([user_id, org_id])
-  @@index([org_id])
-}
-
-model org_settings {
-  id           String   @id
-  org_id       String   @unique
-  name         String?
-  domain       String?
-  mfa_required Boolean  @default(false)
-  created_at   DateTime @default(now())
-  updated_at   DateTime @default(now())
-}
-
-model processed_webhooks {
-  id        String   @id
-  source    String
-  createdAt DateTime @default(now()) @db.Timestamp(6)
-}
-
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model profiles {
-  id        String   @id
-  userId    String   @unique
-  email     String
-  fullName  String?
-  plan      String   @default("free")
-  createdAt DateTime @default(now())
-}
-
-model reply_events {
-  id                   String                @id
-  mailboxId            String
-  fromEmail            String
-  inReplyToMessageId   String?
-  enrollmentId         String?
-  campaignRecipientId  String?
-  subject              String?
-  bodySnippet          String?
-  isRead               Boolean               @default(false)
-  status               String                @default("new")
-  receivedAt           DateTime              @default(now())
-  sequence_enrollments sequence_enrollments? @relation(fields: [enrollmentId], references: [id])
-  mailboxes            mailboxes             @relation(fields: [mailboxId], references: [id])
-
-  @@index([enrollmentId])
-  @@index([mailboxId])
-}
-
-model segments {
-  id               String             @id
-  apiKeyId         String
-  listId           String?
-  name             String
-  filterRules      Json
-  createdAt        DateTime           @default(now())
-  CampaignSegments CampaignSegments[]
-  api_keys         api_keys           @relation(fields: [apiKeyId], references: [id])
-
-  @@index([apiKeyId])
-}
-
-model send_events {
-  id            String        @id
-  sendMessageId String
-  type          SendEventType
-  rawPayload    Json
-  occurredAt    DateTime      @default(now())
-  send_messages send_messages @relation(fields: [sendMessageId], references: [id], onDelete: Cascade)
-
-  @@index([sendMessageId])
-}
-
-model send_messages {
-  id               String            @id
-  apiKeyId         String
-  to               String
-  from             String
-  replyTo          String?
-  subject          String
-  sesMessageId     String?           @unique
-  status           SendStatus        @default(queued)
-  errorMessage     String?
-  verificationId   String?
-  createdAt        DateTime          @default(now())
-  sentAt           DateTime?
-  cc               String[]          @default([])
-  bcc              String[]          @default([])
-  scheduledAt      DateTime?
-  templateId       String?
-  tags             Json?
-  trackingToken    String?           @unique
-  domainId         String?
-  idempotencyKey   String?           @unique
-  sequence_step_id String?
-  send_events      send_events[]
-  api_keys         api_keys          @relation(fields: [apiKeyId], references: [id])
-  verifications    verifications?    @relation(fields: [verificationId], references: [id])
-  tracking_events  tracking_events[]
-
-  @@index([apiKeyId, createdAt])
-  @@index([apiKeyId])
-  @@index([sequence_step_id])
-  @@index([sesMessageId])
-}
-
-model sending_domains {
-  id                String    @id
-  apiKeyId          String
-  name              String
-  status            String    @default("pending")
-  region            String    @default("us-east-1")
-  dkimSelector      String
-  dkimPublicKey     String
-  dkimPrivateKeyEnc String
-  spfStatus         String    @default("pending")
-  dkimStatus        String    @default("pending")
-  returnPathStatus  String    @default("pending")
-  trackOpens        Boolean   @default(true)
-  trackClicks       Boolean   @default(true)
-  createdAt         DateTime  @default(now())
-  verifiedAt        DateTime?
-  trackingDomain    String?
-  api_keys          api_keys  @relation(fields: [apiKeyId], references: [id])
-
-  @@unique([apiKeyId, name])
-  @@index([apiKeyId])
-}
-
-model sent_emails {
-  id        String   @id
-  createdAt DateTime @default(now()) @db.Timestamp(6)
-}
-
-model sequence_enrollments {
-  id                                  String         @id
-  sequenceId                          String
-  email                               String
-  leadId                              String?
-  status                              String         @default("active")
-  currentStep                         Int            @default(0)
-  nextSendAt                          DateTime?
-  variables                           Json?
-  enrolledAt                          DateTime       @default(now())
-  completedAt                         DateTime?
-  repliedAt                           DateTime?
-  ignoreDuplicateInOtherSequences     Boolean        @default(false)
-  ignoreBlockList                     Boolean        @default(false)
-  ignore_duplicate_in_other_sequences Boolean        @default(false)
-  mailboxId                           String?
-  reply_events                        reply_events[]
-  sequences                           sequences      @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
-
-  @@unique([sequenceId, email])
-  @@index([sequenceId, status, nextSendAt])
-}
-
-model sequence_steps {
-  id                String              @id
-  sequenceId        String
-  stepOrder         Int
-  delayDays         Int                 @default(0)
-  delayHours        Int                 @default(0)
-  subject           String
-  htmlBody          String
-  textBody          String?
-  condition         String              @default("always")
-  createdAt         DateTime            @default(now())
-  type              String              @default("email")
-  taskNote          String?
-  sequences         sequences           @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
-  sequence_variants sequence_variants[]
-
-  @@unique([sequenceId, stepOrder])
-}
-
-model sequence_templates {
-  id          String   @id
-  name        String
-  description String?
-  category    String   @default("cold_outreach")
-  steps       Json
-  createdAt   DateTime @default(now())
-}
-
-model sequence_variants {
-  id             String         @id
-  stepId         String
-  variantLabel   String
-  subject        String
-  htmlBody       String
-  textBody       String?
-  weight         Int            @default(50)
-  sequence_steps sequence_steps @relation(fields: [stepId], references: [id], onDelete: Cascade)
-
-  @@index([stepId])
-}
-
-model sequences {
-  id                   String                 @id
-  apiKeyId             String
-  mailboxId            String?
-  name                 String
-  fromName             String
-  fromEmail            String
-  status               String                 @default("active")
-  trackOpens           Boolean                @default(true)
-  trackClicks          Boolean                @default(true)
-  stopOnReply          Boolean                @default(true)
-  sendDays             String[]               @default(["monday", "tuesday", "wednesday", "thursday", "friday"])
-  sendStartHour        Int                    @default(8)
-  sendEndHour          Int                    @default(17)
-  timezone             String                 @default("UTC")
-  createdAt            DateTime               @default(now())
-  updatedAt            DateTime               @default(now())
-  triggerEvent         String?
-  stopOnClick          Boolean                @default(false)
-  parentSequenceId     String?
-  triggerDelayDays     Int                    @default(0)
-  stopOnOpen           Boolean                @default(false)
-  trigger_event        String?
-  stop_on_click        Boolean                @default(false)
-  send_days            String[]               @default(["monday", "tuesday", "wednesday", "thursday", "friday"])
-  send_start_hour      Int                    @default(8)
-  send_end_hour        Int                    @default(17)
-  sequence_enrollments sequence_enrollments[]
-  sequence_steps       sequence_steps[]
-  api_keys             api_keys               @relation(fields: [apiKeyId], references: [id])
-
-  @@index([parentSequenceId], map: "idx_sequences_parent")
-  @@index([apiKeyId])
-}
-
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model smtp_cache {
-  id         String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  email      String   @unique
-  reachable  Boolean?
-  isCatchAll Boolean?
-  resultCode Int      @default(0)
-  result     String
-  subResult  String?
-  checkedAt  DateTime @default(now()) @db.Timestamptz(6)
-  expiresAt  DateTime @db.Timestamptz(6)
-
-  @@index([email])
-  @@index([expiresAt], map: "smtp_cache_expires_idx")
-}
-
-model soft_bounce_tracks {
-  id             String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  email          String   @unique
-  api_key_id     String?
-  bounce_count   Int      @default(1)
-  last_bounce_at DateTime @default(now()) @db.Timestamptz(6)
-  created_at     DateTime @default(now()) @db.Timestamptz(6)
-
-  @@index([email], map: "idx_soft_bounce_tracks_email")
-}
-
-model suppressions {
-  id        String            @id
-  email     String            @unique
-  reason    SuppressionReason
-  apiKeyId  String?
-  createdAt DateTime          @default(now())
-
-  @@index([email])
-}
-
-model team_invites {
-  id             String   @id
-  workspaceKeyId String
-  inviteeEmail   String
-  role           String   @default("member")
-  token          String   @unique
-  status         String   @default("pending")
-  expiresAt      DateTime
-  invitedBy      String
-  createdAt      DateTime @default(now())
-  api_keys       api_keys @relation(fields: [workspaceKeyId], references: [id], onDelete: Cascade)
-
-  @@index([inviteeEmail])
-  @@index([token])
-  @@index([workspaceKeyId])
-}
-
-model team_members {
-  id             String   @id
-  workspaceKeyId String
-  email          String
-  role           String   @default("member")
-  invitedBy      String?
-  joinedAt       DateTime @default(now())
-  updatedAt      DateTime @default(now())
-  api_keys       api_keys @relation(fields: [workspaceKeyId], references: [id], onDelete: Cascade)
-
-  @@unique([workspaceKeyId, email])
-  @@index([email])
-}
-
-model tracking_events {
-  id            String         @id
-  sendMessageId String?
-  campaignId    String?
-  sequenceId    String?
-  email         String
-  type          String
-  linkUrl       String?
-  userAgent     String?
-  ip            String?
-  occurredAt    DateTime       @default(now())
-  send_messages send_messages? @relation(fields: [sendMessageId], references: [id])
-
-  @@index([campaignId])
-  @@index([sendMessageId])
-  @@index([sequenceId])
-}
-
-model users {
-  id          String        @id @default(dbgenerated("(gen_random_uuid())::text"))
-  email       String        @unique
-  workos_id   String?       @unique
-  first_name  String?
-  last_name   String?
-  org_id      String?
-  created_at  DateTime      @default(now()) @db.Timestamptz(6)
-  updated_at  DateTime      @default(now()) @db.Timestamptz(6)
-  org_members org_members[]
-
-  @@index([email])
-  @@index([workos_id])
-}
-
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model verifications {
-  id              String             @id @default(dbgenerated("(gen_random_uuid())::text"))
-  email           String
-  domain          String
-  status          VerificationStatus
-  subStatus       String?
-  syntaxValid     Boolean
-  mxFound         Boolean
-  mxRecords       String[]           @default([])
-  isDisposable    Boolean
-  isRoleAccount   Boolean
-  smtpChecked     Boolean
-  smtpReachable   Boolean?
-  smtpRawResponse String?
-  isCatchAll      Boolean?
-  greylisted      Boolean            @default(false)
-  score           Int
-  durationMs      Int
-  checkedAt       DateTime           @default(now())
-  apiKeyId        String
-  bulkJobId       String?
-  sourceIp        String?
-  send_messages   send_messages[]
-  api_keys        api_keys           @relation(fields: [apiKeyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  bulk_jobs       bulk_jobs?         @relation(fields: [bulkJobId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@index([apiKeyId])
-  @@index([bulkJobId])
-  @@index([checkedAt])
-  @@index([email])
-}
-
-model warmup_configs {
-  id             String    @id
-  mailboxId      String    @unique
-  enabled        Boolean   @default(true)
-  targetPerDay   Int       @default(40)
-  currentPerDay  Int       @default(5)
-  rampUpDays     Int       @default(30)
-  poolTier       String    @default("standard")
-  startedAt      DateTime  @default(now())
-  dailyRampUp    Int       @default(2)
-  lastRampDate   String?
-  replyRatePct   Int       @default(20)
-  daily_ramp_up  Int       @default(2)
-  last_ramp_date String?
-  mailboxes      mailboxes @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
-}
-
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model webhook_attempts {
-  id                 String             @id @default(dbgenerated("(gen_random_uuid())::text"))
-  deliveryId         String
-  attemptNumber      Int
-  requestedAt        DateTime
-  respondedAt        DateTime?
-  durationMs         Int?
-  statusCode         Int?
-  responseBody       String?
-  errorType          String?
-  errorMessage       String?
-  success            Boolean            @default(false)
-  webhook_deliveries webhook_deliveries @relation(fields: [deliveryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-
-  @@index([deliveryId])
-  @@index([deliveryId, attemptNumber], map: "webhook_attempts_deliveryId_num_idx")
-}
-
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model webhook_deliveries {
-  id                String             @id @default(dbgenerated("(gen_random_uuid())::text"))
-  webhookId         String
-  event             WebhookEvent
-  eventId           String?
-  payload           Json               @default("{}")
-  attempts          Int                @default(0)
-  maxAttempts       Int                @default(5)
-  nextRetryAt       DateTime?
-  lastAttemptAt     DateTime?
-  statusCode        Int?
-  responseBody      String?
-  errorMessage      String?
-  delivered         Boolean            @default(false)
-  failedPermanently Boolean            @default(false)
-  createdAt         DateTime           @default(now())
-  webhook_attempts  webhook_attempts[]
-  webhooks          webhooks           @relation(fields: [webhookId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@index([delivered, nextRetryAt])
-  @@index([webhookId])
-}
-
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model webhooks {
-  id                    String               @id @default(dbgenerated("(gen_random_uuid())::text"))
-  apiKeyId              String
-  url                   String
-  secret                String
-  events                WebhookEvent[]       @default([])
-  label                 String?
-  description           String?
-  isActive              Boolean              @default(true)
-  createdAt             DateTime             @default(now())
-  lastPingAt            DateTime?
-  lastPingOk            Boolean?
-  totalDeliveries       Int                  @default(0)
-  successCount          Int                  @default(0)
-  failureCount          Int                  @default(0)
-  consecutive_failures  Int                  @default(0)
-  failure_alert_sent_at DateTime?            @db.Timestamptz(6)
-  webhook_deliveries    webhook_deliveries[]
-  api_keys              api_keys             @relation(fields: [apiKeyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@index([apiKeyId])
-}
-
-enum BulkJobStatus {
-  pending
-  processing
-  completed
-  failed
-  cancelled
-}
-
-enum SendEventType {
-  sent
-  delivered
-  bounced
-  complained
-  failed
-}
-
-enum SendStatus {
-  queued
-  sent
-  delivered
-  bounced
-  complained
-  failed
-  opened
-  clicked
-  cancelled
-  scheduled
-}
-
-enum SuppressionReason {
-  hard_bounce
-  complaint
-  manual
-  soft_bounce
-  unsubscribed
-}
-
-enum VerificationStatus {
-  valid
-  invalid
-  risky
-  unknown
-}
-
-enum WebhookEvent {
-  verification_complete
-  bulk_job_complete
-  monitor_status_change
-  email_sent
-  email_delivered
-  email_bounced
-  email_complained
-  email_send_failed
 }
