@@ -44,6 +44,7 @@ import {
   Palette,
   Plug,
   Upload,
+  CheckSquare,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
@@ -272,6 +273,7 @@ const NAV: NavItem[] = [
     icon: GitBranch,
     children: [
       { to: "/dashboard/sequences", label: "Sequences", icon: GitBranch, exact: true },
+      { to: "/dashboard/tasks", label: "Tasks", icon: CheckSquare },
       { to: "/dashboard/accounts", label: "Accounts", icon: Building2 },
       { to: "/dashboard/mailboxes", label: "Mailboxes", icon: Mail },
       { to: "/dashboard/inbox", label: "Unified Inbox", icon: Inbox },

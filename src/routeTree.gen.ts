@@ -56,6 +56,7 @@ import { Route as DashboardSegmentsRouteImport } from './routes/dashboard.segmen
 import { Route as DashboardSequencesRouteImport } from './routes/dashboard.sequences'
 import { Route as DashboardSettingsRouteImport } from './routes/dashboard.settings'
 import { Route as DashboardSuppressionsRouteImport } from './routes/dashboard.suppressions'
+import { Route as DashboardTasksRouteImport } from './routes/dashboard.tasks'
 import { Route as DashboardTeamRouteImport } from './routes/dashboard.team'
 import { Route as DashboardTemplatesRouteImport } from './routes/dashboard.templates'
 import { Route as DashboardToolsRouteImport } from './routes/dashboard.tools'
@@ -302,6 +303,11 @@ const DashboardSuppressionsRoute = DashboardSuppressionsRouteImport.update({
   path: '/suppressions',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardTasksRoute = DashboardTasksRouteImport.update({
+  id: '/tasks',
+  path: '/tasks',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardTeamRoute = DashboardTeamRouteImport.update({
   id: '/team',
   path: '/team',
@@ -400,6 +406,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/sequences': typeof DashboardSequencesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/suppressions': typeof DashboardSuppressionsRoute
+  '/dashboard/tasks': typeof DashboardTasksRoute
   '/dashboard/team': typeof DashboardTeamRoute
   '/dashboard/templates': typeof DashboardTemplatesRoute
   '/dashboard/tools': typeof DashboardToolsRoute
@@ -458,6 +465,7 @@ export interface FileRoutesByTo {
   '/dashboard/sequences': typeof DashboardSequencesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/suppressions': typeof DashboardSuppressionsRoute
+  '/dashboard/tasks': typeof DashboardTasksRoute
   '/dashboard/team': typeof DashboardTeamRoute
   '/dashboard/templates': typeof DashboardTemplatesRoute
   '/dashboard/tools': typeof DashboardToolsRoute
@@ -518,6 +526,7 @@ export interface FileRoutesById {
   '/dashboard/sequences': typeof DashboardSequencesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/suppressions': typeof DashboardSuppressionsRoute
+  '/dashboard/tasks': typeof DashboardTasksRoute
   '/dashboard/team': typeof DashboardTeamRoute
   '/dashboard/templates': typeof DashboardTemplatesRoute
   '/dashboard/tools': typeof DashboardToolsRoute
@@ -579,6 +588,7 @@ export interface FileRouteTypes {
     | '/dashboard/sequences'
     | '/dashboard/settings'
     | '/dashboard/suppressions'
+    | '/dashboard/tasks'
     | '/dashboard/team'
     | '/dashboard/templates'
     | '/dashboard/tools'
@@ -637,6 +647,7 @@ export interface FileRouteTypes {
     | '/dashboard/sequences'
     | '/dashboard/settings'
     | '/dashboard/suppressions'
+    | '/dashboard/tasks'
     | '/dashboard/team'
     | '/dashboard/templates'
     | '/dashboard/tools'
@@ -696,6 +707,7 @@ export interface FileRouteTypes {
     | '/dashboard/sequences'
     | '/dashboard/settings'
     | '/dashboard/suppressions'
+    | '/dashboard/tasks'
     | '/dashboard/team'
     | '/dashboard/templates'
     | '/dashboard/tools'
@@ -1052,6 +1064,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardSuppressionsRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/tasks': {
+      id: '/dashboard/tasks'
+      path: '/tasks'
+      fullPath: '/dashboard/tasks'
+      preLoaderRoute: typeof DashboardTasksRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/team': {
       id: '/dashboard/team'
       path: '/team'
@@ -1186,6 +1205,7 @@ interface DashboardRouteChildren {
   DashboardSequencesRoute: typeof DashboardSequencesRoute
   DashboardSettingsRoute: typeof DashboardSettingsRoute
   DashboardSuppressionsRoute: typeof DashboardSuppressionsRoute
+  DashboardTasksRoute: typeof DashboardTasksRoute
   DashboardTeamRoute: typeof DashboardTeamRoute
   DashboardTemplatesRoute: typeof DashboardTemplatesRoute
   DashboardToolsRoute: typeof DashboardToolsRoute
@@ -1235,6 +1255,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardSequencesRoute: DashboardSequencesRoute,
   DashboardSettingsRoute: DashboardSettingsRoute,
   DashboardSuppressionsRoute: DashboardSuppressionsRoute,
+  DashboardTasksRoute: DashboardTasksRoute,
   DashboardTeamRoute: DashboardTeamRoute,
   DashboardTemplatesRoute: DashboardTemplatesRoute,
   DashboardToolsRoute: DashboardToolsRoute,
