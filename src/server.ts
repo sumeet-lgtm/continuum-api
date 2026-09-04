@@ -269,6 +269,13 @@ async function start(): Promise<void> {
       { port: config.PORT, host: config.HOST, env: config.NODE_ENV },
       'Continuum API started',
     );
+
+    // Warn if SES credentials are present but configuration set is missing —
+    // bounces and complaints will still arrive via SNS, but SES won't apply
+    // dedicated IP pool settings or suppression list rules without it.
+    if (config.AWS_ACCESS_KEY_ID && !config.SES_CONFIGURATION_SET) {
+      logger.warn('SES_CONFIGURATION_SET is not set — SES will send without a configuration set (bounce/complaint tracking via SNS still works, but dedicated IP pools and suppression list rules will not apply)');
+    }
   } catch (err) {
     logger.fatal({ err }, 'Failed to start server');
     process.exit(1);

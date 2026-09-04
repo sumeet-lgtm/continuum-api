@@ -1,7 +1,7 @@
 import { Worker, type Job } from 'bullmq';
 import { QUEUE_CAMPAIGN, redisConnection } from '../lib/queue.js';
 import { prisma } from '../lib/prisma.js';
-import { sendViaSes } from '../lib/ses.js';
+import { sendViaSes, isSesConfigured } from '../lib/ses.js';
 import { generateUnsubToken, generateUnsubHtml } from '../lib/unsubscribe.js';
 import { generateOpenToken, generateClickToken, injectTracking } from '../lib/tracking.js';
 import { processTemplate } from '../lib/spintax.js';
@@ -31,6 +31,15 @@ function isInSendWindow(campaign: { sendDays: string[]; sendStartHour: number; s
 
 export async function processCampaign(job: Job<CampaignJobData>): Promise<void> {
   const { campaignId, apiKeyId } = job.data;
+
+  if (!isSesConfigured()) {
+    await prisma.campaign.update({
+      where: { id: campaignId },
+      data: { status: 'failed', errorMessage: 'Email sending is not configured. Contact support.' } as Record<string, unknown>,
+    });
+    logger.error({ campaignId }, 'Campaign aborted — SES credentials not configured');
+    return;
+  }
 
   const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
   if (!campaign || campaign.status === 'cancelled') return;

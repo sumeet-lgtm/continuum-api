@@ -202,9 +202,21 @@ const envSchema = baseEnvSchema.superRefine((val, ctx) => {
       message: 'API_KEY_SALT must be set to a real value in production — the dev default is not allowed',
     });
   }
-  // Note: ALLOWED_ORIGINS and SMTP_HELO_DOMAIN are not enforced here because
-  // this config is loaded by worker processes that don't serve HTTP or run
-  // SMTP probes. Each service validates these at the point of use instead.
+  if (!val.WORKOS_API_KEY || !val.WORKOS_CLIENT_ID) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['WORKOS_API_KEY'],
+      message: 'WORKOS_API_KEY and WORKOS_CLIENT_ID are required in production — without them all auth routes return 501',
+    });
+  }
+  if (!val.ALLOWED_ORIGINS) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['ALLOWED_ORIGINS'],
+      message: 'ALLOWED_ORIGINS is required in production — without it CORS blocks every dashboard request (origin: false)',
+    });
+  }
+  // Note: SMTP_HELO_DOMAIN is not enforced here because workers don't run SMTP probes.
 });
 
 export type Config = z.infer<typeof envSchema>;
