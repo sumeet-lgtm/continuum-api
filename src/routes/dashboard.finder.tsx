@@ -502,9 +502,9 @@ function FinderPage() {
 
   // ─── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div className="flex gap-6 min-h-[calc(100vh-10rem)]">
+    <div className="flex flex-col md:flex-row gap-6 min-h-[calc(100vh-10rem)]">
       {/* ── Sidebar: filters ───────────────────────────────────────────────── */}
-      <aside className="w-72 shrink-0 space-y-5 overflow-y-auto pr-1">
+      <aside className="w-full md:w-72 shrink-0 space-y-5 overflow-y-auto pr-1">
         <div>
           <h1 className="text-base font-semibold">Find People</h1>
           <p className="text-xs text-muted-foreground mt-0.5">
