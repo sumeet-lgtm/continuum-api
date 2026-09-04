@@ -21,7 +21,7 @@ import { config } from '../../config.js';
 
 const SERVER_INFO = {
   name: 'continuum-api',
-  version: '1.0.0',
+  version: '1.1.0',
 };
 
 const CAPABILITIES = {
@@ -154,6 +154,61 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {},
+    },
+  },
+  {
+    name: 'generate_email',
+    description: 'Generate an AI-written email subject and HTML body. Requires Growth or Scale plan.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type:               { type: 'string', enum: ['cold_outreach', 'follow_up', 'newsletter', 'transactional', 're_engagement'], description: 'Type of email to generate' },
+        about:              { type: 'string', description: 'What the email is about — goal, offer, context' },
+        tone:               { type: 'string', enum: ['professional', 'casual', 'friendly', 'urgent'], description: 'Writing tone' },
+        recipient_name:     { type: 'string', description: 'Recipient name (optional, for personalization)' },
+        recipient_company:  { type: 'string', description: 'Recipient company (optional)' },
+      },
+      required: ['type', 'about'],
+    },
+  },
+  {
+    name: 'generate_sequence',
+    description: 'Generate a full AI-planned multi-channel outreach sequence (email + LinkedIn + tasks). Returns step-by-step plan. Requires Growth or Scale plan.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        icp_description: { type: 'string', description: 'Ideal customer profile — who are you targeting and why?' },
+        goal:            { type: 'string', description: 'What outcome should the sequence achieve?' },
+        tone:            { type: 'string', enum: ['professional', 'casual', 'friendly', 'direct'], description: 'Communication tone' },
+        num_steps:       { type: 'number', description: 'Number of steps (2–10, default 5)' },
+        sender_name:     { type: 'string', description: 'Your name' },
+        sender_company:  { type: 'string', description: 'Your company' },
+      },
+      required: ['icp_description', 'goal'],
+    },
+  },
+  {
+    name: 'classify_reply',
+    description: 'Classify the intent of an inbound reply email — interested, not_interested, out_of_office, meeting_request, etc. Requires Growth or Scale plan.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        subject: { type: 'string', description: 'Reply email subject line' },
+        body:    { type: 'string', description: 'Reply email body text' },
+      },
+      required: ['body'],
+    },
+  },
+  {
+    name: 'list_leads',
+    description: 'List leads in your account with optional filtering by status or keyword search.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['new', 'contacted', 'interested', 'not_interested', 'converted', 'unsubscribed'], description: 'Filter by lead status' },
+        search: { type: 'string', description: 'Search by email, name, or company' },
+        limit:  { type: 'number', description: 'Results to return (max 50, default 20)' },
+      },
     },
   },
 ] as const;
@@ -334,6 +389,101 @@ async function callTool(
           sends:         { used: apiKey.currentMonthSendUsage, limit: apiKey.monthlySendLimit },
         }),
       };
+    }
+
+    case 'generate_email': {
+      if (!config.ANTHROPIC_API_KEY) throw new Error('AI not configured on this account');
+      const tone = String(args['tone'] ?? 'professional');
+      const type = String(args['type'] ?? 'cold_outreach');
+      const about = String(args['about'] ?? '');
+      const recipCtx = args['recipient_name']
+        ? `, for ${String(args['recipient_name'])}${args['recipient_company'] ? ` at ${String(args['recipient_company'])}` : ''}`
+        : '';
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': config.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 2000,
+          system: `You are an expert email copywriter. Tone: ${tone}. Never use "I hope this finds you well".`,
+          messages: [{ role: 'user', content: `Write a ${type} email about: ${about}${recipCtx}. Return JSON: {"subject":"...","body":"<full HTML email body>"}` }],
+        }),
+      });
+      if (!resp.ok) throw new Error('AI generation failed');
+      const aiData = await resp.json() as { content?: Array<{ text?: string }> };
+      const raw = (aiData.content?.[0]?.text?.trim() ?? '{}').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      const match = raw.match(/\{[\s\S]*\}/);
+      try { return { content: text(match ? JSON.parse(match[0]) : { subject: raw.slice(0, 200) }) }; }
+      catch { return { content: text({ subject: raw.slice(0, 200) }) }; }
+    }
+
+    case 'generate_sequence': {
+      if (!config.ANTHROPIC_API_KEY) throw new Error('AI not configured on this account');
+      const icp = String(args['icp_description'] ?? '');
+      const goal = String(args['goal'] ?? '');
+      const seqTone = String(args['tone'] ?? 'professional');
+      const numSteps = Math.min(10, Math.max(2, Number(args['num_steps'] ?? 5)));
+      const senderCtx = [args['sender_name'], args['sender_company']].filter(Boolean).map(String).join(' at ') || 'the sender';
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': config.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 4000,
+          system: `You are an expert outbound sales strategist. Tone: ${seqTone}. Design sequences that convert.`,
+          messages: [{ role: 'user', content: `Design a ${numSteps}-step outreach sequence.\nICP: ${icp}\nGoal: ${goal}\nSender: ${senderCtx}\nAllowed step types: email, linkedin, task\n\nReturn JSON: {"sequence_name":"...","steps":[{"step_order":1,"type":"email|linkedin|task","delay_days":0,"delay_hours":0,"subject":"(email only)","html_body":"<p>(email only)</p>","task_note":"(non-email only)","condition":"always","rationale":"why this step"}]}` }],
+        }),
+      });
+      if (!resp.ok) throw new Error('AI generation failed');
+      const aiData = await resp.json() as { content?: Array<{ text?: string }> };
+      const raw = (aiData.content?.[0]?.text?.trim() ?? '{}').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      try { return { content: text(jsonMatch ? JSON.parse(jsonMatch[0]) : { error: 'parse failed', raw: raw.slice(0, 500) }) }; }
+      catch { return { content: text({ error: 'parse failed', raw: raw.slice(0, 500) }) }; }
+    }
+
+    case 'classify_reply': {
+      if (!config.ANTHROPIC_API_KEY) throw new Error('AI not configured on this account');
+      const replyBody = String(args['body'] ?? '').slice(0, 2000);
+      const replySubject = String(args['subject'] ?? '');
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': config.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 100,
+          system: 'You are an email intent classifier for sales outreach. Return ONLY valid JSON.',
+          messages: [{ role: 'user', content: `Classify this reply.\nSubject: ${replySubject}\nBody: ${replyBody}\n\nReturn JSON: {"category":"interested|not_interested|out_of_office|referral|meeting_request|unsubscribe|question","confidence":0.0,"suggested_action":"reply|close|pause|escalate|unsubscribe"}` }],
+        }),
+      });
+      if (!resp.ok) throw new Error('AI classification failed');
+      const aiData = await resp.json() as { content?: Array<{ text?: string }> };
+      const raw = (aiData.content?.[0]?.text?.trim() ?? '{}').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      try { return { content: text(jsonMatch ? JSON.parse(jsonMatch[0]) : { category: 'unknown', confidence: 0, suggested_action: 'reply' }) }; }
+      catch { return { content: text({ category: 'unknown', confidence: 0, suggested_action: 'reply' }) }; }
+    }
+
+    case 'list_leads': {
+      const where: Record<string, unknown> = { apiKeyId };
+      if (args['status']) where['status'] = String(args['status']);
+      if (args['search']) {
+        const q = String(args['search']);
+        where['OR'] = [
+          { email: { contains: q, mode: 'insensitive' } },
+          { firstName: { contains: q, mode: 'insensitive' } },
+          { lastName: { contains: q, mode: 'insensitive' } },
+          { company: { contains: q, mode: 'insensitive' } },
+        ];
+      }
+      const limit = Math.min(50, Math.max(1, Number(args['limit'] ?? 20)));
+      const leads = await prisma.lead.findMany({
+        where: where as Parameters<typeof prisma.lead.findMany>[0]['where'],
+        select: { id: true, email: true, firstName: true, lastName: true, company: true, title: true, status: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      });
+      return { content: text({ leads, count: leads.length }) };
     }
 
     default:

@@ -183,6 +183,26 @@ export async function processSequenceTick(): Promise<void> {
       continue;
     }
 
+    // Non-email steps (linkedin, task) are manual-action placeholders.
+    // Advance the enrollment without sending or charging send credits.
+    const stepType = (step as { type?: string }).type ?? 'email';
+    if (stepType !== 'email') {
+      const nextStep = steps[nextStepIndex + 1];
+      const nextSendAt = nextStep
+        ? new Date(now.getTime() + (nextStep.delayDays * 24 * 60 * 60 * 1000) + (nextStep.delayHours * 60 * 60 * 1000))
+        : null;
+      const isLastStep = nextStep === undefined;
+      await prisma.sequenceEnrollment.update({
+        where: { id: enrollment.id },
+        data: {
+          currentStep: nextStepIndex + 1,
+          nextSendAt,
+          ...(isLastStep && { status: 'completed', completedAt: now }),
+        },
+      });
+      continue;
+    }
+
     // Build personalization vars — merge lead customVars (AI-enriched fields like
     // {{icebreaker}}, {{company_description}}, {{pain_point}}) so they are
     // available in every sequence step template without re-generation at send time.

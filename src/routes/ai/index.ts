@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
+import { requireMonthlyQuota, incrementUsage, incrementUsageBy } from '../../plugins/usageMeter.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
@@ -177,7 +178,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/ai/personalize
   fastify.post(
     '/ai/personalize',
-    { preHandler: [requireAuth, requireRateLimit] },
+    { preHandler: [requireAuth, requireRateLimit, requireMonthlyQuota] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       if (!config.AI_PERSONALIZATION_ENABLED) {
         throw Errors.forbidden('AI personalization is not enabled on this account. Contact support to enable it.');
@@ -215,6 +216,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
         }),
       );
 
+      void incrementUsageBy(request.apiKey!.id, leads.length);
       return reply.status(200).send({
         results,
         model: 'claude-haiku-4-5-20251001',
@@ -226,7 +228,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/ai/generate-email — generate full email content (Growth+ plan)
   fastify.post(
     '/ai/generate-email',
-    { preHandler: [requireAuth, requireRateLimit] },
+    { preHandler: [requireAuth, requireRateLimit, requireMonthlyQuota] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       if (!config.AI_PERSONALIZATION_ENABLED) {
         throw Errors.forbidden('AI features are not enabled on this account.');
@@ -243,6 +245,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
 
       try {
         const variants = await generateEmailContent(parsed.data, anthropicKey);
+        void incrementUsageBy(request.apiKey!.id, Math.max(1, variants.length));
         return reply.status(200).send({
           variants,
           model: 'claude-haiku-4-5-20251001',
@@ -259,7 +262,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/ai/classify-reply — classify an inbound reply email (Growth+ plan)
   fastify.post(
     '/ai/classify-reply',
-    { preHandler: [requireAuth, requireRateLimit] },
+    { preHandler: [requireAuth, requireRateLimit, requireMonthlyQuota] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       if (!config.AI_PERSONALIZATION_ENABLED) {
         throw Errors.forbidden('AI features are not enabled on this account.');
@@ -276,6 +279,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
 
       try {
         const result = await classifyReplyContent(parsed.data.subject ?? '', parsed.data.body, anthropicKey);
+        void incrementUsage(request.apiKey!.id);
         return reply.status(200).send({ ...result, model: 'claude-haiku-4-5-20251001' });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'classify failed';
@@ -288,7 +292,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/ai/generate-sequence — AI brief → full multi-channel sequence plan (Growth+ plan)
   fastify.post(
     '/ai/generate-sequence',
-    { preHandler: [requireAuth, requireRateLimit] },
+    { preHandler: [requireAuth, requireRateLimit, requireMonthlyQuota] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       if (!config.AI_PERSONALIZATION_ENABLED) {
         throw Errors.forbidden('AI features are not enabled on this account.');
@@ -382,6 +386,7 @@ Return ONLY valid JSON in this exact format:
           result = { sequence_name: 'Generated Sequence', steps: [] };
         }
 
+        void incrementUsage(request.apiKey!.id);
         return reply.status(200).send({
           sequence_name: result.sequence_name ?? 'Generated Sequence',
           steps: result.steps ?? [],
