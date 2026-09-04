@@ -10,6 +10,89 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { cn } from "@/lib/utils";
 import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target, Play, Trophy, Sparkles, Bold, Italic, Underline, List, ListOrdered, Link, AlignLeft, AlignCenter, AlignRight, Code2, Minus } from "lucide-react";
 
+// ── Subject line scorer (client-side, no API) ─────────────────────────────────
+
+const SPAM_TRIGGERS = [
+  "free","urgent","act now","click here","limited time","no obligation","guaranteed",
+  "winner","congratulations","prize","dear friend","make money","work from home",
+  "buy now","order now","earn","$$","100%","risk-free","special promotion",
+  "double your","extra income","increase sales","as seen on","cash bonus",
+  "you have been selected","this is not spam","buy direct","lowest price",
+  "no hidden","incredible deal","once in a lifetime","only for you","be your own boss",
+  "lose weight","amazing","incredible","miracle","stop snoring","enlarge",
+];
+
+function scoreSubject(s: string): { score: number; hints: Array<{ type: "ok"|"warn"|"bad"; text: string }> } {
+  if (!s.trim()) return { score: 0, hints: [] };
+  const hints: Array<{ type: "ok"|"warn"|"bad"; text: string }> = [];
+  let score = 70;
+  const len = s.length;
+
+  // Length
+  if (len < 15)       { score -= 25; hints.push({ type: "bad",  text: `Too short (${len} chars — aim for 30–50)` }); }
+  else if (len < 28)  { score -= 8;  hints.push({ type: "warn", text: `Short (${len} chars — aim for 30–50)` }); }
+  else if (len <= 50) { score += 15; hints.push({ type: "ok",   text: `Good length (${len} chars)` }); }
+  else if (len <= 65) { score -= 5;  hints.push({ type: "warn", text: `Slightly long (${len} chars)` }); }
+  else                { score -= 18; hints.push({ type: "bad",  text: `Too long — may be clipped (${len} chars)` }); }
+
+  // Spam triggers
+  const lower = s.toLowerCase();
+  const hits = SPAM_TRIGGERS.filter((t) => lower.includes(t));
+  if (hits.length > 0) {
+    score -= Math.min(35, hits.length * 12);
+    hints.push({ type: "bad", text: `Spam trigger${hits.length > 1 ? "s" : ""}: "${hits.slice(0, 2).join('", "')}"` });
+  }
+
+  // ALL CAPS words
+  const capsWords = s.match(/\b[A-Z]{3,}\b/g) ?? [];
+  if (capsWords.length > 1) { score -= 12; hints.push({ type: "bad",  text: "Multiple ALL-CAPS words hurt deliverability" }); }
+  else if (capsWords.length === 1) { score -= 4; hints.push({ type: "warn", text: `ALL-CAPS word detected: "${capsWords[0]}"` }); }
+
+  // Excessive punctuation
+  if (/[!?]{2,}/.test(s)) { score -= 10; hints.push({ type: "bad", text: "Avoid repeated ! or ?" }); }
+  else if (/[!]/.test(s)) { score -= 3;  hints.push({ type: "warn", text: "Exclamation points reduce trust" }); }
+
+  // Emojis
+  const emojiCount = [...s].filter((c) => /\p{Emoji}/u.test(c) && c !== ' ').length;
+  if (emojiCount > 3)      { score -= 8;  hints.push({ type: "warn", text: `${emojiCount} emojis — keep to 1–2` }); }
+  else if (emojiCount > 0) { score += 4;  hints.push({ type: "ok",   text: `${emojiCount} emoji — nice` }); }
+
+  // Personalization
+  if (/\{\{/.test(s)) { score += 8; hints.push({ type: "ok", text: "Personalization variable boosts open rates" }); }
+
+  // Numbers
+  if (/\d/.test(s)) { score += 4; hints.push({ type: "ok", text: "Numbers draw attention" }); }
+
+  // Question
+  if (s.trimEnd().endsWith("?")) { score += 3; hints.push({ type: "ok", text: "Question format can increase curiosity" }); }
+
+  return { score: Math.max(0, Math.min(100, score)), hints: hints.slice(0, 4) };
+}
+
+function SubjectScorer({ subject }: { subject: string }) {
+  if (!subject.trim()) return null;
+  const { score, hints } = scoreSubject(subject);
+  const color = score >= 75 ? "oklch(0.55 0.16 145)" : score >= 50 ? "oklch(0.65 0.18 75)" : "oklch(0.55 0.22 25)";
+  const label = score >= 75 ? "Strong" : score >= 50 ? "Fair" : "Needs work";
+  return (
+    <div className="mt-1.5 rounded-md border border-border bg-muted/30 px-3 py-2 space-y-1.5">
+      <div className="flex items-center gap-2">
+        <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+          <div className="h-full rounded-full transition-all duration-300" style={{ width: `${score}%`, background: color }} />
+        </div>
+        <span className="text-xs font-medium shrink-0 tabular-nums" style={{ color }}>{score}/100 · {label}</span>
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+        {hints.map((h, i) => (
+          <span key={i} className="text-[11px] leading-relaxed" style={{ color: h.type === "ok" ? "oklch(0.55 0.16 145)" : h.type === "warn" ? "oklch(0.60 0.18 75)" : "oklch(0.55 0.22 25)" }}>
+            {h.type === "ok" ? "✓" : "⚠"} {h.text}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
   component: CampaignsPage,
@@ -627,6 +710,7 @@ function CampaignsPage() {
               </button>
             </div>
             <Input placeholder="Your May update is here" value={form.subject} onChange={(e) => setForm((f) => ({ ...f, subject: e.target.value }))} />
+            <SubjectScorer subject={form.subject} />
             {showSubjectIdeas && (
               <div className="rounded-md border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-950/30 p-3 space-y-1.5">
                 <div className="flex items-center justify-between">
