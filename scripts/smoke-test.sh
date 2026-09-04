@@ -49,21 +49,17 @@ check() {
   local LABEL="$1"
   local EXPECTED_STATUS="$2"
   local METHOD="$3"
-  local PATH="$4"
+  local REQ_PATH="$4"
   local DATA="${5:-}"
-  local EXTRA_FLAGS="${6:-}"
+  local NO_AUTH="${6:-}"  # pass "noauth" to omit the Authorization header entirely
 
-  local FLAGS=(-s -o /dev/null -w "%{http_code}" -X "$METHOD" "${BASE_URL}${PATH}")
-  FLAGS+=(-H "Authorization: Bearer ${API_KEY}")
+  local FLAGS=(-s -o /dev/null -w "%{http_code}" -X "$METHOD" "${BASE_URL}${REQ_PATH}")
+  if [ "$NO_AUTH" != "noauth" ]; then
+    FLAGS+=(-H "Authorization: Bearer ${API_KEY}")
+  fi
 
   if [ -n "$DATA" ]; then
     FLAGS+=(-H "Content-Type: application/json" -d "$DATA")
-  fi
-
-  # shellcheck disable=SC2206
-  if [ -n "$EXTRA_FLAGS" ]; then
-    read -ra EXTRA <<< "$EXTRA_FLAGS"
-    FLAGS+=("${EXTRA[@]}")
   fi
 
   local STATUS
@@ -80,12 +76,11 @@ check() {
 
 # System
 check "GET /health (no auth)"               "200" GET "/health"
-check "GET /health/live"                    "200" GET "/health/live" "" "" "-H 'Authorization:'"
-check "GET / root info"                     "200" GET "/" "" "" "-H 'Authorization:'"
+check "GET /health/live"                    "200" GET "/health/live" "" "noauth"
+check "GET / root info"                     "200" GET "/" "" "noauth"
 
 # Auth
-check "POST /v1/verify — no key → 401"     "401" POST "/v1/verify" '{"email":"x@x.com"}' \
-  "-H 'Authorization:' -H 'Content-Type: application/json'"
+check "POST /v1/verify — no key → 401"     "401" POST "/v1/verify" '{"email":"x@x.com"}' "noauth"
 
 # Verify
 check "POST /v1/verify — valid email"       "200" POST "/v1/verify" \

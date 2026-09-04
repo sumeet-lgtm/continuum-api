@@ -9,22 +9,13 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import crypto from 'node:crypto';
+import { hashApiKey, generateApiKey, getKeyPrefix } from '../src/lib/crypto.js';
 
-// Inline minimal config so the script works without the full src/ tree compiled
-const salt = process.env['API_KEY_SALT'] ?? 'dev-salt-change-in-production';
-
-function hashApiKey(rawKey: string): string {
-  return crypto.createHash('sha256').update(salt + rawKey).digest('hex');
-}
-
-function generateApiKey(): string {
-  return `cnt_${crypto.randomBytes(24).toString('hex')}`;
-}
-
-function getKeyPrefix(rawKey: string): string {
-  return rawKey.slice(0, 12); // "cnt_" + 8 chars
-}
+// hashApiKey/generateApiKey/getKeyPrefix come from the real lib/crypto.ts —
+// this file used to reimplement them inline as sha256(API_KEY_SALT +
+// rawKey), which doesn't match plugins/auth.ts's actual sha256(rawKey) (no
+// salt). Every key this script ever generated hashed to something the real
+// auth check would never find, so it authenticated nowhere.
 
 function parseArgs(): { label?: string; owner?: string; rpm: number } {
   const args = process.argv.slice(2);
