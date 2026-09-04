@@ -1064,12 +1064,17 @@ model ReplyEvent {
   mailboxId            String
   fromEmail            String
   inReplyToMessageId   String?
+  // The prospect's own Message-ID header — distinct from inReplyToMessageId
+  // (what THEY were replying to). Needed to thread our reply-to-the-reply
+  // correctly (In-Reply-To/References) instead of starting a new thread.
+  messageId            String?
   enrollmentId         String?
   campaignRecipientId  String?
   subject              String?
   bodySnippet          String?
   isRead               Boolean   @default(false)
   status               String    @default("new") // new|interested|not_interested|archived
+  repliedAt            DateTime?
   receivedAt           DateTime  @default(now())
 
   mailbox    Mailbox             @relation(fields: [mailboxId], references: [id])

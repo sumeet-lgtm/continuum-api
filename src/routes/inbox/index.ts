@@ -1,8 +1,14 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
+import { sendViaSmtp } from '../../lib/smtp.js';
+
+const replySchema = z.object({
+  body: z.string().min(1, 'Reply body is required').max(20000),
+});
 
 export async function inboxRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /v1/inbox — all replies across mailboxes
@@ -79,5 +85,80 @@ export async function inboxRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     return reply.status(200).send({ updated: true, id });
+  });
+
+  // POST /v1/inbox/:id/reply — send an actual reply, from the mailbox that
+  // received the original message, threaded back into the same conversation.
+  fastify.post('/inbox/:id/reply', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const parsed = replySchema.safeParse(request.body);
+    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+    const event = await prisma.replyEvent.findFirst({
+      where: { id, mailbox: { apiKeyId } },
+      include: { mailbox: true },
+    });
+    if (!event) throw Errors.notFound('Reply not found.');
+
+    const { mailbox } = event;
+    if (!mailbox.host || !(mailbox.passwordEnc || mailbox.oauthTokenEnc)) {
+      throw Errors.validationFailed({
+        mailbox: 'This mailbox has no working SMTP credentials — check it under Mailboxes before replying.',
+      });
+    }
+
+    const subject = event.subject && /^re:/i.test(event.subject.trim())
+      ? event.subject
+      : `Re: ${event.subject ?? '(no subject)'}`;
+
+    // Thread back into the same conversation: reference the prospect's own
+    // message if we captured it, falling back to what they themselves were
+    // replying to — either still gets picked up by every major mail client's
+    // threading, just less precisely the further back it falls.
+    const threadId = event.messageId || event.inReplyToMessageId;
+    const headers: Record<string, string> = {};
+    if (threadId) {
+      headers['In-Reply-To'] = `<${threadId}>`;
+      headers['References'] = `<${threadId}>`;
+    }
+
+    const { body } = parsed.data;
+    try {
+      await sendViaSmtp(
+        {
+          host: mailbox.host,
+          port: mailbox.port ?? 587,
+          username: mailbox.username,
+          passwordEnc: mailbox.passwordEnc,
+          oauthTokenEnc: mailbox.oauthTokenEnc,
+        },
+        {
+          from: mailbox.username,
+          to: event.fromEmail,
+          subject,
+          textBody: body,
+          htmlBody: `<p>${body.replace(/\n/g, '<br>')}</p>`,
+          headers,
+        },
+      );
+    } catch (err) {
+      // A real SMTP rejection (bad auth, throttled, recipient refused) is
+      // the mailbox/recipient's problem, not a malformed request — same
+      // "200 with ok:false" shape as the mailbox test-connection endpoint,
+      // so the dashboard can show the actual reason instead of a generic
+      // error banner.
+      return reply.status(200).send({
+        sent: false,
+        error: err instanceof Error ? err.message : 'SMTP send failed',
+      });
+    }
+
+    await prisma.replyEvent.update({
+      where: { id },
+      data: { isRead: true, repliedAt: new Date() },
+    });
+
+    return reply.status(200).send({ sent: true, id });
   });
 }

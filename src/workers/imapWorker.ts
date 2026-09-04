@@ -121,6 +121,7 @@ async function pollMailboxes(): Promise<void> {
         const parsed = imap2.default?.parseHeader?.(header.body as string) ?? {};
 
         const inReplyTo = (parsed['in-reply-to']?.[0] ?? '').replace(/[<>]/g, '');
+        const messageId = (parsed['message-id']?.[0] ?? '').replace(/[<>]/g, '');
         const fromEmail = (parsed['from']?.[0] ?? '').match(/<(.+?)>|(.+)/)?.[1] ?? '';
         const subject = parsed['subject']?.[0] ?? '';
 
@@ -163,7 +164,8 @@ async function pollMailboxes(): Promise<void> {
               await prisma.replyEvent.create({
                 data: {
                   mailboxId: mailbox.id, fromEmail: fromEmail.toLowerCase(),
-                  inReplyToMessageId: inReplyTo || null, enrollmentId: enrollment.id,
+                  inReplyToMessageId: inReplyTo || null, messageId: messageId || null,
+                  enrollmentId: enrollment.id,
                   subject: subject || null, bodySnippet: bodySnippet || null,
                 },
               }).catch(() => {});
@@ -233,6 +235,7 @@ async function pollMailboxes(): Promise<void> {
             mailboxId: mailbox.id,
             fromEmail: fromEmail.toLowerCase(),
             inReplyToMessageId: inReplyTo || null,
+            messageId: messageId || null,
             enrollmentId: enrollmentId,
             subject: subject || null,
             bodySnippet: bodySnippet || null,
