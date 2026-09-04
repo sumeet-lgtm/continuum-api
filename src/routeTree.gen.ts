@@ -18,6 +18,7 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
+import { Route as DashboardImportRouteImport } from './routes/dashboard.import'
 import { Route as DashboardAiRouteImport } from './routes/dashboard.ai'
 import { Route as DashboardAnalyticsRouteImport } from './routes/dashboard.analytics'
 import { Route as DashboardApiKeysRouteImport } from './routes/dashboard.api-keys'
@@ -189,6 +190,11 @@ const DashboardDeliverabilityRoute = DashboardDeliverabilityRouteImport.update({
 const DashboardDomainsRoute = DashboardDomainsRouteImport.update({
   id: '/domains',
   path: '/domains',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardImportRoute = DashboardImportRouteImport.update({
+  id: '/import',
+  path: '/import',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardInboxRoute = DashboardInboxRouteImport.update({
@@ -373,6 +379,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/deliverability': typeof DashboardDeliverabilityRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
+  '/dashboard/import': typeof DashboardImportRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
   '/dashboard/ip': typeof DashboardIpRoute
@@ -431,6 +438,7 @@ export interface FileRoutesByTo {
   '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/deliverability': typeof DashboardDeliverabilityRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
+  '/dashboard/import': typeof DashboardImportRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
   '/dashboard/ip': typeof DashboardIpRoute
@@ -491,6 +499,7 @@ export interface FileRoutesById {
   '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/deliverability': typeof DashboardDeliverabilityRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
+  '/dashboard/import': typeof DashboardImportRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
   '/dashboard/ip': typeof DashboardIpRoute
@@ -550,6 +559,7 @@ export interface FileRouteTypes {
     | '/dashboard/contacts'
     | '/dashboard/deliverability'
     | '/dashboard/domains'
+    | '/dashboard/import'
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
     | '/dashboard/ip'
@@ -604,6 +614,7 @@ export interface FileRouteTypes {
     | '/dashboard/contacts'
     | '/dashboard/deliverability'
     | '/dashboard/domains'
+    | '/dashboard/import'
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
     | '/dashboard/ip'
@@ -660,6 +671,7 @@ export interface FileRouteTypes {
     | '/dashboard/contacts'
     | '/dashboard/deliverability'
     | '/dashboard/domains'
+    | '/dashboard/import'
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
     | '/dashboard/ip'
@@ -885,6 +897,13 @@ declare module '@tanstack/react-router' {
       path: '/domains'
       fullPath: '/dashboard/domains'
       preLoaderRoute: typeof DashboardDomainsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/import': {
+      id: '/dashboard/import'
+      path: '/import'
+      fullPath: '/dashboard/import'
+      preLoaderRoute: typeof DashboardImportRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/inbox': {
@@ -1118,6 +1137,7 @@ interface DashboardRouteChildren {
   DashboardContactsRoute: typeof DashboardContactsRoute
   DashboardDeliverabilityRoute: typeof DashboardDeliverabilityRoute
   DashboardDomainsRoute: typeof DashboardDomainsRoute
+  DashboardImportRoute: typeof DashboardImportRoute
   DashboardInboxRoute: typeof DashboardInboxRoute
   DashboardInboxTestRoute: typeof DashboardInboxTestRoute
   DashboardIpRoute: typeof DashboardIpRoute
@@ -1168,6 +1188,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardContactsRoute: DashboardContactsRoute,
   DashboardDeliverabilityRoute: DashboardDeliverabilityRoute,
   DashboardDomainsRoute: DashboardDomainsRoute,
+  DashboardImportRoute: DashboardImportRoute,
   DashboardInboxRoute: DashboardInboxRoute,
   DashboardInboxTestRoute: DashboardInboxTestRoute,
   DashboardIpRoute: DashboardIpRoute,
