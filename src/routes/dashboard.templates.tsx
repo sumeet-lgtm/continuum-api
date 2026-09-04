@@ -555,6 +555,8 @@ function TemplatesPage() {
   const [editSaving, setEditSaving] = useState(false);
   const [editMode, setEditMode] = useState<"html" | "visual">("html");
   const [editBlocks, setEditBlocks] = useState<Block[]>(defaultBlocks);
+  const [createMode, setCreateMode] = useState<"html" | "visual">("visual");
+  const [createBlocks, setCreateBlocks] = useState<Block[]>(defaultBlocks);
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
   const [historyTemplate, setHistoryTemplate] = useState<Template | null>(null);
 
@@ -574,11 +576,14 @@ function TemplatesPage() {
   const create = async () => {
     if (!primaryKey?.keyRaw) return;
     setSaving(true);
+    const html_body = createMode === "visual" ? blocksToHtml(createBlocks) : form.html;
     try {
-      await api.withKey.post("/v1/templates", { name: form.name, subject: form.subject, preheader: form.preheader || undefined, html_body: form.html }, primaryKey.keyRaw);
+      await api.withKey.post("/v1/templates", { name: form.name, subject: form.subject, preheader: form.preheader || undefined, html_body }, primaryKey.keyRaw);
       toast.success("Template created");
       setCreating(false);
       setForm({ name: "", subject: "", preheader: "", html: "" });
+      setCreateBlocks(defaultBlocks());
+      setCreateMode("visual");
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }
@@ -712,7 +717,26 @@ function TemplatesPage() {
       {/* Create form */}
       {creating && (
         <div className="rounded-lg border border-border bg-card p-6 space-y-4 max-w-2xl">
-          <h2 className="text-sm font-semibold">New Template</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold">New Template</h2>
+            <div className="flex rounded-md border border-border overflow-hidden text-xs">
+              <button
+                onClick={() => setCreateMode("visual")}
+                className={`flex items-center gap-1 px-2.5 py-1 ${createMode === "visual" ? "bg-foreground text-background" : "hover:bg-muted"}`}
+              >
+                <Layers className="h-3 w-3" /> Visual
+              </button>
+              <button
+                onClick={() => {
+                  if (createMode === "visual") setForm((f) => ({ ...f, html: blocksToHtml(createBlocks) }));
+                  setCreateMode("html");
+                }}
+                className={`flex items-center gap-1 px-2.5 py-1 border-l border-border ${createMode === "html" ? "bg-foreground text-background" : "hover:bg-muted"}`}
+              >
+                <Code2 className="h-3 w-3" /> HTML
+              </button>
+            </div>
+          </div>
           <div className="space-y-1.5">
             <Label>Name</Label>
             <Input placeholder="Welcome Email" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
@@ -728,19 +752,25 @@ function TemplatesPage() {
             </div>
             <Input maxLength={200} placeholder="Short preview text shown after subject in inbox…" value={form.preheader} onChange={(e) => setForm((f) => ({ ...f, preheader: e.target.value }))} />
           </div>
-          <div className="space-y-1.5">
-            <Label>HTML Body</Label>
-            <textarea
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[120px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              placeholder="<p>Hi {{first_name}},</p>"
-              value={form.html}
-              onChange={(e) => setForm((f) => ({ ...f, html: e.target.value }))}
-            />
-          </div>
+
+          {createMode === "visual" ? (
+            <VisualEditor blocks={createBlocks} onChange={setCreateBlocks} />
+          ) : (
+            <div className="space-y-1.5">
+              <Label>HTML Body</Label>
+              <textarea
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[120px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="<p>Hi {{first_name}},</p>"
+                value={form.html}
+                onChange={(e) => setForm((f) => ({ ...f, html: e.target.value }))}
+              />
+            </div>
+          )}
+
           <p className="text-xs text-muted-foreground">Use {"{{variable_name}}"} syntax in subject and body. Pass values in the <code>variables</code> field when sending.</p>
           <div className="flex gap-2">
             <Button onClick={create} disabled={saving}>{saving ? "Saving…" : "Create Template"}</Button>
-            <Button variant="outline" onClick={() => setCreating(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setCreating(false); setCreateBlocks(defaultBlocks()); setCreateMode("visual"); }}>Cancel</Button>
           </div>
         </div>
       )}
