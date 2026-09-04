@@ -69,7 +69,7 @@ function EmailPreview({ kit }: { kit: BrandKit }) {
         </div>
         {/* Body */}
         <div className="border border-t-0 border-border rounded-b-md px-6 py-5 bg-white dark:bg-background">
-          <p className="text-sm font-medium mb-2" style={{ fontFamily: font }}>Hi {{first_name}},</p>
+          <p className="text-sm font-medium mb-2" style={{ fontFamily: font }}>{"Hi {{first_name}},"}</p>
           <p className="text-sm text-muted-foreground mb-4" style={{ fontFamily: font }}>
             Your payment of <strong>$99.00</strong> has been received. Thank you for your continued trust in {company}.
           </p>
