@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -694,7 +694,14 @@ function SequencesPage() {
                 <p className="text-xs text-muted-foreground">No mailbox selected — fill from/email manually below</p>
               )}
             </div>
-          ) : null}
+          ) : (
+            <div className="rounded-md border border-dashed border-border bg-muted/20 px-4 py-3 text-center">
+              <p className="text-xs text-muted-foreground">No mailboxes connected — outbound sequences require a sending mailbox.</p>
+              <Link to="/dashboard/mailboxes" className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-foreground underline underline-offset-2 hover:no-underline">
+                Connect your first mailbox →
+              </Link>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">

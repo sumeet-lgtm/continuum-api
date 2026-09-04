@@ -41,6 +41,8 @@ import {
   X,
   Calendar,
   ArrowRightLeft,
+  Palette,
+  Plug,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
@@ -286,6 +288,8 @@ const NAV: NavItem[] = [
   },
 
   { to: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
+  { to: "/dashboard/brand-kit", label: "Brand Kit", icon: Palette },
+  { to: "/dashboard/connectors", label: "Connectors", icon: Plug },
   { to: "/dashboard/webhooks", label: "Webhooks", icon: Webhook },
   { to: "/dashboard/organization", label: "Organization", icon: Building2 },
   { to: "/dashboard/usage", label: "Usage & Limits", icon: Zap },

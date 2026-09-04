@@ -27,6 +27,7 @@ import { Route as DashboardPrivacyRouteImport } from './routes/dashboard.privacy
 import { Route as DashboardAutomationsRouteImport } from './routes/dashboard.automations'
 import { Route as DashboardBatchSendRouteImport } from './routes/dashboard.batch-send'
 import { Route as DashboardBillingRouteImport } from './routes/dashboard.billing'
+import { Route as DashboardBrandKitRouteImport } from './routes/dashboard.brand-kit'
 import { Route as DashboardBulkRouteImport } from './routes/dashboard.bulk'
 import { Route as DashboardCampaignsRouteImport } from './routes/dashboard.campaigns'
 import { Route as DashboardConnectorsRouteImport } from './routes/dashboard.connectors'
@@ -153,6 +154,11 @@ const DashboardBatchSendRoute = DashboardBatchSendRouteImport.update({
 const DashboardBillingRoute = DashboardBillingRouteImport.update({
   id: '/billing',
   path: '/billing',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardBrandKitRoute = DashboardBrandKitRouteImport.update({
+  id: '/brand-kit',
+  path: '/brand-kit',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardBulkRoute = DashboardBulkRouteImport.update({
@@ -360,6 +366,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
+  '/dashboard/brand-kit': typeof DashboardBrandKitRoute
   '/dashboard/bulk': typeof DashboardBulkRoute
   '/dashboard/campaigns': typeof DashboardCampaignsRoute
   '/dashboard/connectors': typeof DashboardConnectorsRoute
@@ -417,6 +424,7 @@ export interface FileRoutesByTo {
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
+  '/dashboard/brand-kit': typeof DashboardBrandKitRoute
   '/dashboard/bulk': typeof DashboardBulkRoute
   '/dashboard/campaigns': typeof DashboardCampaignsRoute
   '/dashboard/connectors': typeof DashboardConnectorsRoute
@@ -476,6 +484,7 @@ export interface FileRoutesById {
   '/dashboard/automations': typeof DashboardAutomationsRoute
   '/dashboard/batch-send': typeof DashboardBatchSendRoute
   '/dashboard/billing': typeof DashboardBillingRoute
+  '/dashboard/brand-kit': typeof DashboardBrandKitRoute
   '/dashboard/bulk': typeof DashboardBulkRoute
   '/dashboard/campaigns': typeof DashboardCampaignsRoute
   '/dashboard/connectors': typeof DashboardConnectorsRoute
@@ -829,6 +838,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardBillingRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/brand-kit': {
+      id: '/dashboard/brand-kit'
+      path: '/brand-kit'
+      fullPath: '/dashboard/brand-kit'
+      preLoaderRoute: typeof DashboardBrandKitRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/bulk': {
       id: '/dashboard/bulk'
       path: '/bulk'
@@ -1095,6 +1111,7 @@ interface DashboardRouteChildren {
   DashboardAutomationsRoute: typeof DashboardAutomationsRoute
   DashboardBatchSendRoute: typeof DashboardBatchSendRoute
   DashboardBillingRoute: typeof DashboardBillingRoute
+  DashboardBrandKitRoute: typeof DashboardBrandKitRoute
   DashboardBulkRoute: typeof DashboardBulkRoute
   DashboardCampaignsRoute: typeof DashboardCampaignsRoute
   DashboardConnectorsRoute: typeof DashboardConnectorsRoute
@@ -1144,6 +1161,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardAutomationsRoute: DashboardAutomationsRoute,
   DashboardBatchSendRoute: DashboardBatchSendRoute,
   DashboardBillingRoute: DashboardBillingRoute,
+  DashboardBrandKitRoute: DashboardBrandKitRoute,
   DashboardBulkRoute: DashboardBulkRoute,
   DashboardCampaignsRoute: DashboardCampaignsRoute,
   DashboardConnectorsRoute: DashboardConnectorsRoute,

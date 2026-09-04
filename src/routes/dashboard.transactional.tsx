@@ -110,7 +110,7 @@ function TransactionalPage() {
   const [logTotal, setLogTotal] = useState(0);
   const [logItems, setLogItems] = useState<MsgRow[]>([]);
   const [logLoading, setLogLoading] = useState(false);
-  const [logFilter, setLogFilter] = useState({ status: "", to: "", subject: "" });
+  const [logFilter, setLogFilter] = useState({ status: "", to: "", subject: "", dateFrom: "", dateTo: "" });
   const [logStats, setLogStats] = useState<MsgStats | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [expandedMsg, setExpandedMsg] = useState<MsgDetail | null>(null);
@@ -132,6 +132,8 @@ function TransactionalPage() {
       if (filter.status) params.set("status", filter.status);
       if (filter.to) params.set("to", filter.to);
       if (filter.subject) params.set("subject", filter.subject);
+      if (filter.dateFrom) params.set("date_from", filter.dateFrom);
+      if (filter.dateTo) params.set("date_to", filter.dateTo);
       const [logRes, statsRes] = await Promise.all([
         fetch(`https://api.continuumapi.com/v1/messages?${params}`, { headers: { "X-API-Key": primaryKey.keyRaw } }),
         fetch("https://api.continuumapi.com/v1/messages/stats", { headers: { "X-API-Key": primaryKey.keyRaw } }),
@@ -475,41 +477,91 @@ X-API-Key: ${primaryKey?.keyRaw ?? "<your-api-key>"}
         )}
 
         {/* Filters */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <input
+                className="pl-8 pr-3 h-8 rounded-md border border-input bg-background text-sm w-52 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="Filter by recipient…"
+                value={logFilter.to}
+                onChange={(e) => setLogFilter((f) => ({ ...f, to: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && fetchLog(1)}
+              />
+            </div>
             <input
-              className="pl-8 pr-3 h-8 rounded-md border border-input bg-background text-sm w-52 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              placeholder="Filter by recipient…"
-              value={logFilter.to}
-              onChange={(e) => setLogFilter((f) => ({ ...f, to: e.target.value }))}
+              className="px-3 h-8 rounded-md border border-input bg-background text-sm w-44 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              placeholder="Filter by subject…"
+              value={logFilter.subject}
+              onChange={(e) => setLogFilter((f) => ({ ...f, subject: e.target.value }))}
               onKeyDown={(e) => e.key === "Enter" && fetchLog(1)}
             />
+            <select
+              className="h-8 rounded-md border border-input bg-background text-sm px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              value={logFilter.status}
+              onChange={(e) => { const newFilter = { ...logFilter, status: e.target.value }; setLogFilter(newFilter); fetchLog(1, newFilter); }}
+            >
+              <option value="">All statuses</option>
+              <option value="sent">Sent</option>
+              <option value="delivered">Delivered</option>
+              <option value="bounced">Bounced</option>
+              <option value="complained">Complained</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="failed">Failed</option>
+            </select>
           </div>
-          <input
-            className="px-3 h-8 rounded-md border border-input bg-background text-sm w-44 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            placeholder="Filter by subject…"
-            value={logFilter.subject}
-            onChange={(e) => setLogFilter((f) => ({ ...f, subject: e.target.value }))}
-            onKeyDown={(e) => e.key === "Enter" && fetchLog(1)}
-          />
-          <select
-            className="h-8 rounded-md border border-input bg-background text-sm px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            value={logFilter.status}
-            onChange={(e) => { const newFilter = { ...logFilter, status: e.target.value }; setLogFilter(newFilter); fetchLog(1, newFilter); }}
-          >
-            <option value="">All statuses</option>
-            <option value="sent">Sent</option>
-            <option value="delivered">Delivered</option>
-            <option value="bounced">Bounced</option>
-            <option value="complained">Complained</option>
-            <option value="scheduled">Scheduled</option>
-            <option value="failed">Failed</option>
-          </select>
-          <Button size="sm" variant="outline" onClick={() => fetchLog(1)}>
-            <Search className="h-3.5 w-3.5 mr-1" />
-            Search
-          </Button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {[
+              { label: "Last 24h", hours: 24 },
+              { label: "Last 7d", hours: 168 },
+              { label: "Last 30d", hours: 720 },
+            ].map(({ label, hours }) => {
+              const from = new Date(Date.now() - hours * 3600000).toISOString().slice(0, 16);
+              const to = new Date().toISOString().slice(0, 16);
+              const active = logFilter.dateFrom === from;
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => {
+                    const newFilter = active ? { ...logFilter, dateFrom: "", dateTo: "" } : { ...logFilter, dateFrom: from, dateTo: to };
+                    setLogFilter(newFilter);
+                    fetchLog(1, newFilter);
+                  }}
+                  className={`h-7 px-2.5 rounded-md text-xs border transition-colors ${active ? "bg-foreground text-background border-foreground" : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground"}`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+            <span className="text-xs text-muted-foreground">or</span>
+            <input
+              type="datetime-local"
+              className="h-7 px-2 rounded-md border border-input bg-background text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              value={logFilter.dateFrom}
+              onChange={(e) => setLogFilter((f) => ({ ...f, dateFrom: e.target.value }))}
+            />
+            <span className="text-xs text-muted-foreground">to</span>
+            <input
+              type="datetime-local"
+              className="h-7 px-2 rounded-md border border-input bg-background text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              value={logFilter.dateTo}
+              onChange={(e) => setLogFilter((f) => ({ ...f, dateTo: e.target.value }))}
+            />
+            <Button size="sm" variant="outline" onClick={() => fetchLog(1)}>
+              <Search className="h-3.5 w-3.5 mr-1" />
+              Search
+            </Button>
+            {(logFilter.dateFrom || logFilter.dateTo || logFilter.to || logFilter.subject || logFilter.status) && (
+              <button
+                type="button"
+                onClick={() => { const f = { status: "", to: "", subject: "", dateFrom: "", dateTo: "" }; setLogFilter(f); fetchLog(1, f); }}
+                className="h-7 px-2.5 rounded-md text-xs border border-border text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Log table */}
