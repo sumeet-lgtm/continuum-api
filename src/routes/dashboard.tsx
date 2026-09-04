@@ -45,6 +45,7 @@ import {
   Plug,
   Upload,
   CheckSquare,
+  Cloud,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
@@ -277,6 +278,7 @@ const NAV: NavItem[] = [
       { to: "/dashboard/accounts", label: "Accounts", icon: Building2 },
       { to: "/dashboard/mailboxes", label: "Mailboxes", icon: Mail },
       { to: "/dashboard/inbox", label: "Unified Inbox", icon: Inbox },
+      { to: "/dashboard/salesforce", label: "Salesforce", icon: Cloud },
     ],
   },
 

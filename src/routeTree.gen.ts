@@ -51,6 +51,7 @@ import { Route as DashboardOrganizationRouteImport } from './routes/dashboard.or
 import { Route as DashboardPhoneRouteImport } from './routes/dashboard.phone'
 import { Route as DashboardPlaygroundRouteImport } from './routes/dashboard.playground'
 import { Route as DashboardPrivacyRouteImport } from './routes/dashboard.privacy'
+import { Route as DashboardSalesforceRouteImport } from './routes/dashboard.salesforce'
 import { Route as DashboardScheduleRouteImport } from './routes/dashboard.schedule'
 import { Route as DashboardSegmentsRouteImport } from './routes/dashboard.segments'
 import { Route as DashboardSequencesRouteImport } from './routes/dashboard.sequences'
@@ -278,6 +279,11 @@ const DashboardPrivacyRoute = DashboardPrivacyRouteImport.update({
   path: '/privacy',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardSalesforceRoute = DashboardSalesforceRouteImport.update({
+  id: '/salesforce',
+  path: '/salesforce',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardScheduleRoute = DashboardScheduleRouteImport.update({
   id: '/schedule',
   path: '/schedule',
@@ -401,6 +407,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/phone': typeof DashboardPhoneRoute
   '/dashboard/playground': typeof DashboardPlaygroundRoute
   '/dashboard/privacy': typeof DashboardPrivacyRoute
+  '/dashboard/salesforce': typeof DashboardSalesforceRoute
   '/dashboard/schedule': typeof DashboardScheduleRoute
   '/dashboard/segments': typeof DashboardSegmentsRoute
   '/dashboard/sequences': typeof DashboardSequencesRoute
@@ -460,6 +467,7 @@ export interface FileRoutesByTo {
   '/dashboard/phone': typeof DashboardPhoneRoute
   '/dashboard/playground': typeof DashboardPlaygroundRoute
   '/dashboard/privacy': typeof DashboardPrivacyRoute
+  '/dashboard/salesforce': typeof DashboardSalesforceRoute
   '/dashboard/schedule': typeof DashboardScheduleRoute
   '/dashboard/segments': typeof DashboardSegmentsRoute
   '/dashboard/sequences': typeof DashboardSequencesRoute
@@ -521,6 +529,7 @@ export interface FileRoutesById {
   '/dashboard/phone': typeof DashboardPhoneRoute
   '/dashboard/playground': typeof DashboardPlaygroundRoute
   '/dashboard/privacy': typeof DashboardPrivacyRoute
+  '/dashboard/salesforce': typeof DashboardSalesforceRoute
   '/dashboard/schedule': typeof DashboardScheduleRoute
   '/dashboard/segments': typeof DashboardSegmentsRoute
   '/dashboard/sequences': typeof DashboardSequencesRoute
@@ -583,6 +592,7 @@ export interface FileRouteTypes {
     | '/dashboard/phone'
     | '/dashboard/playground'
     | '/dashboard/privacy'
+    | '/dashboard/salesforce'
     | '/dashboard/schedule'
     | '/dashboard/segments'
     | '/dashboard/sequences'
@@ -642,6 +652,7 @@ export interface FileRouteTypes {
     | '/dashboard/phone'
     | '/dashboard/playground'
     | '/dashboard/privacy'
+    | '/dashboard/salesforce'
     | '/dashboard/schedule'
     | '/dashboard/segments'
     | '/dashboard/sequences'
@@ -702,6 +713,7 @@ export interface FileRouteTypes {
     | '/dashboard/phone'
     | '/dashboard/playground'
     | '/dashboard/privacy'
+    | '/dashboard/salesforce'
     | '/dashboard/schedule'
     | '/dashboard/segments'
     | '/dashboard/sequences'
@@ -1029,6 +1041,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardPrivacyRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/salesforce': {
+      id: '/dashboard/salesforce'
+      path: '/salesforce'
+      fullPath: '/dashboard/salesforce'
+      preLoaderRoute: typeof DashboardSalesforceRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/schedule': {
       id: '/dashboard/schedule'
       path: '/schedule'
@@ -1200,6 +1219,7 @@ interface DashboardRouteChildren {
   DashboardPhoneRoute: typeof DashboardPhoneRoute
   DashboardPlaygroundRoute: typeof DashboardPlaygroundRoute
   DashboardPrivacyRoute: typeof DashboardPrivacyRoute
+  DashboardSalesforceRoute: typeof DashboardSalesforceRoute
   DashboardScheduleRoute: typeof DashboardScheduleRoute
   DashboardSegmentsRoute: typeof DashboardSegmentsRoute
   DashboardSequencesRoute: typeof DashboardSequencesRoute
@@ -1250,6 +1270,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardPhoneRoute: DashboardPhoneRoute,
   DashboardPlaygroundRoute: DashboardPlaygroundRoute,
   DashboardPrivacyRoute: DashboardPrivacyRoute,
+  DashboardSalesforceRoute: DashboardSalesforceRoute,
   DashboardScheduleRoute: DashboardScheduleRoute,
   DashboardSegmentsRoute: DashboardSegmentsRoute,
   DashboardSequencesRoute: DashboardSequencesRoute,
