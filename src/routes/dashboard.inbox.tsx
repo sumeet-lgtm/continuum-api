@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import {
   Inbox, RefreshCw, MailOpen, Sparkles, ThumbsUp,
-  Archive, ChevronDown, ChevronUp, User,
+  Archive, ChevronDown, ChevronUp, User, Reply, Send,
 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/inbox")({
@@ -84,6 +84,9 @@ function InboxPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [autoClassifyQueue, setAutoClassifyQueue] = useState<Reply[]>([]);
+  const [replyOpenId, setReplyOpenId] = useState<string | null>(null);
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [sendingReplyId, setSendingReplyId] = useState<string | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -174,6 +177,37 @@ function InboxPage() {
     });
   };
 
+  const toggleReply = (r: Reply) => {
+    setReplyOpenId(prev => {
+      if (prev === r.id) return null;
+      if (r.bodySnippet) setExpanded(exp => new Set(exp).add(r.id)); // show what you're replying to
+      return r.id;
+    });
+  };
+
+  const sendReply = async (r: Reply) => {
+    if (!primaryKey?.keyRaw) return;
+    const body = (replyDrafts[r.id] ?? "").trim();
+    if (!body) return;
+    setSendingReplyId(r.id);
+    try {
+      const res = await api.withKey.post<{ sent: boolean; error?: string }>(
+        `/v1/inbox/${r.id}/reply`,
+        { body },
+        primaryKey.keyRaw,
+      );
+      if (!res.sent) throw new Error(res.error ?? "Send failed");
+      toast.success(`Reply sent to ${r.fromEmail}.`);
+      setReplyDrafts(prev => { const next = { ...prev }; delete next[r.id]; return next; });
+      setReplyOpenId(null);
+      setReplies(prev => prev.map(x => x.id === r.id ? { ...x, isRead: true } : x));
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Couldn't send reply.");
+    } finally {
+      setSendingReplyId(null);
+    }
+  };
+
   const activeReplies = replies.filter(r => r.status !== "archived");
   const archivedReplies = replies.filter(r => r.status === "archived");
 
@@ -219,7 +253,8 @@ function InboxPage() {
                   const isExpanded = expanded.has(r.id);
                   const seqName = r.enrollment?.sequence?.name;
                   return (
-                    <div key={r.id} className="flex items-start gap-4 p-4 hover:bg-muted/20 transition-colors">
+                    <div key={r.id}>
+                    <div className="flex items-start gap-4 p-4 hover:bg-muted/20 transition-colors">
                       <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
                         <MailOpen className="h-4 w-4 text-muted-foreground" />
                       </div>
@@ -278,6 +313,16 @@ function InboxPage() {
                         >
                           <User className="h-3.5 w-3.5" />
                         </button>
+                        <Button
+                          variant={replyOpenId === r.id ? "secondary" : "ghost"}
+                          size="sm"
+                          className="h-7 gap-1 text-xs"
+                          onClick={() => toggleReply(r)}
+                          title="Reply"
+                        >
+                          <Reply className="h-3 w-3" />
+                          Reply
+                        </Button>
                         {r.status !== "interested" && (
                           <Button
                             variant="ghost"
@@ -315,6 +360,41 @@ function InboxPage() {
                           </Button>
                         )}
                       </div>
+                    </div>
+                    {replyOpenId === r.id && (
+                      <div className="px-4 pb-4 pl-16">
+                        <div className="rounded-md border border-border bg-muted/20 p-3 space-y-2">
+                          <textarea
+                            autoFocus
+                            rows={4}
+                            placeholder={`Reply to ${r.fromEmail}…`}
+                            className="w-full text-sm bg-background rounded border border-border p-2 resize-y focus:outline-none focus:ring-1 focus:ring-ring"
+                            value={replyDrafts[r.id] ?? ""}
+                            onChange={(e) => setReplyDrafts(prev => ({ ...prev, [r.id]: e.target.value }))}
+                            disabled={sendingReplyId === r.id}
+                          />
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] text-muted-foreground">
+                              Sends from the mailbox that received this — {r.mailboxId ? "same thread." : "no mailbox on file."}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setReplyOpenId(null)}>
+                                Cancel
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="h-7 gap-1.5 text-xs"
+                                disabled={sendingReplyId === r.id || !(replyDrafts[r.id] ?? "").trim()}
+                                onClick={() => sendReply(r)}
+                              >
+                                <Send className="h-3 w-3" />
+                                {sendingReplyId === r.id ? "Sending…" : "Send"}
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     </div>
                   );
                 })}
