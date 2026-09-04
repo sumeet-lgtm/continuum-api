@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Area, AreaChart } from "recharts";
-import { Sparkles, KeyRound, Mail, Activity, CheckCircle2, Circle, ArrowRight, Send, GitBranch, ShieldAlert, Eye, MousePointer, AlertCircle, XCircle, Radio } from "lucide-react";
+import { Sparkles, KeyRound, Mail, Activity, CheckCircle2, Circle, ArrowRight, Send, GitBranch, ShieldAlert, Eye, MousePointer, AlertCircle, XCircle, Radio, ShieldCheck, Megaphone, Search, Users } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -84,16 +84,22 @@ interface LiveEvent {
   messageId: string;
 }
 
+interface CampaignAnalytic { open_rate: number; sentCount: number; }
+interface SequenceAnalytic { total_enrolled: number; reply_rate: number; }
+
 function Overview() {
   const { primaryKey, loading: authLoading } = useAuth();
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [recent, setRecent] = useState<HistoryItem[]>([]);
   const [chartData, setChartData] = useState<{ date: string; count: number }[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sendHealth, setSendHealth] = useState<{ bounce_rate: number; complaint_rate: number; sent: number } | null>(null);
+  const [sendHealth, setSendHealth] = useState<{ bounce_rate: number; complaint_rate: number; delivery_rate: number; open_rate: number; sent: number } | null>(null);
   const [liveFeed, setLiveFeed] = useState<LiveEvent[]>([]);
   const liveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [sequencesDone, setSequencesDone] = useState(false);
+  const [campaignStats, setCampaignStats] = useState<CampaignAnalytic[]>([]);
+  const [sequenceStats, setSequenceStats] = useState<SequenceAnalytic[]>([]);
+  const [totalLeads, setTotalLeads] = useState(0);
 
   useEffect(() => {
     if (!primaryKey?.keyRaw) {
@@ -104,15 +110,21 @@ function Overview() {
       setLoading(true);
       try {
         const dateFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-        const [usageRes, histRes, healthRes, seqRes] = await Promise.allSettled([
+        const [usageRes, histRes, healthRes, seqRes, campRes, seqStatsRes, leadsRes] = await Promise.allSettled([
           api.withKey.get<UsageData>("/v1/usage", primaryKey.keyRaw!),
           api.withKey.get<{ history: HistoryItem[]; total: number }>("/v1/history?page=1&limit=10", primaryKey.keyRaw!),
-          api.withKey.get<{ bounce_rate: number; complaint_rate: number; sent: number }>(`/v1/analytics/sends?date_from=${dateFrom}`, primaryKey.keyRaw!),
+          api.withKey.get<{ bounce_rate: number; complaint_rate: number; delivery_rate: number; open_rate: number; sent: number }>(`/v1/analytics/sends?date_from=${dateFrom}`, primaryKey.keyRaw!),
           api.withKey.get<{ sequences: unknown[]; total: number }>("/v1/sequences?limit=1", primaryKey.keyRaw!),
+          api.withKey.get<{ data: CampaignAnalytic[] }>("/v1/analytics/campaigns?limit=50", primaryKey.keyRaw!),
+          api.withKey.get<{ data: SequenceAnalytic[] }>("/v1/analytics/sequences?limit=50", primaryKey.keyRaw!),
+          api.withKey.get<{ data: unknown[]; total: number }>("/v1/leads?limit=1", primaryKey.keyRaw!),
         ]);
         if (usageRes.status === "fulfilled") setUsage(usageRes.value);
         if (healthRes.status === "fulfilled") setSendHealth(healthRes.value);
         if (seqRes.status === "fulfilled") setSequencesDone((seqRes.value.total ?? seqRes.value.sequences?.length ?? 0) > 0);
+        if (campRes.status === "fulfilled") setCampaignStats(campRes.value.data ?? []);
+        if (seqStatsRes.status === "fulfilled") setSequenceStats(seqStatsRes.value.data ?? []);
+        if (leadsRes.status === "fulfilled") setTotalLeads(leadsRes.value.total ?? leadsRes.value.data?.length ?? 0);
         if (histRes.status === "fulfilled") {
           const rows = histRes.value.history ?? [];
           setRecent(rows);
@@ -170,6 +182,19 @@ function Overview() {
   const pct = verifLimit > 0 ? Math.min(100, (verifUsed / verifLimit) * 100) : 0;
   const empty = recent.length === 0;
 
+  // 5-pillar derived metrics
+  const validPct = recent.length > 0
+    ? Math.round(recent.filter((r) => r.status === "deliverable").length / recent.length * 100)
+    : null;
+  const deliveryRate = sendHealth?.delivery_rate ?? null;
+  const avgOpenRate = campaignStats.length > 0
+    ? +(campaignStats.reduce((s, c) => s + c.open_rate, 0) / campaignStats.length).toFixed(1)
+    : null;
+  const totalEnrolled = sequenceStats.reduce((s, seq) => s + seq.total_enrolled, 0);
+  const avgReplyRate = sequenceStats.length > 0
+    ? +(sequenceStats.reduce((s, seq) => s + seq.reply_rate, 0) / sequenceStats.length).toFixed(1)
+    : null;
+
   return (
     <div className="space-y-6">
       <header>
@@ -205,6 +230,55 @@ function Overview() {
           </ol>
         </div>
       )}
+
+      {/* 5-Pillar Command Center */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <PillarCard
+          to="/dashboard/verify"
+          icon={ShieldCheck}
+          label="Verification"
+          main={verifUsed}
+          mainSuffix=" verified"
+          sub={validPct !== null ? `${validPct}% deliverable` : "No checks yet"}
+          accent="emerald"
+        />
+        <PillarCard
+          to="/dashboard/transactional"
+          icon={Send}
+          label="Transactional"
+          main={sendUsed}
+          mainSuffix=" sent"
+          sub={deliveryRate !== null ? `${deliveryRate}% delivered` : "No sends yet"}
+          accent="blue"
+        />
+        <PillarCard
+          to="/dashboard/campaigns"
+          icon={Megaphone}
+          label="Nurture"
+          main={campaignStats.length}
+          mainSuffix=" campaigns"
+          sub={avgOpenRate !== null ? `${avgOpenRate}% avg open rate` : "No campaigns yet"}
+          accent="violet"
+        />
+        <PillarCard
+          to="/dashboard/sequences"
+          icon={GitBranch}
+          label="Outbound"
+          main={totalEnrolled}
+          mainSuffix=" prospects"
+          sub={avgReplyRate !== null ? `${avgReplyRate}% reply rate` : "No sequences yet"}
+          accent="amber"
+        />
+        <PillarCard
+          to="/dashboard/leads"
+          icon={Users}
+          label="Finder"
+          main={totalLeads}
+          mainSuffix=" leads"
+          sub="in CRM"
+          accent="indigo"
+        />
+      </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Verifications used" value={verifUsed} pct={verifLimit > 0 ? (verifUsed / verifLimit) * 100 : 0} />
@@ -404,6 +478,42 @@ function StatCard({ label, value, pct }: { label: string; value: number; pct?: n
         </div>
       )}
     </div>
+  );
+}
+
+const ACCENT_STYLES: Record<string, { ring: string; icon: string; bg: string }> = {
+  emerald: { ring: "ring-emerald-500/20", icon: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-500/10" },
+  blue:    { ring: "ring-blue-500/20",    icon: "text-blue-600 dark:text-blue-400",       bg: "bg-blue-500/10" },
+  violet:  { ring: "ring-violet-500/20",  icon: "text-violet-600 dark:text-violet-400",   bg: "bg-violet-500/10" },
+  amber:   { ring: "ring-amber-500/20",   icon: "text-amber-600 dark:text-amber-400",     bg: "bg-amber-500/10" },
+  indigo:  { ring: "ring-indigo-500/20",  icon: "text-indigo-600 dark:text-indigo-400",   bg: "bg-indigo-500/10" },
+};
+
+function PillarCard({
+  to, icon: Icon, label, main, mainSuffix, sub, accent,
+}: {
+  to: string; icon: typeof Search; label: string;
+  main: number; mainSuffix: string; sub: string; accent: string;
+}) {
+  const displayed = useAnimatedNumber(main);
+  const s = ACCENT_STYLES[accent] ?? ACCENT_STYLES["blue"]!;
+  return (
+    <Link
+      to={to as "/dashboard"}
+      className={`rounded-lg border border-border bg-card p-4 hover:bg-muted/50 transition-colors ring-1 ${s.ring} block`}
+    >
+      <div className="flex items-center gap-2 mb-3">
+        <div className={`h-7 w-7 rounded-md flex items-center justify-center ${s.bg}`}>
+          <Icon className={`h-3.5 w-3.5 ${s.icon}`} />
+        </div>
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      </div>
+      <div className="text-2xl font-display font-semibold tabular-nums tracking-tight">
+        {displayed.toLocaleString()}
+        <span className="text-sm font-normal text-muted-foreground ml-0.5">{mainSuffix}</span>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
+    </Link>
   );
 }
 
