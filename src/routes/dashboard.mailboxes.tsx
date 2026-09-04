@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Send, Zap, TestTube, ZapOff, KeyRound } from "lucide-react";
+import { Plus, Send, Zap, TestTube, ZapOff, KeyRound, TrendingUp, ShieldCheck, ShieldAlert, Shield } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/mailboxes")({
   head: () => ({ meta: [{ title: "Mailboxes — Continuum API" }] }),
@@ -27,6 +27,35 @@ interface Mailbox {
   warmupConfig?: WarmupConfig | null;
   connectedViaOAuth?: boolean;
 }
+
+type HealthTier = "good" | "fair" | "poor";
+
+function computeMailboxHealth(m: Mailbox): { tier: HealthTier; score: number; reason: string } {
+  if (m.status === "error") return { tier: "poor", score: 20, reason: "SMTP connection error" };
+  let score = 100;
+  const reasons: string[] = [];
+  // warmup penalty: not warming → docked
+  if (!m.warmupConfig?.enabled) { score -= 15; reasons.push("warmup off"); }
+  // warmup progress penalty: less than 50% warmed
+  else if (m.warmupConfig.currentPerDay / m.warmupConfig.targetPerDay < 0.5) {
+    score -= 10; reasons.push("warming up");
+  }
+  // usage penalty: over 80% of daily limit used
+  const usagePct = m.sentToday / m.dailyLimit;
+  if (usagePct > 0.9) { score -= 20; reasons.push("near daily limit"); }
+  else if (usagePct > 0.75) { score -= 10; reasons.push("high usage today"); }
+  // status bonus
+  if (m.status !== "active") { score -= 30; reasons.push(`status: ${m.status}`); }
+  const tier: HealthTier = score >= 80 ? "good" : score >= 55 ? "fair" : "poor";
+  const reason = reasons.length ? reasons.join(", ") : "all systems normal";
+  return { tier, score: Math.max(0, score), reason };
+}
+
+const HEALTH_STYLES: Record<HealthTier, { icon: typeof ShieldCheck; label: string; cls: string }> = {
+  good: { icon: ShieldCheck, label: "Healthy", cls: "text-emerald-600 dark:text-emerald-400" },
+  fair: { icon: Shield,      label: "Fair",    cls: "text-amber-600 dark:text-amber-400" },
+  poor: { icon: ShieldAlert, label: "Poor",    cls: "text-destructive" },
+};
 
 function MailboxesPage() {
   const { primaryKey } = useAuth();
@@ -237,12 +266,17 @@ function MailboxesPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+                  {(() => {
+                    const h = computeMailboxHealth(m);
+                    const cfg = HEALTH_STYLES[h.tier];
+                    const Icon = cfg.icon;
+                    return (
+                      <span className={`flex items-center gap-1 text-xs font-medium ${cfg.cls}`} title={h.reason}>
+                        <Icon className="h-3.5 w-3.5" /> {cfg.label}
+                      </span>
+                    );
+                  })()}
                   <StatusBadge status={m.status} />
-                  {m.warmupConfig?.enabled && (
-                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <Zap className="h-3 w-3 text-muted-foreground" /> {m.warmupConfig.currentPerDay}/{m.warmupConfig.targetPerDay}/day
-                    </span>
-                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -260,12 +294,44 @@ function MailboxesPage() {
                   </Button>
                 </div>
               </div>
-              <div className="mt-3 h-1.5 rounded-full bg-muted overflow-hidden">
-                <div
-                  className="h-full bg-foreground transition-all"
-                  style={{ width: `${Math.min(100, (m.sentToday / m.dailyLimit) * 100)}%` }}
-                />
+              {/* Daily send bar */}
+              <div className="mt-3 space-y-1">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Daily sends</span>
+                  <span>{m.sentToday} / {m.dailyLimit}</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full bg-foreground transition-all"
+                    style={{ width: `${Math.min(100, (m.sentToday / m.dailyLimit) * 100)}%` }}
+                  />
+                </div>
               </div>
+
+              {/* Warmup progress bar */}
+              {m.warmupConfig?.enabled && (
+                <div className="mt-2 space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1 text-muted-foreground">
+                      <TrendingUp className="h-3 w-3" /> Warmup progress
+                    </span>
+                    <span className="font-medium text-foreground">
+                      {m.warmupConfig.currentPerDay} / {m.warmupConfig.targetPerDay} per day
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-amber-500/15 overflow-hidden">
+                    <div
+                      className="h-full bg-amber-500 transition-all"
+                      style={{ width: `${Math.min(100, (m.warmupConfig.currentPerDay / m.warmupConfig.targetPerDay) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {m.warmupConfig.currentPerDay >= m.warmupConfig.targetPerDay
+                      ? "Warmup complete — mailbox is fully warmed"
+                      : `${Math.round((m.warmupConfig.currentPerDay / m.warmupConfig.targetPerDay) * 100)}% warmed — auto-ramps daily`}
+                  </p>
+                </div>
+              )}
             </div>
           ))}
         </div>

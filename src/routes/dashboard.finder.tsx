@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,11 @@ import {
   Download,
   Mail,
   ShieldCheck,
+  Linkedin,
+  FileDown,
+  Bookmark,
+  BookmarkCheck,
+  Trash2,
 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/finder")({
@@ -82,6 +87,34 @@ const HEADCOUNT_OPTIONS = [
 ];
 
 const PAGE_SIZE = 50;
+const SAVED_KEY = "continuum_finder_saved_searches";
+
+interface SavedSearch {
+  id: string;
+  name: string;
+  filters: {
+    personTitleIncludes: string[];
+    seniorityIncludes: string[];
+    functionIncludes: string[];
+    companyIndustryIncludes: string[];
+    personLocationCountryIncludes: string[];
+    personLocationCityIncludes: string[];
+    companyNameIncludes: string[];
+    companyDomainIncludes: string[];
+    companySizeIncludes: string[];
+    companyKeywordIncludes: string[];
+    technologiesIncludes: string[];
+    hasEmail: boolean;
+    totalResults: number;
+  };
+}
+
+function loadSavedSearches(): SavedSearch[] {
+  try { return JSON.parse(localStorage.getItem(SAVED_KEY) ?? "[]"); } catch { return []; }
+}
+function persistSavedSearches(s: SavedSearch[]) {
+  try { localStorage.setItem(SAVED_KEY, JSON.stringify(s)); } catch {}
+}
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -205,6 +238,58 @@ function FinderPage() {
   const [targetSequenceId, setTargetSequenceId] = useState<string>("");
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Saved searches ──────────────────────────────────────────────────────────
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>(loadSavedSearches);
+  const [savingSearch, setSavingSearch] = useState(false);
+  const [saveSearchName, setSaveSearchName] = useState("");
+
+  const currentFilters = useCallback(() => ({
+    personTitleIncludes, seniorityIncludes, functionIncludes,
+    companyIndustryIncludes, personLocationCountryIncludes,
+    personLocationCityIncludes, companyNameIncludes, companyDomainIncludes,
+    companySizeIncludes, companyKeywordIncludes, technologiesIncludes,
+    hasEmail, totalResults,
+  }), [personTitleIncludes, seniorityIncludes, functionIncludes,
+    companyIndustryIncludes, personLocationCountryIncludes, personLocationCityIncludes,
+    companyNameIncludes, companyDomainIncludes, companySizeIncludes,
+    companyKeywordIncludes, technologiesIncludes, hasEmail, totalResults]);
+
+  const saveCurrentSearch = () => {
+    const name = saveSearchName.trim();
+    if (!name) return;
+    const entry: SavedSearch = { id: Date.now().toString(), name, filters: currentFilters() };
+    const next = [entry, ...savedSearches];
+    setSavedSearches(next);
+    persistSavedSearches(next);
+    setSaveSearchName("");
+    setSavingSearch(false);
+    toast.success(`Saved "${name}"`);
+  };
+
+  const loadSavedSearch = (s: SavedSearch) => {
+    const f = s.filters;
+    setPersonTitleIncludes(f.personTitleIncludes);
+    setSeniorityIncludes(f.seniorityIncludes);
+    setFunctionIncludes(f.functionIncludes);
+    setCompanyIndustryIncludes(f.companyIndustryIncludes);
+    setPersonLocationCountryIncludes(f.personLocationCountryIncludes);
+    setPersonLocationCityIncludes(f.personLocationCityIncludes);
+    setCompanyNameIncludes(f.companyNameIncludes);
+    setCompanyDomainIncludes(f.companyDomainIncludes);
+    setCompanySizeIncludes(f.companySizeIncludes);
+    setCompanyKeywordIncludes(f.companyKeywordIncludes);
+    setTechnologiesIncludes(f.technologiesIncludes);
+    setHasEmail(f.hasEmail);
+    setTotalResults(f.totalResults);
+    toast.success(`Loaded "${s.name}"`);
+  };
+
+  const deleteSavedSearch = (id: string) => {
+    const next = savedSearches.filter((s) => s.id !== id);
+    setSavedSearches(next);
+    persistSavedSearches(next);
+  };
 
   // Poll for status — handles two phases: searching → verifying → succeeded
   useEffect(() => {
@@ -368,6 +453,34 @@ function FinderPage() {
     }
   }
 
+  function exportCsv() {
+    const rows = results.length > 0 ? results : [];
+    if (rows.length === 0) return;
+    const headers = ["First Name","Last Name","Email","Title","Company","Company Domain","Location","Company Size","Industry","Seniority","Response Signal","LinkedIn URL"];
+    const lines = [
+      headers.join(","),
+      ...rows.map((r) => [
+        r.firstName ?? "",
+        r.lastName ?? "",
+        r.email ?? "",
+        r.title ?? "",
+        r.company ?? "",
+        r.companyDomain ?? "",
+        r.location ?? "",
+        r.companySize ?? "",
+        r.companyIndustry ?? "",
+        r.seniority ?? "",
+        r.responseSignal,
+        r.linkedinUrl ?? "",
+      ].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "continuum-finder-export.csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const allOnPage = results.map((_, i) => i);
   const allSelected = allOnPage.length > 0 && allOnPage.every((i) => selected.has(i));
   function toggleSelectAll() { setSelected(allSelected ? new Set() : new Set(allOnPage)); }
@@ -436,6 +549,54 @@ function FinderPage() {
             onChange={(e) => setTotalResults(Math.min(2500, Math.max(1, parseInt(e.target.value || "100", 10))))}
           />
         </div>
+
+        {/* Saved searches */}
+        {savedSearches.length > 0 && (
+          <div>
+            <Label className="text-xs font-medium text-muted-foreground mb-1.5 block">Saved Searches</Label>
+            <div className="space-y-1">
+              {savedSearches.map((s) => (
+                <div key={s.id} className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1.5 group hover:bg-muted/20">
+                  <button
+                    type="button"
+                    className="flex-1 text-left text-xs font-medium truncate"
+                    onClick={() => loadSavedSearch(s)}
+                  >
+                    {s.name}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteSavedSearch(s.id)}
+                    className="shrink-0 text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {savingSearch ? (
+          <div className="flex gap-1.5">
+            <Input
+              autoFocus
+              value={saveSearchName}
+              placeholder="Search name…"
+              className="h-8 text-sm flex-1"
+              onChange={(e) => setSaveSearchName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveCurrentSearch();
+                if (e.key === "Escape") setSavingSearch(false);
+              }}
+            />
+            <Button size="sm" className="h-8 px-3" onClick={saveCurrentSearch}>Save</Button>
+          </div>
+        ) : (
+          <Button variant="outline" size="sm" className="w-full gap-1.5 text-xs" onClick={() => setSavingSearch(true)}>
+            <Bookmark className="h-3.5 w-3.5" /> Save this search
+          </Button>
+        )}
 
         <Button className="w-full" onClick={handleSearch} disabled={phase === "searching" || phase === "verifying"}>
           {phase === "searching" ? (
@@ -530,6 +691,12 @@ function FinderPage() {
                     ))}
                   </select>
                 )}
+                {results.length > 0 && (
+                  <Button variant="outline" size="sm" onClick={exportCsv}>
+                    <FileDown className="h-3.5 w-3.5 mr-1.5" />
+                    Export CSV
+                  </Button>
+                )}
                 {total > 0 && (
                   <Button variant="outline" size="sm" onClick={() => handleImport(true)} disabled={importing}>
                     <Download className="h-3.5 w-3.5 mr-1.5" />
@@ -565,6 +732,7 @@ function FinderPage() {
                         <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">Location</th>
                         <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">Email</th>
                         <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">Size</th>
+                        <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">LinkedIn</th>
                         <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">Signal</th>
                       </tr>
                     </thead>
@@ -597,6 +765,21 @@ function FinderPage() {
                               )}
                             </td>
                             <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{r.companySize ?? "—"}</td>
+                            <td className="px-4 py-2.5">
+                              {r.linkedinUrl ? (
+                                <a
+                                  href={r.linkedinUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex items-center gap-1 text-xs text-sky-600 dark:text-sky-400 hover:underline"
+                                >
+                                  <Linkedin className="h-3 w-3" /> Profile
+                                </a>
+                              ) : (
+                                <span className="text-muted-foreground/40 text-xs">—</span>
+                              )}
+                            </td>
                             <td className="px-4 py-2.5">
                               <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize ${signalStyles[r.responseSignal] ?? signalStyles.low}`}>
                                 {r.responseSignal}

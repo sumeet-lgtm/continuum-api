@@ -24,6 +24,7 @@ import {
   FlaskConical,
   UserRound,
   ShieldOff,
+  ShieldCheck,
   SlidersHorizontal,
   Layers,
   CalendarDays,
@@ -215,8 +216,20 @@ const NAV: NavItem[] = [
   { to: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { to: "/dashboard/api-keys", label: "API Keys", icon: KeyRound },
   { to: "/dashboard/logs", label: "API Logs", icon: Terminal },
-  { to: "/dashboard/playground", label: "Playground", icon: FlaskConical },
-  { to: "/dashboard/api-reference", label: "API Reference", icon: BookOpen },
+
+  // Pillar 1: Verification — competes with MillionVerifier
+  {
+    to: "/dashboard/verify",
+    label: "Verification",
+    icon: ShieldCheck,
+    children: [
+      { to: "/dashboard/verify", label: "Single Verify", icon: ShieldCheck, exact: true },
+      { to: "/dashboard/bulk", label: "Bulk Jobs", icon: ListChecks },
+      { to: "/dashboard/monitoring", label: "Monitoring", icon: Activity },
+    ],
+  },
+
+  // Pillar 2: Transactional — competes with Resend
   {
     to: "/dashboard/transactional",
     label: "Transactional",
@@ -228,39 +241,51 @@ const NAV: NavItem[] = [
       { to: "/dashboard/schedule", label: "Schedule", icon: CalendarDays },
       { to: "/dashboard/templates", label: "Templates", icon: FileText },
       { to: "/dashboard/domains", label: "Sending Domains", icon: ServerCog },
+      { to: "/dashboard/deliverability", label: "Deliverability", icon: TrendingUp },
       { to: "/dashboard/suppressions", label: "Suppressions", icon: ShieldOff },
     ],
   },
+
+  // Pillar 3: Nurture — competes with Sendy
   {
     to: "/dashboard/campaigns",
-    label: "Campaigns",
+    label: "Nurture",
     icon: Megaphone,
     children: [
-      { to: "/dashboard/campaigns", label: "All Campaigns", icon: Megaphone, exact: true },
+      { to: "/dashboard/campaigns", label: "Campaigns", icon: Megaphone, exact: true },
+      { to: "/dashboard/automations", label: "Automations", icon: Zap },
       { to: "/dashboard/lists", label: "Mailing Lists", icon: Users },
       { to: "/dashboard/contacts", label: "Contacts", icon: UserRound },
       { to: "/dashboard/segments", label: "Segments", icon: SlidersHorizontal },
       { to: "/dashboard/migrate", label: "Import Contacts", icon: ArrowRightLeft },
     ],
   },
+
+  // Pillar 4: Outbound — competes with Smartlead / Outreach
   {
     to: "/dashboard/sequences",
-    label: "Sequences",
+    label: "Outbound",
     icon: GitBranch,
     children: [
-      { to: "/dashboard/sequences", label: "All Sequences", icon: GitBranch, exact: true },
+      { to: "/dashboard/sequences", label: "Sequences", icon: GitBranch, exact: true },
       { to: "/dashboard/accounts", label: "Accounts", icon: Building2 },
-      { to: "/dashboard/leads", label: "Leads", icon: Users },
-      { to: "/dashboard/finder", label: "Find People", icon: Search },
-      { to: "/dashboard/mailboxes", label: "Mailboxes", icon: Send },
+      { to: "/dashboard/mailboxes", label: "Mailboxes", icon: Mail },
       { to: "/dashboard/inbox", label: "Unified Inbox", icon: Inbox },
     ],
   },
+
+  // Pillar 5: Finder — competes with Apollo
+  {
+    to: "/dashboard/finder",
+    label: "Finder",
+    icon: Search,
+    children: [
+      { to: "/dashboard/finder", label: "Find People", icon: Search, exact: true },
+      { to: "/dashboard/leads", label: "Lead CRM", icon: Users },
+    ],
+  },
+
   { to: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
-  { to: "/dashboard/deliverability", label: "Deliverability", icon: TrendingUp },
-  { to: "/dashboard/verify", label: "Verify", icon: Mail },
-  { to: "/dashboard/bulk", label: "Bulk Jobs", icon: ListChecks },
-  { to: "/dashboard/monitoring", label: "Monitoring", icon: Activity },
   { to: "/dashboard/webhooks", label: "Webhooks", icon: Webhook },
   { to: "/dashboard/organization", label: "Organization", icon: Building2 },
   { to: "/dashboard/usage", label: "Usage & Limits", icon: Zap },
@@ -269,8 +294,13 @@ const NAV: NavItem[] = [
   { to: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 
-// Which groups are open by default
-const DEFAULT_OPEN = new Set(["/dashboard/transactional", "/dashboard/campaigns", "/dashboard/sequences"]);
+const DEFAULT_OPEN = new Set([
+  "/dashboard/verify",
+  "/dashboard/transactional",
+  "/dashboard/campaigns",
+  "/dashboard/sequences",
+  "/dashboard/finder",
+]);
 
 function DashboardLayout() {
   const { user, loading, signOut, primaryKey } = useAuth();
