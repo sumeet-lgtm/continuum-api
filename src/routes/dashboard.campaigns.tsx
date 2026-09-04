@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target, Play, Trophy, Sparkles } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target, Play, Trophy, Sparkles, Bold, Italic, Underline, List, ListOrdered, Link, AlignLeft, AlignCenter, AlignRight, Code2, Minus } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/campaigns")({
   head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
@@ -49,6 +50,144 @@ interface CampaignHealth {
     delivery_rate: number; open_rate: number; click_rate: number;
     bounce_rate: number; complaint_rate: number;
   };
+}
+
+// ── Rich Email Editor ─────────────────────────────────────────────────────────
+
+type EditorMode = "visual" | "html";
+
+function RichEmailEditor({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (html: string) => void;
+  placeholder?: string;
+}) {
+  const [mode, setMode] = useState<EditorMode>("visual");
+  const editorRef = useRef<HTMLDivElement>(null);
+  const isInternalUpdate = useRef(false);
+
+  // Sync external value changes into the visual editor (e.g. AI fill, template load)
+  useEffect(() => {
+    if (mode === "visual" && editorRef.current && !isInternalUpdate.current) {
+      if (editorRef.current.innerHTML !== value) {
+        editorRef.current.innerHTML = value;
+      }
+    }
+  }, [value, mode]);
+
+  const handleVisualInput = useCallback(() => {
+    if (!editorRef.current) return;
+    isInternalUpdate.current = true;
+    onChange(editorRef.current.innerHTML);
+    setTimeout(() => { isInternalUpdate.current = false; }, 0);
+  }, [onChange]);
+
+  const exec = useCallback((command: string, val?: string) => {
+    document.execCommand(command, false, val);
+    editorRef.current?.focus();
+    handleVisualInput();
+  }, [handleVisualInput]);
+
+  const insertLink = useCallback(() => {
+    const url = prompt("Enter URL:");
+    if (url) exec("createLink", url.startsWith("http") ? url : `https://${url}`);
+  }, [exec]);
+
+  const switchMode = (m: EditorMode) => {
+    if (m === mode) return;
+    // When switching to HTML view, value is already up-to-date from visual input
+    // When switching back to visual, update contenteditable from current value
+    setMode(m);
+    if (m === "visual") {
+      setTimeout(() => {
+        if (editorRef.current) editorRef.current.innerHTML = value;
+      }, 0);
+    }
+  };
+
+  const ToolBtn = ({ onClick, title, children }: { onClick: () => void; title: string; children: React.ReactNode }) => (
+    <button
+      type="button"
+      onMouseDown={(e) => { e.preventDefault(); onClick(); }}
+      title={title}
+      className="h-7 w-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+    >
+      {children}
+    </button>
+  );
+
+  const Sep = () => <div className="w-px h-4 bg-border mx-0.5" />;
+
+  return (
+    <div className="rounded-md border border-input overflow-hidden focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-0">
+      {/* Toolbar */}
+      <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-border bg-muted/30 flex-wrap">
+        {mode === "visual" ? (
+          <>
+            <ToolBtn onClick={() => exec("bold")} title="Bold"><Bold className="h-3.5 w-3.5" /></ToolBtn>
+            <ToolBtn onClick={() => exec("italic")} title="Italic"><Italic className="h-3.5 w-3.5" /></ToolBtn>
+            <ToolBtn onClick={() => exec("underline")} title="Underline"><Underline className="h-3.5 w-3.5" /></ToolBtn>
+            <Sep />
+            <ToolBtn onClick={() => exec("insertUnorderedList")} title="Bullet list"><List className="h-3.5 w-3.5" /></ToolBtn>
+            <ToolBtn onClick={() => exec("insertOrderedList")} title="Numbered list"><ListOrdered className="h-3.5 w-3.5" /></ToolBtn>
+            <Sep />
+            <ToolBtn onClick={() => exec("justifyLeft")} title="Align left"><AlignLeft className="h-3.5 w-3.5" /></ToolBtn>
+            <ToolBtn onClick={() => exec("justifyCenter")} title="Align center"><AlignCenter className="h-3.5 w-3.5" /></ToolBtn>
+            <ToolBtn onClick={() => exec("justifyRight")} title="Align right"><AlignRight className="h-3.5 w-3.5" /></ToolBtn>
+            <Sep />
+            <ToolBtn onClick={insertLink} title="Insert link"><Link className="h-3.5 w-3.5" /></ToolBtn>
+            <ToolBtn onClick={() => exec("insertHorizontalRule")} title="Horizontal rule"><Minus className="h-3.5 w-3.5" /></ToolBtn>
+            <ToolBtn onClick={() => exec("removeFormat")} title="Clear formatting"><X className="h-3.5 w-3.5" /></ToolBtn>
+          </>
+        ) : (
+          <span className="text-xs text-muted-foreground px-1 font-mono">HTML</span>
+        )}
+        <div className="ml-auto flex items-center gap-0">
+          <button
+            type="button"
+            onClick={() => switchMode("visual")}
+            className={cn("px-2.5 py-1 text-xs rounded-l-md border transition-colors", mode === "visual" ? "bg-foreground text-background border-foreground" : "bg-transparent text-muted-foreground border-border hover:bg-muted")}
+          >
+            Visual
+          </button>
+          <button
+            type="button"
+            onClick={() => switchMode("html")}
+            className={cn("px-2.5 py-1 text-xs rounded-r-md border-y border-r transition-colors flex items-center gap-1", mode === "html" ? "bg-foreground text-background border-foreground" : "bg-transparent text-muted-foreground border-border hover:bg-muted")}
+          >
+            <Code2 className="h-3 w-3" /> HTML
+          </button>
+        </div>
+      </div>
+
+      {/* Visual editor */}
+      {mode === "visual" && (
+        <div
+          ref={editorRef}
+          contentEditable
+          suppressContentEditableWarning
+          onInput={handleVisualInput}
+          className="min-h-[160px] px-3 py-2.5 text-sm outline-none leading-relaxed [&_a]:text-blue-600 [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5"
+          style={{ fontFamily: "inherit" }}
+          data-placeholder={placeholder ?? "<p>Hi {{first_name}},</p>"}
+        />
+      )}
+
+      {/* HTML source view */}
+      {mode === "html" && (
+        <textarea
+          className="w-full min-h-[160px] px-3 py-2.5 text-sm font-mono resize-y outline-none bg-background"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder ?? "<p>Hi {{first_name}},</p>"}
+          spellCheck={false}
+        />
+      )}
+    </div>
+  );
 }
 
 function CampaignsPage() {
@@ -519,21 +658,20 @@ function CampaignsPage() {
             </div>
           )}
           <div className="space-y-1.5">
-            <Label>HTML body</Label>
-            <textarea
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[140px] resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              placeholder="<p>Hi {{first_name}},</p>"
-              value={form.htmlBody}
-              onChange={(e) => setForm((f) => ({ ...f, htmlBody: e.target.value }))}
-            />
             <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground">Use {"{{first_name}}"}, {"{{email}}"}, {"{{unsubscribe_url}}"} as personalization tokens.</p>
+              <Label>Email body</Label>
               {form.htmlBody && (
-                <button onClick={() => setPreview(true)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 shrink-0 ml-2">
+                <button onClick={() => setPreview(true)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
                   <Eye className="h-3 w-3" /> Preview
                 </button>
               )}
             </div>
+            <RichEmailEditor
+              value={form.htmlBody}
+              onChange={(html) => setForm((f) => ({ ...f, htmlBody: html }))}
+              placeholder="<p>Hi {{first_name}},</p>"
+            />
+            <p className="text-xs text-muted-foreground">Use {"{{first_name}}"}, {"{{email}}"}, {"{{unsubscribe_url}}"} as personalization tokens.</p>
           </div>
           {lists.length > 0 && (
             <div className="space-y-1.5">

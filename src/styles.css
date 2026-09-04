@@ -102,3 +102,11 @@
     -webkit-font-smoothing: antialiased;
   }
 }
+
+/* Contenteditable placeholder */
+[contenteditable][data-placeholder]:empty:before {
+  content: attr(data-placeholder);
+  color: var(--color-muted-foreground, #888);
+  pointer-events: none;
+  display: block;
+}

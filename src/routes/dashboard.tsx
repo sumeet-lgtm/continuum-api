@@ -39,6 +39,7 @@ import {
   Info,
   X,
   Calendar,
+  ArrowRightLeft,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
@@ -239,6 +240,7 @@ const NAV: NavItem[] = [
       { to: "/dashboard/lists", label: "Mailing Lists", icon: Users },
       { to: "/dashboard/contacts", label: "Contacts", icon: UserRound },
       { to: "/dashboard/segments", label: "Segments", icon: SlidersHorizontal },
+      { to: "/dashboard/migrate", label: "Import Contacts", icon: ArrowRightLeft },
     ],
   },
   {
