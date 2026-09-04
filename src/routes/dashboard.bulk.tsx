@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { Upload } from "lucide-react";
+import { Upload, ShieldCheck, AlertTriangle, XCircle, Trash2, Building2, WifiOff, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { API_BASE } from "@/lib/supabase";
 import { useApiKey } from "@/lib/use-api-key";
@@ -72,6 +72,83 @@ function getJobIds(keyId: string): string[] {
   try {
     return JSON.parse(localStorage.getItem(jobIdsKey(keyId)) ?? "[]");
   } catch { return []; }
+}
+
+function RiskBreakdown({ results }: { results: BulkRow[] }) {
+  const n = results.length;
+  if (n === 0) return null;
+
+  const count = (pred: (r: BulkRow) => boolean) => results.filter(pred).length;
+  const pct = (c: number) => Math.round((c / n) * 100);
+
+  const valid   = count((r) => (r.status ?? "").toLowerCase() === "valid");
+  const risky   = count((r) => (r.status ?? "").toLowerCase() === "risky");
+  const invalid = count((r) => (r.status ?? "").toLowerCase() === "invalid");
+
+  const disposable  = count((r) => r.isDisposable === true);
+  const catchAll    = count((r) => r.isCatchAll === true);
+  const roleAccount = count((r) => r.isRoleAccount === true);
+  const spfFail     = count((r) => r.spfValid === false);
+  const dmarcFail   = count((r) => r.dmarcValid === false);
+  const blacklisted = count((r) => r.blacklisted === true);
+
+  return (
+    <div className="px-5 py-4 border-b border-border space-y-4">
+      {/* Delivery outcome bar */}
+      <div className="space-y-1.5">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Deliverability Breakdown</p>
+        <div className="flex h-3 rounded-full overflow-hidden gap-px">
+          <div className="bg-emerald-500 transition-all" style={{ width: `${pct(valid)}%` }} title={`Valid: ${pct(valid)}%`} />
+          <div className="bg-amber-500 transition-all" style={{ width: `${pct(risky)}%` }} title={`Risky: ${pct(risky)}%`} />
+          <div className="bg-rose-500 transition-all" style={{ width: `${pct(invalid)}%` }} title={`Invalid: ${pct(invalid)}%`} />
+          <div className="bg-muted flex-1" />
+        </div>
+        <div className="flex items-center gap-5 text-xs">
+          <span className="flex items-center gap-1.5">
+            <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
+            <span className="tabular-nums font-medium">{valid.toLocaleString()}</span>
+            <span className="text-muted-foreground">valid ({pct(valid)}%)</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+            <span className="tabular-nums font-medium">{risky.toLocaleString()}</span>
+            <span className="text-muted-foreground">risky ({pct(risky)}%)</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <XCircle className="h-3.5 w-3.5 text-rose-500" />
+            <span className="tabular-nums font-medium">{invalid.toLocaleString()}</span>
+            <span className="text-muted-foreground">invalid ({pct(invalid)}%)</span>
+          </span>
+        </div>
+      </div>
+
+      {/* Flag breakdown */}
+      <div className="space-y-1.5">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Risk Flags</p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {[
+            { icon: Trash2,      label: "Disposable",   count: disposable,  color: "text-rose-500" },
+            { icon: Building2,   label: "Catch-all",    count: catchAll,    color: "text-amber-500" },
+            { icon: WifiOff,     label: "Role account", count: roleAccount, color: "text-orange-500" },
+            { icon: ShieldAlert, label: "SPF fail",     count: spfFail,     color: "text-violet-500" },
+            { icon: ShieldAlert, label: "DMARC fail",   count: dmarcFail,   color: "text-purple-500" },
+            { icon: XCircle,     label: "Blacklisted",  count: blacklisted, color: "text-red-600" },
+          ].map(({ icon: Icon, label, count: c, color }) => (
+            <div key={label} className="rounded-md border border-border bg-muted/30 px-3 py-2.5 flex flex-col gap-0.5">
+              <div className="flex items-center gap-1.5">
+                <Icon className={`h-3.5 w-3.5 ${c > 0 ? color : "text-muted-foreground"}`} />
+                <span className="text-xs text-muted-foreground">{label}</span>
+              </div>
+              <span className={`text-lg font-semibold tabular-nums ${c > 0 ? color : "text-muted-foreground"}`}>
+                {c.toLocaleString()}
+              </span>
+              <span className="text-xs text-muted-foreground">{pct(c)}% of list</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function BulkPage() {
@@ -441,6 +518,9 @@ function BulkPage() {
               </Button>
             </div>
           </div>
+
+          {results.length > 0 && <RiskBreakdown results={results} />}
+
           <div className="overflow-x-auto max-h-96">
             <table className="w-full text-sm">
               <thead>
