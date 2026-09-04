@@ -99,7 +99,7 @@ async function pollMailboxes(): Promise<void> {
           host: deriveImapHost(mailbox.host ?? 'imap.gmail.com'),
           port: IMAP_PORT,
           tls: true,
-          tlsOptions: { rejectUnauthorized: false },
+          tlsOptions: { rejectUnauthorized: true },
           authTimeout: 10000,
           ...authConfig,
         } as import('imap').Config,

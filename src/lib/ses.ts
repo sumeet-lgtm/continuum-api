@@ -9,7 +9,7 @@
  * return — a send response needs to say WHY it didn't go out.
  */
 
-import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
+import { SESv2Client, SendEmailCommand, GetAccountCommand } from '@aws-sdk/client-sesv2';
 import { config } from '../config.js';
 
 export class SesNotConfiguredError extends Error {
@@ -63,6 +63,25 @@ function getClient(): SESv2Client {
     });
   }
   return client;
+}
+
+// Cheap live check for the status page — confirms the account is reachable
+// and not paused/under review, without sending anything. Distinct from
+// "not configured" (no AWS creds set) so the status page can tell "SES was
+// never wired up" apart from "SES is actually down/suspended".
+export async function getSesHealth(): Promise<{ status: 'ok' | 'error' | 'not_configured'; detail?: string }> {
+  if (!config.AWS_REGION || !config.AWS_ACCESS_KEY_ID || !config.AWS_SECRET_ACCESS_KEY) {
+    return { status: 'not_configured' };
+  }
+  try {
+    const account = await getClient().send(new GetAccountCommand({}));
+    if (account.SendingEnabled === false) {
+      return { status: 'error', detail: 'SES sending is paused on this account' };
+    }
+    return { status: 'ok' };
+  } catch (err) {
+    return { status: 'error', detail: err instanceof Error ? err.message : 'SES account check failed' };
+  }
 }
 
 export interface AttachmentInput {

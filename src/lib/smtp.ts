@@ -49,7 +49,7 @@ async function buildTransporter(creds: MailboxCredentials): Promise<Transporter>
     port: creds.port,
     secure: creds.port === 465,
     auth,
-    tls: { rejectUnauthorized: false },
+    tls: { rejectUnauthorized: true },
     connectionTimeout: 15000,
     greetingTimeout: 10000,
     socketTimeout: 30000,

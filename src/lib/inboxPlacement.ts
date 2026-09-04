@@ -73,7 +73,7 @@ async function checkProvider(seed: SeedProvider, testId: string): Promise<Placem
         host: seed.host,
         port: 993,
         tls: true,
-        tlsOptions: { rejectUnauthorized: false },
+        tlsOptions: { rejectUnauthorized: true },
         authTimeout: 10000,
       },
     }) as unknown as ImapSimpleConnection;

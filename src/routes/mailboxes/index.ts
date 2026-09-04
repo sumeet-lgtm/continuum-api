@@ -158,14 +158,26 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
 
     const passwordEnc = password ? encryptValue(password, getMailboxSecret()) : null;
 
+    // Verify the credentials actually work before marking the mailbox
+    // 'active' — otherwise a typo'd app password sits silently active and
+    // gets fed straight into warmup/sending until someone happens to click
+    // "Test connection" later.
+    let status: 'active' | 'error' = 'active';
+    let lastErrorMsg: string | null = null;
+    if (host && passwordEnc) {
+      const smtpResult = await testSmtpConnection({ host, port: port ?? 587, username, passwordEnc, oauthTokenEnc: null });
+      status = smtpResult.ok ? 'active' : 'error';
+      lastErrorMsg = smtpResult.ok ? null : (smtpResult.error ?? 'SMTP test failed');
+    }
+
     const mailbox = await prisma.mailbox.create({
       data: {
         apiKeyId, type, host: host ?? null, port: port ?? null, username,
         passwordEnc, dailyLimit: daily_limit,
         sendDelayMinMs: send_delay_min_ms, sendDelayMaxMs: send_delay_max_ms,
-        status: 'active',
+        status, lastErrorMsg, lastCheckedAt: host && passwordEnc ? new Date() : null,
       },
-      select: { id: true, type: true, host: true, port: true, username: true, dailyLimit: true, status: true, createdAt: true },
+      select: { id: true, type: true, host: true, port: true, username: true, dailyLimit: true, status: true, lastErrorMsg: true, createdAt: true },
     });
     return reply.status(201).send(mailbox);
   });

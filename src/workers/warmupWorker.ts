@@ -20,19 +20,37 @@ function getTodayTarget(wc: { targetPerDay: number; currentPerDay: number; rampU
   return Math.max(5, rampTarget);
 }
 
+// A small fixed template list repeating verbatim across every pair in a
+// small closed pool is a known fingerprint for synthetic-engagement rings —
+// mailbox providers watch for exactly this pattern. Subjects/bodies/greetings
+// /signoffs are combined independently below (11 x 10 x 6 x 6 = 3,960
+// distinct messages) instead of sent as fixed pairs, and no two layers share
+// wording, so the same message text doesn't repeat every few sends.
 const WARMUP_SUBJECTS = [
   'Quick question', 'Following up', 'Thoughts on this?', 'Re: our conversation',
   'Checking in', 'Quick note', 'Any updates?', 'Just checking in',
   'Wanted to share something', 'Re: next steps', 'One quick thing',
 ];
 
+const WARMUP_GREETINGS = [
+  'Hi,', 'Hi there,', 'Hey,', 'Hope you\'re doing well —', 'Morning,', 'Hope your week\'s going well —',
+];
+
 const WARMUP_BODIES = [
-  'Hi, just wanted to follow up on our earlier conversation. Let me know your thoughts.',
-  'Hope you\'re doing well! I wanted to share a quick update. Looking forward to hearing from you.',
-  'Thanks for your time. Just circling back to make sure we\'re aligned. Any questions?',
-  'Hi there! Checking in to see if you had a chance to review what I sent over.',
-  'Just a quick note to keep things moving. Would love to hear back when you get a chance.',
-  'Hope your week is going well. Reaching out to touch base on our last conversation.',
+  'just wanted to follow up on our earlier conversation. Let me know your thoughts whenever you get a chance.',
+  'I wanted to share a quick update on where things stand. Looking forward to hearing back.',
+  'circling back to make sure we\'re still aligned on this. Any questions on your end?',
+  'checking in to see if you had a chance to look at what I sent over.',
+  'a quick note to keep things moving on my end. Would love to hear back when you can.',
+  'reaching out to touch base on where we left things last time.',
+  'wanted to make sure this didn\'t slip through the cracks — any updates?',
+  'just following up in case this got buried. Happy to resend anything you need.',
+  'a short update from my side — let me know if you want to jump on a call about it.',
+  'wanted to close the loop on our last chat whenever you have a moment.',
+];
+
+const WARMUP_SIGNOFFS = [
+  'Thanks!', 'Best,', 'Talk soon,', 'Appreciate it,', 'Cheers,', 'Thanks for your time,',
 ];
 
 const WARMUP_REPLIES = [
@@ -41,10 +59,17 @@ const WARMUP_REPLIES = [
   'Appreciate the note. I\'ll take a look and respond.',
   'Thanks! This is helpful. Chat soon.',
   'Got your message. Will circle back by end of week.',
+  'Noted — give me a day or two and I\'ll reply properly.',
+  'Thanks for the heads up, will get back to you on this.',
+  'Appreciate you following up. Looking into it now.',
 ];
 
 function randomItem<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]!;
+}
+
+function composeWarmupBody(): string {
+  return `${randomItem(WARMUP_GREETINGS)} ${randomItem(WARMUP_BODIES)}\n\n${randomItem(WARMUP_SIGNOFFS)}`;
 }
 
 function getMailboxSecret(): string {
@@ -90,7 +115,7 @@ async function autoOpenAndReply(
         host: deriveImapHost(targetMailbox.host),
         port: IMAP_PORT,
         tls: true,
-        tlsOptions: { rejectUnauthorized: false },
+        tlsOptions: { rejectUnauthorized: true },
         authTimeout: 10000,
         ...authConfig,
       } as import('imap').Config,
@@ -150,6 +175,11 @@ async function processWarmupTick(): Promise<void> {
   const cfg = config as Record<string, unknown>;
   if (!cfg['WARMUP_POOL_ENABLED']) return;
 
+  // Jitter the start of each tick — without this, every day's sends land
+  // at the same predictable minute-past-the-hour, which is itself a
+  // mechanical pattern real correspondence doesn't have.
+  await new Promise(r => setTimeout(r, Math.random() * 10 * 60 * 1000));
+
   // Get all enabled warmup configs with their mailboxes
   const warmupConfigs = await prisma.warmupConfig.findMany({
     where: { enabled: true },
@@ -191,7 +221,7 @@ async function processWarmupTick(): Promise<void> {
 
     for (let i = 0; i < sendCount; i++) {
       const subject = randomItem(WARMUP_SUBJECTS);
-      const body = randomItem(WARMUP_BODIES);
+      const body = composeWarmupBody();
       const poolTier = wc.poolTier ?? 'standard';
       const replyRate = (wc.replyRatePct ?? 20) / 100;
       const shouldReply = Math.random() < replyRate;
@@ -210,9 +240,13 @@ async function processWarmupTick(): Promise<void> {
             from: mailbox.username,
             to: target.mailbox.username,
             subject,
-            htmlBody: `<p>${body}</p>`,
+            htmlBody: `<p>${body.replace(/\n/g, '<br>')}</p>`,
             textBody: body,
-            headers: { 'X-Warmup-Pool': 'continuum', 'X-Warmup-Tier': poolTier },
+            // Deliberately no identifying headers (e.g. X-Warmup-*) on the
+            // delivered message — this needs to read as ordinary person-to-
+            // person mail to the receiving mailbox, not tag itself as
+            // automated warmup traffic. Tier is tracked in our own DB, not
+            // on the wire.
           },
         );
 

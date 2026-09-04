@@ -54,7 +54,7 @@ export async function testImapConnection(creds: {
         host: deriveImapHost(creds.host),
         port: IMAP_PORT,
         tls: true,
-        tlsOptions: { rejectUnauthorized: false },
+        tlsOptions: { rejectUnauthorized: true },
         authTimeout: 10000,
         ...imapConfig,
       } as import('imap').Config,

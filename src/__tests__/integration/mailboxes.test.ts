@@ -54,12 +54,23 @@ vi.mock('../../engine/smtp.js', () => ({
   }),
 }));
 
+// POST /v1/mailboxes now verifies credentials inline before marking a
+// mailbox 'active' — mock the actual SMTP dial so this suite doesn't depend
+// on live DNS/network (previously it accidentally worked because
+// smtp.example.com fails fast, which is not something to rely on in CI).
+vi.mock('../../lib/smtp.js', () => ({
+  testSmtpConnection: vi.fn().mockResolvedValue({ ok: true }),
+  sendViaSmtp: vi.fn(),
+}));
+
 import { buildApp } from '../../server.js';
 import { prisma } from '../../lib/prisma.js';
+import { testSmtpConnection } from '../../lib/smtp.js';
 
 const mockFindKey = vi.mocked(prisma.apiKey.findUnique);
 const mockMailboxCount = vi.mocked(prisma.mailbox.count);
 const mockMailboxCreate = vi.mocked(prisma.mailbox.create);
+const mockTestSmtpConnection = vi.mocked(testSmtpConnection);
 
 // requireAuth caches resolved API keys in-process, keyed by hash of the raw
 // key string — reusing one literal key across tests with different `plan`
@@ -155,5 +166,38 @@ describe('POST /v1/mailboxes — per-plan mailbox cap', () => {
 
     expect(res.statusCode).toBe(422);
     expect(mockMailboxCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /v1/mailboxes — verifies credentials before marking active', () => {
+  it('tests the SMTP connection and creates the mailbox as active when it succeeds', async () => {
+    mockFindKey.mockResolvedValue(makeKey({ plan: 'free' }) as never);
+    mockMailboxCount.mockResolvedValue(0);
+    mockTestSmtpConnection.mockResolvedValueOnce({ ok: true });
+
+    const res = await createMailbox();
+
+    expect(res.statusCode).toBe(201);
+    expect(mockTestSmtpConnection).toHaveBeenCalledTimes(1);
+    expect(mockMailboxCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'active', lastErrorMsg: null }) }),
+    );
+  });
+
+  it('creates the mailbox as error (not active) when the SMTP test fails, instead of silently trusting a bad password', async () => {
+    mockFindKey.mockResolvedValue(makeKey({ plan: 'free' }) as never);
+    mockMailboxCount.mockResolvedValue(0);
+    mockTestSmtpConnection.mockResolvedValueOnce({ ok: false, error: 'Invalid login: 535-5.7.8' });
+
+    const res = await createMailbox();
+
+    // Still 201 — the mailbox row is created either way, just flagged so it
+    // isn't picked up for sending/warmup until fixed.
+    expect(res.statusCode).toBe(201);
+    expect(mockMailboxCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'error', lastErrorMsg: 'Invalid login: 535-5.7.8' }),
+      }),
+    );
   });
 });
