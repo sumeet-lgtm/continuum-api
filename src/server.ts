@@ -61,6 +61,7 @@ import { authRoutes } from './routes/auth/index.js';
 import { calcomWebhookRoutes } from './routes/webhooks/calcom.js';
 import { workosWebhookRoutes } from './routes/webhooks/workos.js';
 import { orgRoutes } from './routes/org/index.js';
+import { publicStatusRoutes } from './routes/public-status.js';
 import { loadDisposableList } from './engine/disposable.js';
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -223,6 +224,8 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(workosWebhookRoutes);
   // Organization management (session JWT auth)
   await app.register(orgRoutes);
+  // Public status page endpoints (no auth)
+  await app.register(publicStatusRoutes);
   // Tracking + unsubscribe at root (no /v1 — links in emails go here)
   await app.register(trackRoutes);
   await app.register(unsubscribeRoutes, { prefix: '/v1' });
