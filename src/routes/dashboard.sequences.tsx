@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2, Edit2, Sparkles, Linkedin, CheckSquare, Mail } from "lucide-react";
+import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2, Edit2, Sparkles, Linkedin, CheckSquare, Mail, InboxIcon, RotateCcw } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/sequences")({
   head: () => ({ meta: [{ title: "Sequences — Continuum API" }] }),
@@ -72,6 +72,16 @@ interface Sequence {
   _count?: { steps: number; enrollments: number };
 }
 
+interface Mailbox {
+  id: string;
+  type: string;
+  username: string;
+  dailyLimit: number;
+  sentToday: number;
+  status: string;
+  connectedViaOAuth: boolean;
+}
+
 interface EnrollmentRow {
   id: string;
   email: string;
@@ -115,8 +125,9 @@ function SequencesPage() {
   const [sequences, setSequences] = useState<Sequence[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [form, setForm] = useState({
-    name: "", fromName: "", fromEmail: "",
+    name: "", fromName: "", fromEmail: "", mailboxId: "",
     sendDays: DEFAULT_DAYS as string[],
     sendStartHour: "8", sendEndHour: "17",
   });
@@ -178,7 +189,14 @@ function SequencesPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, [primaryKey]);
+  useEffect(() => {
+    load();
+    if (primaryKey?.keyRaw) {
+      api.withKey.get<{ data: Mailbox[] }>("/v1/mailboxes", primaryKey.keyRaw)
+        .then((r) => setMailboxes(r.data ?? []))
+        .catch(() => {});
+    }
+  }, [primaryKey]);
 
   const loadSteps = async (seqId: string) => {
     if (!primaryKey?.keyRaw) return;
@@ -232,10 +250,12 @@ function SequencesPage() {
     if (form.sendDays.length === 0) { toast.error("Select at least one send day"); return; }
     setSaving(true);
     try {
+      const selectedMailbox = mailboxes.find((m) => m.id === form.mailboxId);
       await api.withKey.post("/v1/sequences", {
         name: form.name,
-        from_name: form.fromName,
-        from_email: form.fromEmail,
+        from_name: form.fromName || selectedMailbox?.username?.split("@")[0] || form.fromName,
+        from_email: form.fromEmail || selectedMailbox?.username || form.fromEmail,
+        ...(form.mailboxId ? { mailbox_id: form.mailboxId } : {}),
         stop_on_reply: true,
         track_opens: true,
         track_clicks: true,
@@ -245,7 +265,7 @@ function SequencesPage() {
       }, primaryKey.keyRaw);
       toast.success("Sequence created");
       setCreating(false);
-      setForm({ name: "", fromName: "", fromEmail: "", sendDays: DEFAULT_DAYS, sendStartHour: "8", sendEndHour: "17" });
+      setForm({ name: "", fromName: "", fromEmail: "", mailboxId: "", sendDays: DEFAULT_DAYS, sendStartHour: "8", sendEndHour: "17" });
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }
@@ -637,13 +657,52 @@ function SequencesPage() {
             <Label>Sequence name</Label>
             <Input placeholder="Cold Outreach Q4" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
           </div>
+          {mailboxes.length > 0 ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <Label>Sending mailbox</Label>
+                <span className="text-xs text-muted-foreground">(rotates sends to protect deliverability)</span>
+              </div>
+              <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto rounded-md border border-border p-2">
+                {mailboxes.map((mb) => {
+                  const remaining = Math.max(0, mb.dailyLimit - mb.sentToday);
+                  const pct = mb.dailyLimit > 0 ? Math.round((mb.sentToday / mb.dailyLimit) * 100) : 0;
+                  const isSelected = form.mailboxId === mb.id;
+                  return (
+                    <button
+                      key={mb.id}
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, mailboxId: isSelected ? "" : mb.id, fromEmail: isSelected ? f.fromEmail : mb.username, fromName: isSelected ? f.fromName : mb.username.split("@")[0] }))}
+                      className={`flex items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors hover:bg-muted/40 ${isSelected ? "border-foreground/40 bg-muted/30" : "border-border"}`}
+                    >
+                      <InboxIcon className={`h-4 w-4 shrink-0 ${mb.status === "active" ? "text-emerald-500" : "text-muted-foreground"}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate">{mb.username}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <div className="h-1 flex-1 rounded-full bg-muted overflow-hidden">
+                            <div className={`h-full transition-all ${pct > 80 ? "bg-rose-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className="text-[10px] text-muted-foreground tabular-nums whitespace-nowrap">{remaining} left today</span>
+                        </div>
+                      </div>
+                      {isSelected && <RotateCcw className="h-3.5 w-3.5 text-foreground shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+              {!form.mailboxId && (
+                <p className="text-xs text-muted-foreground">No mailbox selected — fill from/email manually below</p>
+              )}
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>From name</Label>
+              <Label>From name {mailboxes.length > 0 && form.mailboxId && <span className="text-muted-foreground font-normal">(auto-filled)</span>}</Label>
               <Input placeholder="Sumeet" value={form.fromName} onChange={(e) => setForm((f) => ({ ...f, fromName: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>From email</Label>
+              <Label>From email {mailboxes.length > 0 && form.mailboxId && <span className="text-muted-foreground font-normal">(auto-filled)</span>}</Label>
               <Input placeholder="sumeet@yourapp.com" value={form.fromEmail} onChange={(e) => setForm((f) => ({ ...f, fromEmail: e.target.value }))} />
             </div>
           </div>
