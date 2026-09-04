@@ -20,18 +20,25 @@ const ALL_PRODUCTION_SECRETS = {
 };
 
 let originalEnv: NodeJS.ProcessEnv;
+let originalArgv1: string;
 
 beforeEach(() => {
   originalEnv = { ...process.env };
+  originalArgv1 = process.argv[1] ?? '';
   vi.resetModules();
 });
 
 afterEach(() => {
   process.env = originalEnv;
+  process.argv[1] = originalArgv1;
 });
 
-async function loadConfigWithEnv(env: Record<string, string | undefined>): Promise<{ ok: true } | { ok: false; error: Error }> {
+async function loadConfigWithEnv(
+  env: Record<string, string | undefined>,
+  argv1?: string,
+): Promise<{ ok: true } | { ok: false; error: Error }> {
   process.env = { ...originalEnv, ...env } as NodeJS.ProcessEnv;
+  if (argv1 !== undefined) process.argv[1] = argv1;
   // Delete keys explicitly set to undefined so they read as truly unset,
   // not the string "undefined".
   for (const [key, value] of Object.entries(env)) {
@@ -109,5 +116,39 @@ describe('config production validation', () => {
       ...ALL_PRODUCTION_SECRETS,
     });
     expect(result.ok).toBe(true);
+  });
+
+  it('does not require WORKOS_API_KEY/ALLOWED_ORIGINS for a worker process — only the HTTP server uses auth routes and CORS', async () => {
+    const result = await loadConfigWithEnv(
+      {
+        NODE_ENV: 'production',
+        ...REQUIRED_BASE_ENV,
+        ...ALL_PRODUCTION_SECRETS,
+        WORKOS_API_KEY: undefined,
+        WORKOS_CLIENT_ID: undefined,
+        ALLOWED_ORIGINS: undefined,
+      },
+      '/app/dist/workers/sendWorker.js',
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('does require WORKOS_API_KEY/ALLOWED_ORIGINS for the HTTP server process', async () => {
+    const result = await loadConfigWithEnv(
+      {
+        NODE_ENV: 'production',
+        ...REQUIRED_BASE_ENV,
+        ...ALL_PRODUCTION_SECRETS,
+        WORKOS_API_KEY: undefined,
+        WORKOS_CLIENT_ID: undefined,
+        ALLOWED_ORIGINS: undefined,
+      },
+      '/app/dist/server.js',
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/WORKOS_API_KEY/);
+      expect(result.error.message).toMatch(/ALLOWED_ORIGINS/);
+    }
   });
 });

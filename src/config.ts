@@ -176,6 +176,19 @@ const REQUIRED_IN_PRODUCTION = [
   'OPTIN_SECRET',
 ] as const;
 
+// WorkOS auth routes and CORS only exist on the HTTP server (server.ts) —
+// no worker and not smtp-relay.ts ever imports the auth plugin or registers
+// @fastify/cors, so requiring these on every process meant every other
+// service needed its own copy of web's secrets just to boot, and silently
+// crash-looped forever if that copy was ever missed. Checked positively
+// against the one entrypoint that actually needs them (server.js/server.ts)
+// rather than excluding known non-web ones, so a future new service doesn't
+// silently inherit this requirement by default either. Detected from the
+// running entrypoint's path rather than a new env var, so this needs zero
+// manual configuration on any platform, Railway included.
+const entrypoint = process.argv[1]?.replace(/\\/g, '/') ?? '';
+const isWebProcess = /\/server\.(js|ts)$/.test(entrypoint);
+
 const envSchema = baseEnvSchema.superRefine((val, ctx) => {
   if (val.NODE_ENV !== 'production') return;
 
@@ -202,14 +215,14 @@ const envSchema = baseEnvSchema.superRefine((val, ctx) => {
       message: 'API_KEY_SALT must be set to a real value in production — the dev default is not allowed',
     });
   }
-  if (!val.WORKOS_API_KEY || !val.WORKOS_CLIENT_ID) {
+  if (isWebProcess && (!val.WORKOS_API_KEY || !val.WORKOS_CLIENT_ID)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['WORKOS_API_KEY'],
       message: 'WORKOS_API_KEY and WORKOS_CLIENT_ID are required in production — without them all auth routes return 501',
     });
   }
-  if (!val.ALLOWED_ORIGINS) {
+  if (isWebProcess && !val.ALLOWED_ORIGINS) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['ALLOWED_ORIGINS'],
