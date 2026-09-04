@@ -72,6 +72,15 @@ interface Sequence {
   _count?: { steps: number; enrollments: number };
 }
 
+interface EnrollmentRow {
+  id: string;
+  email: string;
+  status: string;
+  currentStep: number;
+  nextSendAt: string | null;
+  enrolledAt: string;
+}
+
 const CONDITION_LABELS: Record<string, string> = {
   always: "Always send",
   if_not_opened: "Only if not opened",
@@ -152,6 +161,13 @@ function SequencesPage() {
   const [showFunnelFor, setShowFunnelFor] = useState<string | null>(null);
   const [funnelData, setFunnelData] = useState<Record<string, FunnelStep[]>>({});
   const [funnelLoading, setFunnelLoading] = useState<string | null>(null);
+
+  // Pipeline (enrolled contacts)
+  const [showPipelineFor, setShowPipelineFor] = useState<string | null>(null);
+  const [pipelineData, setPipelineData] = useState<Record<string, EnrollmentRow[]>>({});
+  const [pipelineLoading, setPipelineLoading] = useState<string | null>(null);
+  const [pipelineStatus, setPipelineStatus] = useState<Record<string, string>>({});
+  const [unenrolling, setUnenrolling] = useState<string | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -557,6 +573,43 @@ function SequencesPage() {
     }
   };
 
+  const loadPipeline = async (seqId: string, status?: string) => {
+    if (!primaryKey?.keyRaw) return;
+    setPipelineLoading(seqId);
+    try {
+      const qs = status ? `?status=${status}&limit=50` : "?limit=50";
+      const r = await api.withKey.get<{ data: EnrollmentRow[] }>(`/v1/sequences/${seqId}/contacts${qs}`, primaryKey.keyRaw);
+      setPipelineData((prev) => ({ ...prev, [seqId]: r.data ?? [] }));
+    } catch {
+      setPipelineData((prev) => ({ ...prev, [seqId]: [] }));
+    } finally {
+      setPipelineLoading(null);
+    }
+  };
+
+  const togglePipeline = (seqId: string) => {
+    if (showPipelineFor === seqId) { setShowPipelineFor(null); return; }
+    setShowPipelineFor(seqId);
+    loadPipeline(seqId, pipelineStatus[seqId]);
+  };
+
+  const unenroll = async (seqId: string, email: string) => {
+    if (!primaryKey?.keyRaw) return;
+    setUnenrolling(email);
+    try {
+      await fetch(`https://api.continuumapi.com/v1/sequences/${seqId}/contacts/${encodeURIComponent(email)}`, {
+        method: "DELETE",
+        headers: { "X-API-Key": primaryKey.keyRaw! },
+      });
+      toast.success(`${email} unenrolled`);
+      setPipelineData((prev) => ({ ...prev, [seqId]: (prev[seqId] ?? []).filter((r) => r.email !== email) }));
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setUnenrolling(null);
+    }
+  };
+
   const loadSeqStats = async (seqId: string) => {
     if (seqStats[seqId]) return; // already loaded
     try {
@@ -833,6 +886,14 @@ function SequencesPage() {
                   >
                     <BarChart2 className="h-3 w-3" /> Funnel
                   </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className={`gap-1 h-7 text-xs ${showPipelineFor === seq.id ? "bg-muted" : ""}`}
+                    onClick={() => togglePipeline(seq.id)}
+                  >
+                    <Users className="h-3 w-3" /> Pipeline
+                  </Button>
                 </div>
               </div>
 
@@ -882,6 +943,94 @@ function SequencesPage() {
                           )}
                         </div>
                       ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Pipeline (enrolled contacts) panel */}
+              {showPipelineFor === seq.id && (
+                <div className="border-t border-border bg-muted/10 p-5 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Lead Pipeline</p>
+                    <select
+                      value={pipelineStatus[seq.id] ?? ""}
+                      onChange={(e) => {
+                        const s = e.target.value;
+                        setPipelineStatus((p) => ({ ...p, [seq.id]: s }));
+                        setPipelineData((p) => ({ ...p, [seq.id]: [] }));
+                        loadPipeline(seq.id, s || undefined);
+                      }}
+                      className="h-7 rounded-md border border-border bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                    >
+                      <option value="">All statuses</option>
+                      <option value="active">Active</option>
+                      <option value="replied">Replied</option>
+                      <option value="completed">Completed</option>
+                      <option value="bounced">Bounced</option>
+                      <option value="unsubscribed">Unsubscribed</option>
+                      <option value="paused">Paused</option>
+                    </select>
+                  </div>
+                  {pipelineLoading === seq.id ? (
+                    <p className="text-xs text-muted-foreground">Loading contacts…</p>
+                  ) : (pipelineData[seq.id] ?? []).length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No contacts match this filter.</p>
+                  ) : (
+                    <div className="rounded-lg border border-border overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/20">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Email</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Status</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Step</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Next send</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Enrolled</th>
+                            <th className="px-3 py-2" />
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {(pipelineData[seq.id] ?? []).map((row) => {
+                            const statusColors: Record<string, string> = {
+                              active: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+                              replied: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+                              completed: "bg-foreground/10 text-foreground",
+                              bounced: "bg-destructive/10 text-destructive",
+                              unsubscribed: "bg-muted/40 text-muted-foreground",
+                              paused: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+                            };
+                            return (
+                              <tr key={row.id} className="hover:bg-muted/10">
+                                <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{row.email}</td>
+                                <td className="px-3 py-2">
+                                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize ${statusColors[row.status] ?? "bg-muted/40 text-muted-foreground"}`}>
+                                    {row.status}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2 text-xs text-muted-foreground">Step {row.currentStep + 1}</td>
+                                <td className="px-3 py-2 text-xs text-muted-foreground">
+                                  {row.nextSendAt ? new Date(row.nextSendAt).toLocaleDateString() : "—"}
+                                </td>
+                                <td className="px-3 py-2 text-xs text-muted-foreground">
+                                  {new Date(row.enrolledAt).toLocaleDateString()}
+                                </td>
+                                <td className="px-3 py-2 text-right">
+                                  {row.status === "active" && (
+                                    <button
+                                      type="button"
+                                      disabled={unenrolling === row.email}
+                                      onClick={() => unenroll(seq.id, row.email)}
+                                      className="text-xs text-muted-foreground hover:text-destructive transition-colors"
+                                    >
+                                      {unenrolling === row.email ? "…" : "Remove"}
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
                     </div>
                   )}
                 </div>
