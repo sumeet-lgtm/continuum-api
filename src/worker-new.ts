@@ -3,7 +3,9 @@ import { startSequenceWorker, scheduleSequenceTicks } from './workers/sequenceWo
 import { startWarmupWorker, scheduleWarmupTicks } from './workers/warmupWorker.js';
 import { startImapWorker, scheduleImapTicks } from './workers/imapWorker.js';
 import { runAutomationWorker } from './workers/automationWorker.js';
-import { sequenceQueue, warmupQueue, imapQueue } from './lib/queue.js';
+import { startSalesforceSyncWorker, scheduleSalesforceSyncTicks } from './workers/salesforceSyncWorker.js';
+import { sequenceQueue, warmupQueue, imapQueue, salesforceSyncQueue } from './lib/queue.js';
+import { isSalesforceOAuthConfigured } from './lib/oauth/salesforce.js';
 
 const closable: Array<{ close(): Promise<void> }> = [];
 
@@ -35,6 +37,13 @@ if (process.env['IMAP_POLL_ENABLED'] === 'true') {
   // unsubscribe-via-IMAP silently never ran.
   void scheduleImapTicks(imapQueue).catch((err: unknown) => {
     console.error('[worker-new] failed to schedule IMAP ticks:', err);
+  });
+}
+
+if (isSalesforceOAuthConfigured()) {
+  closable.push(startSalesforceSyncWorker());
+  void scheduleSalesforceSyncTicks(salesforceSyncQueue).catch((err: unknown) => {
+    console.error('[worker-new] failed to schedule Salesforce sync ticks:', err);
   });
 }
 

@@ -160,6 +160,7 @@ model ApiKey {
   connector_secrets connector_secrets[]
   connector_rules   connector_rules[]
   connector_events  connector_events[]
+  salesforceConnection SalesforceConnection?
 
   @@index([orgId])
   @@map("api_keys")
@@ -1240,4 +1241,47 @@ model connector_events {
   @@index([api_key_id, created_at(sort: Desc)])
   @@index([api_key_id, connector])
   @@map("connector_events")
+}
+
+// ─── Salesforce two-way sync (added 2026-09-04) ───────────────────────────
+// One Continuum-owned Connected App (SALESFORCE_CLIENT_ID/SECRET) is
+// authorized per-customer against THEIR org via standard OAuth2 — same
+// multi-tenant pattern as the Gmail/Outlook mailbox connect, not a
+// per-customer app registration.
+
+model SalesforceConnection {
+  id              String    @id @default(cuid())
+  apiKeyId        String    @unique
+  instanceUrl     String    // e.g. https://my-org.my.salesforce.com — every REST call must target this, not a fixed host
+  refreshTokenEnc String
+  orgId           String?
+  connectedEmail  String?   // the Salesforce user who authorized the connection
+  syncEnabled     Boolean   @default(true)
+  lastPushedAt    DateTime?
+  lastPulledAt    DateTime?
+  lastErrorMsg    String?
+  createdAt       DateTime  @default(now())
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@map("salesforce_connections")
+}
+
+// One row per Continuum lead that's been pushed to Salesforce — tracks the
+// SFDC record id (so re-syncs update in place instead of duplicating) and
+// the last known SFDC-side status, so the pull direction can tell "the rep
+// changed this in Salesforce" apart from "nothing changed since we looked".
+model SalesforceLeadSync {
+  id             String    @id @default(cuid())
+  apiKeyId       String
+  leadEmail      String
+  salesforceId   String
+  sfObjectType   String    @default("Lead") // Lead | Contact — a converted Lead becomes a Contact on the SFDC side
+  lastPushedAt   DateTime  @default(now())
+  lastSfStatus   String?
+  lastSfSyncedAt DateTime?
+
+  @@unique([apiKeyId, leadEmail])
+  @@index([apiKeyId, salesforceId])
+  @@map("salesforce_lead_syncs")
 }

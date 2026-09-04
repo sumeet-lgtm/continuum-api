@@ -126,6 +126,18 @@ const baseEnvSchema = z.object({
   MICROSOFT_OAUTH_CLIENT_SECRET: z.string().optional(),
   MICROSOFT_OAUTH_REDIRECT_URI: z.string().url().optional(),
 
+  // Salesforce Connected App (one Continuum-owned app, authorized per
+  // customer against their own org via standard OAuth2 — same pattern as
+  // Gmail/Outlook above). From Setup → App Manager → New Connected App
+  // in the org that owns the app registration.
+  SALESFORCE_CLIENT_ID: z.string().optional(),
+  SALESFORCE_CLIENT_SECRET: z.string().optional(),
+  SALESFORCE_REDIRECT_URI: z.string().url().optional(),
+  // https://login.salesforce.com for production/developer orgs,
+  // https://test.salesforce.com for sandboxes — same Connected App works
+  // against either, this just picks which login host to redirect to.
+  SALESFORCE_LOGIN_URL: z.string().url().default('https://login.salesforce.com'),
+
   // Cal.com webhook secret (paste here after setting it in Cal.com → Webhooks → Secret)
   CALCOM_WEBHOOK_SECRET: z.string().optional(),
   // WorkOS webhook secret (from WorkOS Dashboard → Webhooks → Endpoint → Secret)

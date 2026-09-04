@@ -8,7 +8,9 @@ import { startSequenceWorker, scheduleSequenceTicks } from './workers/sequenceWo
 import { startWarmupWorker, scheduleWarmupTicks } from './workers/warmupWorker.js';
 import { startImapWorker, scheduleImapTicks } from './workers/imapWorker.js';
 import { startDailyChecksWorker, scheduleDailyChecks, QUEUE_DAILY } from './workers/scheduledChecks.js';
-import { QUEUE_SEQUENCE, QUEUE_WARMUP, QUEUE_IMAP, closeQueues, redisConnection } from './lib/queue.js';
+import { startSalesforceSyncWorker, scheduleSalesforceSyncTicks } from './workers/salesforceSyncWorker.js';
+import { QUEUE_SEQUENCE, QUEUE_WARMUP, QUEUE_IMAP, QUEUE_SALESFORCE_SYNC, closeQueues, redisConnection } from './lib/queue.js';
+import { isSalesforceOAuthConfigured } from './lib/oauth/salesforce.js';
 import { Queue } from 'bullmq';
 import { disconnectPrisma } from './lib/prisma.js';
 
@@ -46,6 +48,16 @@ async function main(): Promise<void> {
   closable.push(startDailyChecksWorker());
   const dailyQueue = new Queue(QUEUE_DAILY, { connection: redisConnection });
   await scheduleDailyChecks(dailyQueue);
+
+  // Salesforce sync runs whenever the Connected App is configured — unlike
+  // warmup/IMAP there's no separate risk-of-abuse reason to gate it behind
+  // its own flag; no customer connection means the tick finds nothing to do.
+  if (isSalesforceOAuthConfigured()) {
+    closable.push(startSalesforceSyncWorker());
+    const salesforceSyncQueue = new Queue(QUEUE_SALESFORCE_SYNC, { connection: redisConnection });
+    await scheduleSalesforceSyncTicks(salesforceSyncQueue);
+    logger.info('Salesforce sync worker started');
+  }
 
   logger.info('All workers started');
 
