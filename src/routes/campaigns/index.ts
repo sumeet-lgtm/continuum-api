@@ -8,6 +8,13 @@ import { campaignQueue } from '../../lib/queue.js';
 import { sendViaSes, isSesConfigured } from '../../lib/ses.js';
 import { generateOpenToken, generateClickToken, injectTracking } from '../../lib/tracking.js';
 import { generateUnsubToken, generateUnsubHtml } from '../../lib/unsubscribe.js';
+import { config } from '../../config.js';
+import { logger } from '../../lib/logger.js';
+import { requireMonthlyQuota, incrementUsageBy } from '../../plugins/usageMeter.js';
+import { deriveListSegments } from '../../lib/campaignSegments.js';
+import { generateSegmentEmail } from '../../lib/emailGenerator.js';
+
+const GROWTH_PLANS = new Set(['growth', 'scale']);
 
 const createSchema = z.object({
   name: z.string().min(1).max(200),
@@ -505,5 +512,71 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
       pages: Math.ceil(total / limit),
       data: rows,
     });
+  });
+
+  // POST /v1/campaigns/generate-copy — the non-slop email engine.
+  //
+  // Instead of asking the customer to describe their audience in the
+  // abstract (what every "AI email generator" does, producing the same
+  // generic output regardless of who's actually on the list), this pulls
+  // the campaign's ACTUAL target list, derives real segments from whatever
+  // signal is genuinely present (industry, title/seniority — see
+  // campaignSegments.ts), and generates one grounded, knowledge-base-
+  // reviewed draft per segment rather than one draft for "everyone."
+  //
+  // Segment-level, not per-recipient: a deliberate v1 scope decision — full
+  // per-recipient live generation at send time is real future work (its own
+  // cost model, schema, and send-time architecture), tracked separately.
+  const generateCopySchema = z.object({
+    about: z.string().min(1).max(1000),
+    sender: z.object({
+      name: z.string().max(200).optional(),
+      company: z.string().max(200).optional(),
+      product: z.string().max(200).optional(),
+    }).optional(),
+    tone: z.enum(['professional', 'casual', 'direct', 'technical']).optional(),
+    list_ids: z.array(z.string()).min(1),
+    max_segments: z.number().int().min(1).max(5).default(3),
+  });
+
+  fastify.post('/campaigns/generate-copy', { preHandler: [requireAuth, requireRateLimit, requireMonthlyQuota] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!config.AI_PERSONALIZATION_ENABLED) {
+      throw Errors.forbidden('AI features are not enabled on this account.');
+    }
+    const plan: string = (request.apiKey as { plan?: string }).plan ?? 'free';
+    if (!GROWTH_PLANS.has(plan)) {
+      throw Errors.forbidden('AI campaign copy generation requires a Growth or Scale plan.');
+    }
+    const anthropicKey = config.ANTHROPIC_API_KEY;
+    if (!anthropicKey) throw Errors.serviceUnavailable('AI service temporarily unavailable.');
+
+    const parsed = generateCopySchema.safeParse(request.body);
+    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+    const { about, sender, tone, list_ids, max_segments } = parsed.data;
+    const apiKeyId = request.apiKey.id;
+
+    const lists = await prisma.mailingList.findMany({ where: { id: { in: list_ids }, apiKeyId }, select: { id: true } });
+    if (lists.length === 0) throw Errors.notFound('No matching lists found for this account.');
+
+    const { totalContacts, segments } = await deriveListSegments(apiKeyId, list_ids, max_segments);
+    if (totalContacts === 0) throw Errors.validationFailed([{ field: 'list_ids', message: 'These lists have no subscribed contacts to generate copy for.' }]);
+
+    try {
+      const emails = await Promise.all(
+        segments.map((segment) => generateSegmentEmail(anthropicKey, { about, sender, tone, segment })),
+      );
+      void incrementUsageBy(apiKeyId, emails.length);
+      return reply.status(200).send({
+        totalContacts,
+        segmentCount: segments.length,
+        emails,
+        model: 'claude-sonnet-5',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'generation failed';
+      logger.error({ err: msg }, 'Campaign copy generation failed');
+      throw Errors.serviceUnavailable('Copy generation failed. Please try again.');
+    }
   });
 }
