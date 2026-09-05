@@ -50,7 +50,7 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import { CommandPalette } from "@/components/CommandPalette";
-import { Wordmark } from "@/components/Logo";
+import { Wordmark, Logo } from "@/components/Logo";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -326,7 +326,7 @@ function DashboardLayout() {
   if (loading || !user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-foreground" />
+        <Logo size={36} />
       </div>
     );
   }

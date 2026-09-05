@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/Logo";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -752,7 +753,7 @@ function FinderPage() {
 
         {phase === "searching" && (
           <div className="flex flex-col items-center justify-center h-64 text-center rounded-xl border border-border bg-muted/5">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-3" />
+            <Logo size={40} className="mb-3" />
             <p className="text-sm font-medium">Searching 250M+ contacts…</p>
             <p className="text-xs text-muted-foreground mt-1">Usually takes 1–2 minutes.</p>
             <div className="mt-4 flex items-center gap-2">

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/Logo";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
@@ -13,7 +14,6 @@ import {
   ChevronRight,
   CheckCircle2,
   AlertCircle,
-  Loader2,
   Plus,
   ArrowLeft,
   FileText,
@@ -777,7 +777,7 @@ function ListStep({
 function ImportingStep() {
   return (
     <div className="flex flex-col items-center justify-center py-20 gap-4">
-      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      <Logo size={40} />
       <div className="text-center">
         <p className="text-sm font-medium">Importing your contacts…</p>
         <p className="text-xs text-muted-foreground mt-1">This usually takes a few seconds. Don't close this tab.</p>

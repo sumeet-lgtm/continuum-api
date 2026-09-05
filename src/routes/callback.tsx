@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { Logo } from "@/components/Logo";
 
 export const Route = createFileRoute("/callback")({
   component: CallbackPage,
@@ -23,7 +24,7 @@ function CallbackPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-black">
-      <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/10 border-t-white" />
+      <Logo size={36} />
     </div>
   );
 }
