@@ -98,6 +98,17 @@ export const Route = createFileRoute("/dashboard/campaigns")({
   component: CampaignsPage,
 });
 
+interface DeepGenEmail {
+  segmentLabel: string;
+  matchCount: number;
+  matchPct: number;
+  subject: string;
+  textBody: string;
+  htmlBody: string;
+  hookUsed: string;
+  revised: boolean;
+}
+
 interface Campaign {
   id: string;
   fromName: string;
@@ -308,11 +319,16 @@ function CampaignsPage() {
   const [resumingCampaign, setResumingCampaign] = useState<string | null>(null);
   const [pickingWinner, setPickingWinner] = useState<string | null>(null);
   const [aiBriefText, setAiBriefText] = useState("");
-  const [aiBriefTone, setAiBriefTone] = useState<"professional" | "casual" | "friendly" | "urgent">("professional");
-  const [aiBriefGenerating, setAiBriefGenerating] = useState(false);
+  const [aiBriefTone, setAiBriefTone] = useState<"professional" | "casual" | "direct" | "technical">("professional");
   const [subjectIdeas, setSubjectIdeas] = useState<string[]>([]);
   const [subjectIdeasLoading, setSubjectIdeasLoading] = useState(false);
   const [showSubjectIdeas, setShowSubjectIdeas] = useState(false);
+  // Deep-generate: segment-grounded, knowledge-base-reviewed drafts — the
+  // real feature, replacing the old single-generic-draft "Draft with AI".
+  const [deepGenLoading, setDeepGenLoading] = useState(false);
+  const [deepGenResults, setDeepGenResults] = useState<DeepGenEmail[] | null>(null);
+  const [deepGenTotalContacts, setDeepGenTotalContacts] = useState(0);
+  const [deepGenAppliedIdx, setDeepGenAppliedIdx] = useState<number | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -435,24 +451,46 @@ function CampaignsPage() {
     setForm((f) => ({ ...f, textBody: plain }));
   };
 
-  const generateCampaignWithAI = async () => {
+  // Deep-generate: pulls the ACTUAL target list, derives real segments from
+  // whatever signal is genuinely present in it (industry, title/seniority —
+  // never a hypothetical audience), and generates one grounded,
+  // knowledge-base-reviewed draft per segment via /v1/campaigns/generate-copy.
+  // Segment-level by design (see the backend route's own comment) — not
+  // per-recipient live generation, which is separate future work.
+  const generateDeepCopy = async () => {
     if (!primaryKey?.keyRaw || !aiBriefText.trim()) return;
-    setAiBriefGenerating(true);
+    if (!form.listId) {
+      toast.error("Pick a target list first — deep generation reads the real list to find genuine segments to write for.");
+      return;
+    }
+    setDeepGenLoading(true);
+    setDeepGenResults(null);
+    setDeepGenAppliedIdx(null);
     try {
-      const res = await fetch("https://api.continuumapi.com/v1/ai/generate-email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
-        body: JSON.stringify({ type: "newsletter", about: aiBriefText, tone: aiBriefTone, num_variants: 1 }),
-      });
-      if (!res.ok) { toast.error("AI generation failed — check your plan or try again"); return; }
-      const data = await res.json() as { variants?: Array<{ subject: string; body?: string }> };
-      const v = data.variants?.[0];
-      if (v) {
-        setForm((f) => ({ ...f, subject: v.subject ?? f.subject, htmlBody: v.body ?? f.htmlBody }));
-        toast.success("AI draft applied — review and edit before sending");
-      }
-    } catch { toast.error("AI generation failed"); }
-    finally { setAiBriefGenerating(false); }
+      const data = await api.withKey.post<{ totalContacts: number; emails: DeepGenEmail[] }>(
+        "/v1/campaigns/generate-copy",
+        {
+          about: aiBriefText,
+          sender: form.fromName ? { name: form.fromName, company: form.fromName } : undefined,
+          tone: aiBriefTone,
+          list_ids: [form.listId],
+        },
+        primaryKey.keyRaw,
+      );
+      setDeepGenResults(data.emails ?? []);
+      setDeepGenTotalContacts(data.totalContacts ?? 0);
+      if (!data.emails?.length) toast.info("No segments could be generated for this list.");
+    } catch (err: unknown) {
+      toast.error((err as { message?: string }).message ?? "Deep generation failed — check your plan or try again.");
+    } finally {
+      setDeepGenLoading(false);
+    }
+  };
+
+  const applyDeepGenDraft = (email: DeepGenEmail, idx: number) => {
+    setForm((f) => ({ ...f, subject: email.subject, htmlBody: email.htmlBody, textBody: email.textBody }));
+    setDeepGenAppliedIdx(idx);
+    toast.success(`Applied the "${email.segmentLabel}" draft — review and edit before sending`);
   };
 
   const generateSubjectIdeas = async () => {
@@ -463,10 +501,14 @@ function CampaignsPage() {
     try {
       const about = form.htmlBody.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 300).trim()
         || form.subject || "email campaign";
+      // The quick subject-ideas helper still uses the older, simpler
+      // generate-email endpoint (its tone enum predates direct/technical) —
+      // map onto its closest supported tone rather than failing the call.
+      const legacyTone = aiBriefTone === "direct" || aiBriefTone === "technical" ? "professional" : aiBriefTone;
       const res = await fetch("https://api.continuumapi.com/v1/ai/generate-email", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw },
-        body: JSON.stringify({ type: "newsletter", about, tone: aiBriefTone, subject_only: true, num_variants: 5 }),
+        body: JSON.stringify({ type: "newsletter", about, tone: legacyTone, subject_only: true, num_variants: 5 }),
       });
       if (!res.ok) { toast.error("Subject generation failed"); setShowSubjectIdeas(false); return; }
       const data = await res.json() as { variants?: Array<{ subject: string }> };
@@ -630,16 +672,17 @@ function CampaignsPage() {
             <div className="rounded-md border border-dashed border-border bg-muted/20 p-4 space-y-3">
               <div className="flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-muted-foreground" />
-                <p className="text-xs font-medium">Generate with AI</p>
+                <p className="text-xs font-medium">Deep-generate with AI</p>
+                <span className="text-[10px] text-muted-foreground">— reads your actual list, writes per-segment, no generic filler</span>
               </div>
               <textarea
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none"
                 rows={2}
-                placeholder="Describe your campaign — e.g. 'Monthly product update for SaaS customers, highlight new integrations and a 20% annual renewal discount'"
+                placeholder="Describe the offer — e.g. 'A pentesting-as-a-service tool for security teams at Series B+ companies'"
                 value={aiBriefText}
                 onChange={(e) => setAiBriefText(e.target.value)}
               />
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <select
                   className="rounded-md border border-input bg-background px-2 py-1 text-xs focus-visible:outline-none"
                   value={aiBriefTone}
@@ -647,22 +690,54 @@ function CampaignsPage() {
                 >
                   <option value="professional">Professional</option>
                   <option value="casual">Casual</option>
-                  <option value="friendly">Friendly</option>
-                  <option value="urgent">Urgent</option>
+                  <option value="direct">Direct</option>
+                  <option value="technical">Technical (security/eng audiences)</option>
                 </select>
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
                   className="gap-1.5 text-xs h-7"
-                  disabled={!aiBriefText.trim() || aiBriefGenerating}
-                  onClick={generateCampaignWithAI}
+                  disabled={!aiBriefText.trim() || deepGenLoading}
+                  onClick={generateDeepCopy}
                 >
                   <Sparkles className="h-3 w-3" />
-                  {aiBriefGenerating ? "Generating…" : "Draft with AI"}
+                  {deepGenLoading ? "Researching your list…" : "Generate segment drafts"}
                 </Button>
-                <p className="text-xs text-muted-foreground">Fills subject + body — you review and edit</p>
               </div>
+              {!form.listId && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">Pick a target list below first — segments are derived from the real list, not a guess.</p>
+              )}
+
+              {deepGenResults && deepGenResults.length > 0 && (
+                <div className="space-y-2 pt-1">
+                  <p className="text-xs text-muted-foreground">
+                    Found {deepGenResults.length} segment{deepGenResults.length > 1 ? "s" : ""} in {deepGenTotalContacts} contacts — pick the draft that fits, then edit before sending.
+                  </p>
+                  {deepGenResults.map((email, idx) => (
+                    <div key={idx} className={`rounded-md border p-3 space-y-1.5 ${deepGenAppliedIdx === idx ? "border-violet-400 bg-violet-50 dark:bg-violet-950/30" : "border-border bg-background"}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-semibold">{email.segmentLabel}</span>
+                          <span className="text-[10px] text-muted-foreground">{email.matchPct}% of list ({email.matchCount})</span>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={deepGenAppliedIdx === idx ? "secondary" : "outline"}
+                          className="text-xs h-6"
+                          onClick={() => applyDeepGenDraft(email, idx)}
+                        >
+                          {deepGenAppliedIdx === idx ? "Applied" : "Use this draft"}
+                        </Button>
+                      </div>
+                      <p className="text-xs font-medium">{email.subject}</p>
+                      <p className="text-xs text-muted-foreground whitespace-pre-wrap line-clamp-4">{email.textBody}</p>
+                      <p className="text-[10px] text-muted-foreground italic">Hook: {email.hookUsed}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           <div className="space-y-1.5">
