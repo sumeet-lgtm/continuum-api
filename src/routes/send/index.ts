@@ -277,6 +277,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       let sesMessageId: string | null = null;
       let status: 'sent' | 'failed' = 'sent';
       let errorMessage: string | null = null;
+      let isClientFault = false;
 
       try {
         const result = await sendViaSes({
@@ -296,6 +297,14 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         errorMessage = err instanceof SesNotConfiguredError
           ? err.message
           : (err instanceof Error ? err.message : 'Unknown SES error');
+        // The AWS SDK already tells us whether a failure is the caller's
+        // fault (e.g. MessageRejected: sending identity not verified —
+        // exactly what hitting this with an unverified domain looks like)
+        // vs. a genuine upstream/transient issue, via $fault — this was
+        // being thrown away and every failure answered with a flat 502,
+        // which reads as "Continuum is down" for what's actually "you
+        // haven't verified your sending domain yet."
+        isClientFault = (err as { $fault?: string } | null)?.$fault === 'client';
         logger.error({ err, to, apiKeyId }, 'SES send failed');
       }
 
@@ -332,7 +341,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       }
 
       if (status === 'failed') {
-        return reply.status(502).send({ id: record.id, status, sesMessageId, errorMessage });
+        return reply.status(isClientFault ? 400 : 502).send({ id: record.id, status, sesMessageId, errorMessage });
       }
       return reply.status(200).send({ id: record.id, sesMessageId, status });
     },

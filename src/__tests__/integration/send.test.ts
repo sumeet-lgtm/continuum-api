@@ -309,6 +309,23 @@ describe('POST /v1/send', () => {
     expect(mockKeyUpdate).not.toHaveBeenCalled();
   });
 
+  it('returns 400, not 502, when SES rejects for a caller-fixable reason ($fault: client)', async () => {
+    // Found live: an unverified sending domain (from_email on a domain
+    // that hasn't completed DKIM/SPF setup yet) produces exactly this
+    // shape from the AWS SDK — MessageRejected with $fault: 'client' — and
+    // was being flattened into the same 502 as a genuine SES outage, which
+    // reads as "the platform is down" for what's actually "you haven't
+    // verified your domain yet."
+    const clientFaultErr = Object.assign(new Error('Email address is not verified.'), { $fault: 'client', name: 'MessageRejected' });
+    mockSendViaSes.mockRejectedValueOnce(clientFaultErr);
+
+    const res = await send({ to: 'user@example.com', subject: 'Hi', text_body: 'hi', from_email: 'hello@unverified-domain.com' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().status).toBe('failed');
+    expect(res.json().errorMessage).toContain('not verified');
+  });
+
   it('increments send usage only on a successful send', async () => {
     const res = await send({ to: 'user@example.com', subject: 'Hi', text_body: 'hi' });
 
