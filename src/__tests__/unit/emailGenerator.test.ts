@@ -22,7 +22,13 @@ function makeSegment(overrides: Partial<CampaignSegment> = {}): CampaignSegment 
 }
 
 function jsonResponse(obj: unknown) {
-  return { ok: true, json: async () => ({ content: [{ text: JSON.stringify(obj) }] }) };
+  // Real Sonnet responses for this prompt reliably include a leading
+  // `thinking` block before the `text` block — mock the same shape so this
+  // test suite would have caught the content[0]-vs-find-the-text-block bug.
+  return {
+    ok: true,
+    json: async () => ({ content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: JSON.stringify(obj) }] }),
+  };
 }
 
 afterEach(() => {

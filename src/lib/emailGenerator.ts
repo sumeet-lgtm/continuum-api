@@ -68,8 +68,15 @@ async function callClaude(apiKey: string, system: string, user: string, maxToken
     throw new Error(`Anthropic API error: ${resp.status} ${err}`);
   }
 
-  const data = await resp.json() as { content?: Array<{ text?: string }> };
-  return data.content?.[0]?.text?.trim() ?? '';
+  const data = await resp.json() as { content?: Array<{ type?: string; text?: string }> };
+  // Sonnet can (and here, reliably does) return a leading `thinking` block
+  // before the actual `text` block for a prompt this instruction-dense —
+  // content[0] is not reliably the answer. Find the first real text block
+  // instead of assuming position 0, which was silently returning an empty
+  // string (the thinking block has no `text` field) and blowing up as
+  // "Unexpected end of JSON input" one call site downstream.
+  const textBlock = data.content?.find((c) => c.type === 'text');
+  return textBlock?.text?.trim() ?? '';
 }
 
 function extractJson(text: string): Record<string, unknown> {
@@ -112,7 +119,7 @@ Follow the Generation Protocol (section 7) and the single-email structure (secti
 
 ${DRAFT_OUTPUT_CONTRACT}`;
 
-  const raw = await callClaude(apiKey, system, user, 4096);
+  const raw = await callClaude(apiKey, system, user, 8192);
   const parsed = extractJson(raw);
   return {
     subject: String(parsed.subject ?? ''),
@@ -146,7 +153,7 @@ Run the full checklist in section 8. Return ONLY valid JSON in exactly this shap
 
 If the draft already passes every checklist item, return it unchanged with "changed": false. Do not make stylistic changes for their own sake — only fix genuine checklist failures.`;
 
-  const raw = await callClaude(apiKey, system, user, 4096);
+  const raw = await callClaude(apiKey, system, user, 8192);
   const parsed = extractJson(raw);
   return {
     subject: String(parsed.subject ?? draft.subject),
