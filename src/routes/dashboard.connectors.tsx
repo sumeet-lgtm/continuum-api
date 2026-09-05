@@ -102,7 +102,7 @@ const CONNECTOR_META: Record<string, {
 }> = {
   stripe: {
     label: "Stripe",
-    logo: "https://cdn.brandfetch.io/stripe.com/w/128/h/128",
+    logo: "https://www.google.com/s2/favicons?domain=stripe.com&sz=128",
     docs: "https://dashboard.stripe.com/webhooks",
     events: STRIPE_EVENTS,
     secretLabel: "Webhook signing secret",
@@ -110,7 +110,7 @@ const CONNECTOR_META: Record<string, {
   },
   chargebee: {
     label: "Chargebee",
-    logo: "https://cdn.brandfetch.io/chargebee.com/w/128/h/128",
+    logo: "https://www.google.com/s2/favicons?domain=chargebee.com&sz=128",
     docs: "https://app.chargebee.com/",
     events: CHARGEBEE_EVENTS,
     secretLabel: "Webhook password",
@@ -118,7 +118,7 @@ const CONNECTOR_META: Record<string, {
   },
   razorpay: {
     label: "Razorpay",
-    logo: "https://cdn.brandfetch.io/razorpay.com/w/128/h/128",
+    logo: "https://www.google.com/s2/favicons?domain=razorpay.com&sz=128",
     docs: "https://dashboard.razorpay.com/app/webhooks",
     events: RAZORPAY_EVENTS,
     secretLabel: "Webhook secret",
@@ -126,7 +126,7 @@ const CONNECTOR_META: Record<string, {
   },
   paddle: {
     label: "Paddle",
-    logo: "https://cdn.brandfetch.io/paddle.com/w/128/h/128",
+    logo: "https://www.google.com/s2/favicons?domain=paddle.com&sz=128",
     docs: "https://vendors.paddle.com/alerts-webhooks",
     events: PADDLE_EVENTS,
     secretLabel: "Webhook secret key",
@@ -134,13 +134,182 @@ const CONNECTOR_META: Record<string, {
   },
   hubspot: {
     label: "HubSpot",
-    logo: "https://cdn.brandfetch.io/hubspot.com/w/128/h/128",
+    logo: "https://www.google.com/s2/favicons?domain=hubspot.com&sz=128",
     docs: "https://developers.hubspot.com/",
     events: HUBSPOT_EVENTS,
     secretLabel: "Client secret",
     secretHelp: "Found in HubSpot → Settings → Account Setup → Integrations → Private Apps → your app",
   },
 };
+
+// ─── Integrations Directory ────────────────────────────────────────────────
+// Every tool below connects today through one of the mechanisms already built
+// on this page — there is no separate bespoke connector per row. We label each
+// one honestly rather than implying a dedicated integration exists.
+
+type IntegMethod = "native" | "webhook" | "zapier" | "mcp" | "soon";
+
+const METHOD_META: Record<IntegMethod, { label: string; className: string; help: string }> = {
+  native: { label: "Native", className: "bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20", help: "Built-in connector with signing-secret verification and event rules, above." },
+  webhook: { label: "Webhook", className: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20", help: "Point this tool's outbound webhook at the Generic Webhook Intake URL below." },
+  zapier: { label: "Zapier / Make / n8n", className: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20", help: "Bridge through Zapier, Make, or n8n into the Generic Webhook Intake URL below — no direct build needed." },
+  mcp: { label: "MCP client", className: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20", help: "Connects as an MCP client and calls Continuum's tools directly." },
+  soon: { label: "Coming soon", className: "bg-muted text-muted-foreground border-border", help: "On the roadmap — not yet supported." },
+};
+
+interface IntegrationTool { name: string; domain: string; method: IntegMethod; }
+interface IntegrationCategory { name: string; tools: IntegrationTool[]; }
+
+const INTEGRATIONS: IntegrationCategory[] = [
+  {
+    name: "CRM",
+    tools: [
+      { name: "HubSpot", domain: "hubspot.com", method: "native" },
+      { name: "Salesforce", domain: "salesforce.com", method: "webhook" },
+      { name: "Pipedrive", domain: "pipedrive.com", method: "webhook" },
+      { name: "Close", domain: "close.com", method: "webhook" },
+      { name: "Attio", domain: "attio.com", method: "webhook" },
+      { name: "Zoho CRM", domain: "zoho.com", method: "webhook" },
+      { name: "Copper", domain: "copper.com", method: "webhook" },
+      { name: "Freshsales", domain: "freshworks.com", method: "webhook" },
+      { name: "Microsoft Dynamics 365", domain: "dynamics.microsoft.com", method: "zapier" },
+    ],
+  },
+  {
+    name: "Sales engagement & outbound",
+    tools: [
+      { name: "Clay", domain: "clay.com", method: "native" },
+      { name: "Apollo.io", domain: "apollo.io", method: "native" },
+      { name: "Outreach", domain: "outreach.io", method: "zapier" },
+      { name: "Salesloft", domain: "salesloft.com", method: "zapier" },
+      { name: "Instantly", domain: "instantly.ai", method: "zapier" },
+      { name: "Smartlead", domain: "smartlead.ai", method: "zapier" },
+      { name: "Lemlist", domain: "lemlist.com", method: "zapier" },
+      { name: "Woodpecker", domain: "woodpecker.co", method: "zapier" },
+      { name: "Reply.io", domain: "reply.io", method: "zapier" },
+    ],
+  },
+  {
+    name: "People & company data",
+    tools: [
+      { name: "ZoomInfo", domain: "zoominfo.com", method: "zapier" },
+      { name: "Clearbit", domain: "clearbit.com", method: "zapier" },
+      { name: "Lusha", domain: "lusha.com", method: "zapier" },
+      { name: "RocketReach", domain: "rocketreach.co", method: "zapier" },
+      { name: "Hunter", domain: "hunter.io", method: "zapier" },
+      { name: "Crunchbase", domain: "crunchbase.com", method: "zapier" },
+      { name: "People Data Labs", domain: "peopledatalabs.com", method: "zapier" },
+      { name: "BuiltWith", domain: "builtwith.com", method: "zapier" },
+    ],
+  },
+  {
+    name: "Intent data",
+    tools: [
+      { name: "6sense", domain: "6sense.com", method: "zapier" },
+      { name: "Bombora", domain: "bombora.com", method: "zapier" },
+      { name: "G2", domain: "g2.com", method: "zapier" },
+      { name: "Warmly", domain: "warmly.ai", method: "zapier" },
+    ],
+  },
+  {
+    name: "Data warehouses",
+    tools: [
+      { name: "Snowflake", domain: "snowflake.com", method: "soon" },
+      { name: "BigQuery", domain: "cloud.google.com", method: "soon" },
+      { name: "Databricks", domain: "databricks.com", method: "soon" },
+      { name: "Redshift", domain: "aws.amazon.com", method: "soon" },
+    ],
+  },
+  {
+    name: "Payments & billing",
+    tools: [
+      { name: "Stripe", domain: "stripe.com", method: "native" },
+      { name: "Chargebee", domain: "chargebee.com", method: "native" },
+      { name: "Razorpay", domain: "razorpay.com", method: "native" },
+      { name: "Paddle", domain: "paddle.com", method: "native" },
+    ],
+  },
+  {
+    name: "Productivity & collaboration",
+    tools: [
+      { name: "Slack", domain: "slack.com", method: "zapier" },
+      { name: "Notion", domain: "notion.so", method: "webhook" },
+      { name: "Airtable", domain: "airtable.com", method: "webhook" },
+      { name: "Google Sheets", domain: "google.com", method: "zapier" },
+      { name: "Typeform", domain: "typeform.com", method: "webhook" },
+      { name: "Calendly", domain: "calendly.com", method: "webhook" },
+      { name: "Segment", domain: "segment.com", method: "webhook" },
+    ],
+  },
+  {
+    name: "AI & MCP clients",
+    tools: [
+      { name: "Claude", domain: "claude.ai", method: "mcp" },
+      { name: "Cursor", domain: "cursor.com", method: "mcp" },
+      { name: "OpenAI", domain: "openai.com", method: "zapier" },
+      { name: "Perplexity", domain: "perplexity.ai", method: "zapier" },
+    ],
+  },
+  {
+    name: "Support",
+    tools: [
+      { name: "Zendesk", domain: "zendesk.com", method: "zapier" },
+      { name: "Intercom", domain: "intercom.com", method: "zapier" },
+      { name: "Freshdesk", domain: "freshworks.com", method: "zapier" },
+    ],
+  },
+];
+
+function IntegrationTile({ tool }: { tool: IntegrationTool }) {
+  const meta = METHOD_META[tool.method];
+  return (
+    <div className="flex items-center gap-2.5 rounded-lg border border-border bg-card p-2.5" title={meta.help}>
+      <div className="h-8 w-8 rounded-md bg-muted flex items-center justify-center overflow-hidden shrink-0">
+        <img
+          src={`https://www.google.com/s2/favicons?domain=${tool.domain}&sz=128`}
+          alt=""
+          className="h-full w-full object-contain"
+          onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
+        />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-medium truncate">{tool.name}</p>
+        <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded border leading-none ${meta.className}`}>{meta.label}</span>
+      </div>
+    </div>
+  );
+}
+
+function IntegrationsDirectory() {
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-base font-medium">Integrations directory</h2>
+        <p className="text-sm text-muted-foreground">
+          Every tool here connects today — either as a native connector with rules and an event log (above), through the{" "}
+          <a href="#generic-webhook" className="underline underline-offset-2">generic webhook intake</a>, or bridged in via Zapier, Make, or n8n. Nothing below is aspirational without saying so.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {(Object.keys(METHOD_META) as IntegMethod[]).map((k) => (
+          <span key={k} className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded border leading-none ${METHOD_META[k].className}`}>
+            {METHOD_META[k].label}
+          </span>
+        ))}
+      </div>
+      <div className="space-y-6">
+        {INTEGRATIONS.map((cat) => (
+          <div key={cat.name} className="space-y-2.5">
+            <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{cat.name}</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
+              {cat.tools.map((tool) => <IntegrationTile key={tool.name} tool={tool} />)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 function PaymentConnectorCard({
   connector,
@@ -523,7 +692,7 @@ function ConnectorsPage() {
         </div>
 
         {/* Generic */}
-        <div className="rounded-lg border border-border bg-card p-5 space-y-3">
+        <div id="generic-webhook" className="rounded-lg border border-border bg-card p-5 space-y-3 scroll-mt-6">
           <div>
             <h3 className="text-sm font-medium">Generic Webhook — Zapier, Make, n8n, or anything else</h3>
             <p className="text-xs text-muted-foreground">Push any JSON payload with your own field mapping.</p>
@@ -581,6 +750,8 @@ function ConnectorsPage() {
           <KeyHeaderNote apiKeyPrefix={keyPrefix} />
         </div>
       </section>
+
+      <IntegrationsDirectory />
     </div>
   );
 }
