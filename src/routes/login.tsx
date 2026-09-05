@@ -70,7 +70,7 @@ export function AuthGate({ mode }: { mode: "signin" | "signup" }) {
             </h1>
             <p className="text-sm text-muted-foreground">
               {isSignup
-                ? "API key in 30 seconds · no card required · 1k free sends/mo"
+                ? "Live in 30 seconds · no card required · 1k free sends/mo"
                 : "Choose how you'd like to continue."}
             </p>
           </div>

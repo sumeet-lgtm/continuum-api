@@ -219,8 +219,6 @@ type NavItem = {
 
 const NAV: NavItem[] = [
   { to: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
-  { to: "/dashboard/api-keys", label: "API Keys", icon: KeyRound },
-  { to: "/dashboard/logs", label: "API Logs", icon: Terminal },
 
   // Pillar 1: Verification — competes with MillionVerifier
   {
@@ -297,6 +295,8 @@ const NAV: NavItem[] = [
   { to: "/dashboard/brand-kit", label: "Brand Kit", icon: Palette },
   { to: "/dashboard/connectors", label: "Connectors", icon: Plug },
   { to: "/dashboard/webhooks", label: "Webhooks", icon: Webhook },
+  { to: "/dashboard/api-keys", label: "API Keys", icon: KeyRound },
+  { to: "/dashboard/logs", label: "API Logs", icon: Terminal },
   { to: "/dashboard/organization", label: "Organization", icon: Building2 },
   { to: "/dashboard/usage", label: "Usage & Limits", icon: Zap },
   { to: "/dashboard/billing", label: "Billing", icon: CreditCard },
