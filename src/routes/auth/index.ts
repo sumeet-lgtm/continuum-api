@@ -8,6 +8,7 @@ import { sendEmail, welcomeEmail, loginAlertEmail } from '../../lib/email.js';
 import { hashApiKey } from '../../lib/crypto.js';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 import { logAudit } from '../../lib/audit.js';
+import { getPlanLimit, getSendLimit } from '../../plugins/usageMeter.js';
 
 let _workos: WorkOS | null = null;
 
@@ -300,7 +301,17 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         firstName: user.firstName,
         lastName: user.lastName,
       },
-      apiKeys,
+      // monthlyLimit/monthlySendLimit are the raw per-key override columns
+      // (default 1,000/500, only meaningful for a plan not in PLAN_LIMITS) —
+      // the real ceiling for a standard plan is computed from the plan
+      // itself and always wins over that stored default, so the dashboard
+      // was showing every paying customer their Free-tier number. These
+      // effective* fields are what the UI should actually display.
+      apiKeys: apiKeys.map((k) => ({
+        ...k,
+        effectiveMonthlyLimit: getPlanLimit(k.plan, k.monthlyLimit),
+        effectiveMonthlySendLimit: getSendLimit(k.plan, k.monthlySendLimit),
+      })),
       primaryKeyId: payload.primaryKeyId,
       workspaceRole: (payload as { workspaceRole?: string }).workspaceRole,
     });

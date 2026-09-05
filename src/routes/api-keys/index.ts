@@ -7,6 +7,7 @@ import { prisma } from '../../lib/prisma.js';
 import { hashApiKey } from '../../lib/crypto.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logAudit } from '../../lib/audit.js';
+import { getPlanLimit, getSendLimit } from '../../plugins/usageMeter.js';
 
 const createSchema = z.object({
   name: z.string().min(1).max(100),
@@ -31,11 +32,21 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
           restrictedDomainId: true, plan: true, isActive: true, revokedAt: true,
           createdAt: true, lastUsedAt: true, allowedIps: true, rateLimit: true,
           currentMonthUsage: true, monthlyLimit: true, currentMonthSendUsage: true,
-          usageAlertEnabled: true, expiresAt: true,
+          usageAlertEnabled: true, expiresAt: true, monthlySendLimit: true,
         },
       });
 
-      return reply.status(200).send({ data: keys });
+      // monthlyLimit/monthlySendLimit are raw override columns (default
+      // 1,000/500) — a standard plan's real ceiling always overrides them
+      // (see getPlanLimit), so callers relying on the raw column alone were
+      // reading a stale Free-tier number regardless of actual plan.
+      const data = keys.map((k) => ({
+        ...k,
+        effectiveMonthlyLimit: getPlanLimit(k.plan, k.monthlyLimit),
+        effectiveMonthlySendLimit: getSendLimit(k.plan, k.monthlySendLimit),
+      }));
+
+      return reply.status(200).send({ data });
     },
   );
 
