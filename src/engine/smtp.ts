@@ -27,6 +27,11 @@ export async function smtpProbeWithFallback(
     const result = await smtpProbe(email, host);
     if (result.checked) return result;
     last = result;
+    // The relay itself is down, not this specific MX host — every
+    // remaining host in this list goes through the same relay and would
+    // fail the exact same way, so retrying them only adds latency with
+    // zero chance of a different outcome.
+    if (result.error === 'relay_unreachable') break;
   }
   return last;
 }
@@ -148,7 +153,21 @@ async function remoteProbe(email: string, mxHost: string): Promise<SmtpProbeResu
     };
   } catch (err) {
     logger.error({ err, email }, 'Remote SMTP probe failed');
-    return notChecked('Remote probe unreachable');
+    // A connection-level failure (the relay VPS itself refused/timed out,
+    // as opposed to a non-2xx response meaning the relay was reached but
+    // errored) means every other MX host for this same domain will fail
+    // identically — they all go through this one relay. Tagging this
+    // distinctly lets the caller stop retrying immediately instead of
+    // wasting the full per-host timeout 2 more times against a relay
+    // that's already known to be down (found live: a genuine relay outage
+    // was costing ~30s per verification — 3 sequential 10s connect
+    // timeouts — before ever reaching the paid-provider fallback).
+    const isConnectFailure = err instanceof Error && (
+      err.name === 'ConnectTimeoutError' ||
+      err.cause instanceof Error && err.cause.name === 'ConnectTimeoutError' ||
+      /ECONNREFUSED|ENOTFOUND|EAI_AGAIN/.test(err.message)
+    );
+    return notChecked(isConnectFailure ? 'relay_unreachable' : 'Remote probe unreachable');
   }
 }
 

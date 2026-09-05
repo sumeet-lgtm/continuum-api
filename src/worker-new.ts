@@ -72,7 +72,7 @@ void runAutomationWorker().catch((err: unknown) => {
 
 closable.push({ close: async () => { clearInterval(automationInterval); } });
 
-console.log('[worker-new] campaign + sequence + warmup + IMAP + automation workers started');
+console.log(`[worker-new] campaign + sequence + domain-verify + automation workers started (warmup:${process.env['WARMUP_POOL_ENABLED'] === 'true'} imap:${process.env['IMAP_POLL_ENABLED'] === 'true'} salesforce:${isSalesforceOAuthConfigured()})`);
 
 const shutdown = async () => {
   console.log('[worker-new] shutting down...');

@@ -157,3 +157,88 @@ describe('smtpProbe — major webmail providers never report catch-all', () => {
     expect(result.isCatchAll).toBe(false);
   });
 });
+
+describe('smtpProbeWithFallback — relay outage short-circuit', () => {
+  // Live incident (2026-09-05): the SMTP_PROBE_URL relay VPS went unreachable
+  // and every verification paid a ~30s tax (3 sequential 10s connect
+  // timeouts against the same dead relay) before falling through to the
+  // paid-provider fallback. These tests confirm a connect-level failure on
+  // one MX host is now tagged relay_unreachable and stops the retry loop
+  // immediately instead of repeating the same doomed call against the
+  // remaining hosts.
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.resetModules();
+  });
+
+  async function setUpRelay(fetchImpl: () => Promise<unknown>) {
+    process.env = {
+      ...originalEnv,
+      SMTP_CHECK_ENABLED: 'true',
+      SMTP_PROBE_URL: 'http://fake-probe.internal',
+    };
+    global.fetch = vi.fn(fetchImpl) as unknown as typeof fetch;
+    vi.resetModules();
+    return import('../../engine/smtp.js');
+  }
+
+  it('tags a connect-timeout failure as relay_unreachable', async () => {
+    const { smtpProbe: freshSmtpProbe } = await setUpRelay(async () => {
+      const err = new Error('connect timeout');
+      err.name = 'ConnectTimeoutError';
+      throw err;
+    });
+    const result = await freshSmtpProbe('someone@some-corp-domain.com', 'mx.example.com');
+    expect(result.checked).toBe(false);
+    expect(result.error).toBe('relay_unreachable');
+  });
+
+  it('tags a wrapped (err.cause) connect-timeout failure as relay_unreachable', async () => {
+    const { smtpProbe: freshSmtpProbe } = await setUpRelay(async () => {
+      const cause = new Error('connect timeout');
+      cause.name = 'ConnectTimeoutError';
+      throw new Error('fetch failed', { cause });
+    });
+    const result = await freshSmtpProbe('someone@some-corp-domain.com', 'mx.example.com');
+    expect(result.error).toBe('relay_unreachable');
+  });
+
+  it('does not tag a non-connection error (e.g. a bad HTTP response) as relay_unreachable', async () => {
+    const { smtpProbe: freshSmtpProbe } = await setUpRelay(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+    }));
+    const result = await freshSmtpProbe('someone@some-corp-domain.com', 'mx.example.com');
+    expect(result.checked).toBe(false);
+    expect(result.error).not.toBe('relay_unreachable');
+  });
+
+  it('stops after the first host once the relay is tagged unreachable, instead of retrying all 3', async () => {
+    const { smtpProbeWithFallback: freshFallback } = await setUpRelay(async () => {
+      const err = new Error('connect timeout');
+      err.name = 'ConnectTimeoutError';
+      throw err;
+    });
+    const result = await freshFallback('someone@some-corp-domain.com', [
+      'mx1.example.com', 'mx2.example.com', 'mx3.example.com',
+    ]);
+    expect(result.error).toBe('relay_unreachable');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('still tries the next host when a failure is not relay_unreachable', async () => {
+    let calls = 0;
+    const { smtpProbeWithFallback: freshFallback } = await setUpRelay(async () => {
+      calls++;
+      return { ok: false, status: 500, json: async () => ({}) };
+    });
+    const result = await freshFallback('someone@some-corp-domain.com', [
+      'mx1.example.com', 'mx2.example.com', 'mx3.example.com',
+    ]);
+    expect(result.checked).toBe(false);
+    expect(calls).toBe(3);
+  });
+});
