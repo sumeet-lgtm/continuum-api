@@ -68,7 +68,15 @@ if (process.env['NODE_ENV'] !== 'test') {
 // ~40 minutes (0.8/sec) in production. The paid-provider rate limit is now
 // enforced at its actual call site (paidProviderLimiter in smtpCache.ts,
 // shared process-wide), so this can run at real concurrency.
-const EMAIL_CONCURRENCY      = 20;
+// Raised alongside the SMTP-probe parallelization fix (engine/smtp.ts —
+// target + catch-all probes now run concurrently instead of sequentially,
+// roughly halving per-email latency on its own). Doubling concurrency on
+// top of that roughly quadruples overall bulk throughput versus the
+// pre-fix baseline. Kept at 40, not higher, since this is genuinely
+// untested at scale — DB write pressure on the pooler and how receiving
+// mail servers react to more parallel connections from one IP both need a
+// real production bulk run to validate before pushing further.
+const EMAIL_CONCURRENCY      = 40;
 const PROGRESS_FLUSH_INTERVAL = 25;  // flush every N processed emails
 
 // ─── Main job processor ───────────────────────────────────────────────────────
