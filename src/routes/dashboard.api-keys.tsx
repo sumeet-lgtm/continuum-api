@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Copy, Check, Eye, EyeOff, Plus, Trash2, KeyRound, ShieldCheck, Shield, Globe, ChevronDown, ChevronUp, X, Pencil, RefreshCw } from "lucide-react";
@@ -374,14 +374,24 @@ function InlineRename({
   );
 }
 
+// Plans whose quota is fixed by the plan itself — getPlanLimit on the
+// backend always uses the plan's number for these and ignores any custom
+// monthlyLimit override, so letting someone "set" a quota here would
+// silently do nothing (previously worded as "set to 0 for unlimited",
+// which was actively false for every real customer: the plan limit still
+// applied underneath).
+const STANDARD_PLANS = new Set(["free", "starter", "growth", "scale"]);
+
 function MonthlyQuotaPanel({
   keyId,
+  plan,
   currentLimit,
   currentUsage,
   apiKeyRaw,
   onUpdated,
 }: {
   keyId: string;
+  plan: string | null | undefined;
   currentLimit: number | undefined;
   currentUsage: number | undefined;
   apiKeyRaw: string;
@@ -390,6 +400,22 @@ function MonthlyQuotaPanel({
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(String(currentLimit ?? 0));
   const [saving, setSaving] = useState(false);
+
+  const pctReadOnly = currentLimit && currentLimit > 0 ? Math.round((currentUsage ?? 0) / currentLimit * 100) : null;
+
+  if (STANDARD_PLANS.has(plan ?? "free")) {
+    return (
+      <div className="border border-border rounded-md px-3 py-2 text-xs text-muted-foreground flex items-center justify-between">
+        <span>
+          Monthly quota · {(currentUsage ?? 0).toLocaleString()} used / {(currentLimit ?? 0).toLocaleString()}
+          {pctReadOnly !== null && ` (${pctReadOnly}%)`}
+        </span>
+        <Link to="/dashboard/billing" className="text-foreground hover:underline shrink-0 ml-2">
+          Included in {plan ?? "free"} plan — upgrade
+        </Link>
+      </div>
+    );
+  }
 
   const save = async () => {
     const n = parseInt(value, 10);
@@ -761,7 +787,7 @@ function ApiKeysPage() {
                   <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5">
                     <p className="text-xs text-muted-foreground">
                       {(k.currentMonthUsage ?? 0).toLocaleString()} verifications this month
-                      {k.monthlyLimit ? ` / ${k.monthlyLimit.toLocaleString()} limit` : ""}
+                      {k.effectiveMonthlyLimit ? ` / ${k.effectiveMonthlyLimit.toLocaleString()} limit` : ""}
                     </p>
                     {(k.currentMonthSendUsage ?? 0) > 0 && (
                       <p className="text-xs text-muted-foreground">
@@ -774,7 +800,8 @@ function ApiKeysPage() {
                   <div className="flex flex-col gap-2">
                     <MonthlyQuotaPanel
                       keyId={k.id}
-                      currentLimit={(k as { monthlyLimit?: number }).monthlyLimit}
+                      plan={k.plan}
+                      currentLimit={(k as { effectiveMonthlyLimit?: number }).effectiveMonthlyLimit}
                       currentUsage={(k as { currentMonthUsage?: number }).currentMonthUsage}
                       apiKeyRaw={primaryKey.keyRaw}
                       onUpdated={refreshMe}

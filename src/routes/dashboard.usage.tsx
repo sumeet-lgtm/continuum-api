@@ -21,8 +21,8 @@ interface UsageData {
 interface DailyPoint { date: string; sent: number; delivered: number; bounced: number }
 interface ApiKeyRow {
   id: string; label: string | null; keyPreview: string;
-  currentMonthUsage: number; monthlyLimit: number;
-  currentMonthSendUsage: number; monthlySendLimit: number;
+  currentMonthUsage: number; monthlyLimit: number; effectiveMonthlyLimit: number;
+  currentMonthSendUsage: number; monthlySendLimit: number; effectiveMonthlySendLimit: number;
   isActive: boolean; plan: string;
 }
 
@@ -207,8 +207,8 @@ function UsagePage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {allKeys.map((k) => {
-                  const kvPct = pct(k.currentMonthUsage, k.monthlyLimit);
-                  const ksPct = pct(k.currentMonthSendUsage, k.monthlySendLimit);
+                  const kvPct = pct(k.currentMonthUsage, k.effectiveMonthlyLimit);
+                  const ksPct = pct(k.currentMonthSendUsage, k.effectiveMonthlySendLimit);
                   return (
                     <tr key={k.id} className="hover:bg-muted/10">
                       <td className="px-5 py-3">
@@ -220,7 +220,7 @@ function UsagePage() {
                       </td>
                       <td className="px-5 py-3 text-right tabular-nums text-xs">
                         <span className={kvPct >= 90 ? "text-[oklch(0.58_0.22_27)] font-medium" : ""}>
-                          {k.currentMonthUsage.toLocaleString()} / {k.monthlyLimit.toLocaleString()}
+                          {k.currentMonthUsage.toLocaleString()} / {k.effectiveMonthlyLimit.toLocaleString()}
                         </span>
                         <div className="h-1 mt-1 bg-muted rounded-full ml-auto w-16">
                           <div className={cn("h-full rounded-full", kvPct >= 90 ? "bg-[oklch(0.58_0.22_27)]" : "bg-foreground")} style={{ width: `${kvPct}%` }} />
@@ -228,7 +228,7 @@ function UsagePage() {
                       </td>
                       <td className="px-5 py-3 text-right tabular-nums text-xs">
                         <span className={ksPct >= 90 ? "text-[oklch(0.58_0.22_27)] font-medium" : ""}>
-                          {k.currentMonthSendUsage.toLocaleString()} / {k.monthlySendLimit.toLocaleString()}
+                          {k.currentMonthSendUsage.toLocaleString()} / {k.effectiveMonthlySendLimit.toLocaleString()}
                         </span>
                         <div className="h-1 mt-1 bg-muted rounded-full ml-auto w-16">
                           <div className={cn("h-full rounded-full", ksPct >= 90 ? "bg-[oklch(0.58_0.22_27)]" : "bg-foreground")} style={{ width: `${ksPct}%` }} />

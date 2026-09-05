@@ -25,8 +25,10 @@ export interface ContinuumApiKey {
   permission: string;
   currentMonthUsage: number;
   monthlyLimit: number | null;
+  effectiveMonthlyLimit: number;
   currentMonthSendUsage: number;
   monthlySendLimit: number | null;
+  effectiveMonthlySendLimit: number;
   lastUsedAt: string | null;
   createdAt: string;
 }

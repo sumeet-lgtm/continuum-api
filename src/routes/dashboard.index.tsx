@@ -176,9 +176,9 @@ function Overview() {
 
   const plan = primaryKey.plan ?? "free";
   const verifUsed = usage?.verifications.used ?? 0;
-  const verifLimit = usage?.verifications.limit ?? primaryKey.monthlyLimit ?? 1000;
+  const verifLimit = usage?.verifications.limit ?? primaryKey.effectiveMonthlyLimit ?? 1000;
   const sendUsed = usage?.sends.used ?? 0;
-  const sendLimit = usage?.sends.limit ?? primaryKey.monthlySendLimit ?? 500;
+  const sendLimit = usage?.sends.limit ?? primaryKey.effectiveMonthlySendLimit ?? 500;
   const pct = verifLimit > 0 ? Math.min(100, (verifUsed / verifLimit) * 100) : 0;
   const empty = recent.length === 0;
 
