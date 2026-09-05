@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/deliverability")({
-  head: () => ({ meta: [{ title: "Deliverability Advisor — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Deliverability Advisor — Continuum" }] }),
   component: DeliverabilityPage,
 });
 

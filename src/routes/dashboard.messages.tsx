@@ -13,7 +13,7 @@ import {
 import { Label } from "@/components/ui/label";
 
 export const Route = createFileRoute("/dashboard/messages")({
-  head: () => ({ meta: [{ title: "Message History — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Message History — Continuum" }] }),
   component: MessagesPage,
 });
 

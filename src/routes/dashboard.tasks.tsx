@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { CheckSquare, RefreshCw, Linkedin, Phone, User, Check, GitBranch } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/tasks")({
-  head: () => ({ meta: [{ title: "Tasks — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Tasks — Continuum" }] }),
   component: TasksPage,
 });
 

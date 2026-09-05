@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2, Edit2, Sparkles, Linkedin, CheckSquare, Mail, InboxIcon, RotateCcw, Eye, EyeOff } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/sequences")({
-  head: () => ({ meta: [{ title: "Sequences — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Sequences — Continuum" }] }),
   component: SequencesPage,
 });
 

@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Plus, Users, Trash2, Leaf, X, ChevronDown, AlertTriangle, CheckCircle2, Clock, Ban, Upload, FileText, ArrowRight, ShieldCheck } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/lists")({
-  head: () => ({ meta: [{ title: "Mailing Lists — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Mailing Lists — Continuum" }] }),
   component: ListsPage,
 });
 

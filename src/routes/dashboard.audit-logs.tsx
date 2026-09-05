@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ShieldCheck, Download } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/audit-logs")({
-  head: () => ({ meta: [{ title: "Audit Logs — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Audit Logs — Continuum" }] }),
   component: AuditLogsPage,
 });
 

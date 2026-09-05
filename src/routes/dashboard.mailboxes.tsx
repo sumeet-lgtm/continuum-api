@@ -10,7 +10,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Plus, Send, Zap, TestTube, ZapOff, Mail, TrendingUp, ShieldCheck, ShieldAlert, Shield, ExternalLink } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/mailboxes")({
-  head: () => ({ meta: [{ title: "Mailboxes — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Mailboxes — Continuum" }] }),
   component: MailboxesPage,
 });
 

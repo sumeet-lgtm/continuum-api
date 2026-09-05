@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Plus, Filter, Trash2, X, ChevronDown, ChevronRight, Edit2, Users } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/segments")({
-  head: () => ({ meta: [{ title: "Segments — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Segments — Continuum" }] }),
   component: SegmentsPage,
 });
 

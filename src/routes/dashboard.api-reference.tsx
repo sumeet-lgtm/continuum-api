@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/dashboard/api-reference")({
-  head: () => ({ meta: [{ title: "API Reference — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "API Reference — Continuum" }] }),
   component: ApiReferencePage,
 });
 

@@ -10,7 +10,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Plus, Users, Trash2, Search, Upload, FileText, Loader2, X, Download, ChevronRight, Pencil, Save, Clock, Mail, MousePointer, Eye, AlertCircle, List, LogOut, Activity } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/contacts")({
-  head: () => ({ meta: [{ title: "Contacts — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Contacts — Continuum" }] }),
   component: ContactsPage,
   validateSearch: (s: Record<string, unknown>) => ({
     list: typeof s["list"] === "string" ? s["list"] : undefined,

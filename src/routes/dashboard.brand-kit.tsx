@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export const Route = createFileRoute("/dashboard/brand-kit")({
-  head: () => ({ meta: [{ title: "Brand Kit — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Brand Kit — Continuum" }] }),
   component: BrandKitPage,
 });
 

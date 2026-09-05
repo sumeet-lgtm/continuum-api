@@ -95,7 +95,7 @@ function SubjectScorer({ subject }: { subject: string }) {
 }
 
 export const Route = createFileRoute("/dashboard/campaigns")({
-  head: () => ({ meta: [{ title: "Campaigns — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Campaigns — Continuum" }] }),
   component: CampaignsPage,
 });
 

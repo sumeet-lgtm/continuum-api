@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Sparkles, Copy, Download, ChevronDown } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/ai")({
-  head: () => ({ meta: [{ title: "AI Tools — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "AI Tools — Continuum" }] }),
   component: AiPage,
 });
 

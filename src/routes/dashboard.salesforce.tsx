@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Cloud, CheckCircle2, XCircle, RefreshCw, Unplug, AlertTriangle } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/salesforce")({
-  head: () => ({ meta: [{ title: "Salesforce — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Salesforce — Continuum" }] }),
   component: SalesforcePage,
 });
 

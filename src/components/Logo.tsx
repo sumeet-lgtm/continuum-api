@@ -21,9 +21,8 @@ export function Wordmark({ size = 28 }: { size?: number }) {
   return (
     <div className="flex items-center gap-2 text-foreground">
       <Logo size={size} />
-      <span className="text-[16px] tracking-tight font-display">
-        <span className="font-medium">Continuum</span>
-        <span className="font-normal italic text-primary"> API</span>
+      <span className="text-[16px] tracking-tight font-display font-medium">
+        Continuum
       </span>
     </div>
   );

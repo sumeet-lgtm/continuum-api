@@ -10,7 +10,7 @@ import { Plus, Trash2, Edit2, FileText, Eye, X, ChevronDown, ChevronUp, History,
 import { EmailBlockEditor as VisualEditor, type Block, defaultBlocks, blocksToHtml } from "@/components/EmailBlockEditor";
 
 export const Route = createFileRoute("/dashboard/templates")({
-  head: () => ({ meta: [{ title: "Templates — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Templates — Continuum" }] }),
   component: TemplatesPage,
 });
 

@@ -10,7 +10,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Plus, Zap, ChevronDown, ChevronRight, Clock, Trash2, Play, Pause, Users, X } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/automations")({
-  head: () => ({ meta: [{ title: "Autoresponders — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Autoresponders — Continuum" }] }),
   component: AutomationsPage,
 });
 

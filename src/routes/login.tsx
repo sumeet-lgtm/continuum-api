@@ -4,7 +4,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Wordmark } from "@/components/Logo";
 
 export const Route = createFileRoute("/login")({
-  head: () => ({ meta: [{ title: "Sign in — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Sign in — Continuum" }] }),
   component: () => <AuthGate mode="signin" />,
 });
 

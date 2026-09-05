@@ -10,7 +10,7 @@ import { ChevronDown, ChevronUp, FlaskConical, CheckCircle2, Eye, Monitor, Smart
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/dashboard/transactional")({
-  head: () => ({ meta: [{ title: "Send Email — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Send Email — Continuum" }] }),
   component: TransactionalPage,
 });
 

@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export const Route = createFileRoute("/dashboard/organization")({
-  head: () => ({ meta: [{ title: "Organization — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Organization — Continuum" }] }),
   component: OrganizationPage,
 });
 

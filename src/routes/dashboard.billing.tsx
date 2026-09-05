@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { trackEvent, PLAN_VALUES } from "@/lib/analytics";
 
 export const Route = createFileRoute("/dashboard/billing")({
-  head: () => ({ meta: [{ title: "Billing — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Billing — Continuum" }] }),
   component: BillingPage,
 });
 

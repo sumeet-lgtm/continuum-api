@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/migrate")({
-  head: () => ({ meta: [{ title: "Migrate Contacts — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Migrate Contacts — Continuum" }] }),
   component: MigratePage,
 });
 

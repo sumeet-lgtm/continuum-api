@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export const Route = createFileRoute("/dashboard/analytics")({
-  head: () => ({ meta: [{ title: "Analytics — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Analytics — Continuum" }] }),
   component: AnalyticsPage,
 });
 

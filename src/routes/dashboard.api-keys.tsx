@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
 
 export const Route = createFileRoute("/dashboard/api-keys")({
-  head: () => ({ meta: [{ title: "API Keys — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "API Keys — Continuum" }] }),
   component: ApiKeysPage,
 });
 

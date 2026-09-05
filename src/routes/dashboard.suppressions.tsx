@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Plus, ShieldOff, Trash2, Search, Download, Upload, X, CheckCircle2, AlertCircle } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/suppressions")({
-  head: () => ({ meta: [{ title: "Suppressions — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Suppressions — Continuum" }] }),
   component: SuppressionsPage,
 });
 

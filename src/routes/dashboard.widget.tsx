@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/dashboard/widget")({
-  head: () => ({ meta: [{ title: "Verification Widget — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Verification Widget — Continuum" }] }),
   component: WidgetPage,
 });
 

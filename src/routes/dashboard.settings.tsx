@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 
 export const Route = createFileRoute("/dashboard/settings")({
-  head: () => ({ meta: [{ title: "Settings — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Settings — Continuum" }] }),
   component: SettingsPage,
 });
 

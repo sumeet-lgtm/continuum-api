@@ -10,7 +10,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Plus, Users, Upload, X, FileText, Loader2, Search, Sparkles, GitBranch, CheckSquare, Square, Wand2, ArrowRight } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/leads")({
-  head: () => ({ meta: [{ title: "Leads — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Leads — Continuum" }] }),
   component: LeadsPage,
 });
 

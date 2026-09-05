@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select";
 
 export const Route = createFileRoute("/dashboard/phone")({
-  head: () => ({ meta: [{ title: "Phone Intelligence — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Phone Intelligence — Continuum" }] }),
   component: PhonePage,
 });
 

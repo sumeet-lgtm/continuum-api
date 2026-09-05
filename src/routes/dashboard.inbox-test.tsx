@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Mail, CheckCircle2, XCircle, HelpCircle, Loader2, FlaskConical } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/inbox-test")({
-  head: () => ({ meta: [{ title: "Inbox Placement — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Inbox Placement — Continuum" }] }),
   component: InboxTestPage,
 });
 

@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/dashboard/playground")({
-  head: () => ({ meta: [{ title: "API Playground — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "API Playground — Continuum" }] }),
   component: PlaygroundPage,
 });
 

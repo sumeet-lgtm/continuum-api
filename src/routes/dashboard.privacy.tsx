@@ -9,7 +9,7 @@ import { Shield, Search, Download, Trash2, AlertTriangle, CheckCircle2, XCircle,
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/dashboard/privacy")({
-  head: () => ({ meta: [{ title: "Data Privacy — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Data Privacy — Continuum" }] }),
   component: PrivacyPage,
 });
 

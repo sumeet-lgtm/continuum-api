@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select";
 
 export const Route = createFileRoute("/dashboard/connectors")({
-  head: () => ({ meta: [{ title: "Connectors — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Connectors — Continuum" }] }),
   component: ConnectorsPage,
 });
 

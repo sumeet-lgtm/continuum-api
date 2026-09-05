@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 
 export const Route = createFileRoute("/dashboard/webhooks")({
-  head: () => ({ meta: [{ title: "Webhooks — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Webhooks — Continuum" }] }),
   component: WebhooksPage,
 });
 

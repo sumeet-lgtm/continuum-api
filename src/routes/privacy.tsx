@@ -15,7 +15,7 @@ function PrivacyPage() {
         <section className="space-y-8 text-sm leading-relaxed">
           <div>
             <h2 className="text-base font-semibold mb-2">1. Overview</h2>
-            <p>Continuum API ("we", "us") is committed to protecting the privacy of our customers and their end-users. This policy explains what data we collect, how we use it, and your rights regarding that data.</p>
+            <p>Continuum ("we", "us") is committed to protecting the privacy of our customers and their end-users. This policy explains what data we collect, how we use it, and your rights regarding that data.</p>
           </div>
 
           <div>
@@ -41,7 +41,7 @@ function PrivacyPage() {
 
           <div>
             <h2 className="text-base font-semibold mb-2">4. Data You Process Through Us</h2>
-            <p>When you use Continuum API to send emails or verify addresses, you are the data controller for your recipients' data. We act as a data processor on your behalf. We do not sell, share, or use your recipients' data for any purpose other than delivering the Service to you.</p>
+            <p>When you use Continuum to send emails or verify addresses, you are the data controller for your recipients' data. We act as a data processor on your behalf. We do not sell, share, or use your recipients' data for any purpose other than delivering the Service to you.</p>
           </div>
 
           <div>

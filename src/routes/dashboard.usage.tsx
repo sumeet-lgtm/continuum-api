@@ -7,7 +7,7 @@ import { Activity, Zap, Mail, TrendingUp, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/dashboard/usage")({
-  head: () => ({ meta: [{ title: "Usage & Limits — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Usage & Limits — Continuum" }] }),
   component: UsagePage,
 });
 

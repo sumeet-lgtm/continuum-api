@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Plus, RefreshCw, ServerCog, CheckCircle2, XCircle, Clock, ShieldCheck, X, Copy, Check, KeyRound, AlertTriangle } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/domains")({
-  head: () => ({ meta: [{ title: "Sending Domains — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Sending Domains — Continuum" }] }),
   component: DomainsPage,
 });
 

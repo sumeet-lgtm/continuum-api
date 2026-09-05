@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export const Route = createFileRoute("/dashboard/verify")({
-  head: () => ({ meta: [{ title: "Email Verify — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Email Verify — Continuum" }] }),
   component: VerifyPage,
 });
 

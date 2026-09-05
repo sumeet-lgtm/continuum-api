@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select";
 
 export const Route = createFileRoute("/dashboard/tools")({
-  head: () => ({ meta: [{ title: "Deliverability Tools — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Deliverability Tools — Continuum" }] }),
   component: ToolsPage,
 });
 

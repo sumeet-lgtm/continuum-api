@@ -8,7 +8,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/dashboard/bulk")({
-  head: () => ({ meta: [{ title: "Bulk Verification — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Bulk Verification — Continuum" }] }),
   component: BulkPage,
 });
 

@@ -15,12 +15,12 @@ function TermsPage() {
         <section className="space-y-8 text-sm leading-relaxed">
           <div>
             <h2 className="text-base font-semibold mb-2">1. Acceptance of Terms</h2>
-            <p>By accessing or using the Continuum API platform ("Service"), you agree to be bound by these Terms of Service. If you do not agree, do not use the Service. Continuum API is operated by Sumeet Sutar ("Company", "we", "us").</p>
+            <p>By accessing or using the Continuum platform ("Service"), you agree to be bound by these Terms of Service. If you do not agree, do not use the Service. Continuum is operated by Sumeet Sutar ("Company", "we", "us").</p>
           </div>
 
           <div>
             <h2 className="text-base font-semibold mb-2">2. Description of Service</h2>
-            <p>Continuum API provides email verification, transactional email sending, bulk campaigns, mailing list management, cold outreach sequencing, and related developer infrastructure ("Service"). Access is provided via API keys and a web dashboard.</p>
+            <p>Continuum provides email verification, transactional email sending, bulk campaigns, mailing list management, cold outreach sequencing, and related developer infrastructure ("Service"). Access is provided via API keys and a web dashboard.</p>
           </div>
 
           <div>

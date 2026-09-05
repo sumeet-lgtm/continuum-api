@@ -9,7 +9,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Send, CheckCircle2, XCircle, Layers, Upload, Table2 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/batch-send")({
-  head: () => ({ meta: [{ title: "Batch Send — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "Batch Send — Continuum" }] }),
   component: BatchSendPage,
 });
 

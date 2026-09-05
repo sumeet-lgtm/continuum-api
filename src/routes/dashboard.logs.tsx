@@ -8,7 +8,7 @@ import { RefreshCw, Terminal, CheckCircle2, XCircle, Clock, Zap } from "lucide-r
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/dashboard/logs")({
-  head: () => ({ meta: [{ title: "API Logs — Continuum API" }] }),
+  head: () => ({ meta: [{ title: "API Logs — Continuum" }] }),
   component: LogsPage,
 });
 
