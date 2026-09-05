@@ -661,7 +661,7 @@ export async function mcpRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.send({
       name: SERVER_INFO.name,
       version: SERVER_INFO.version,
-      description: 'Continuum API — email verification, sending, sequences, and campaigns',
+      description: 'Continuum — email verification, sending, sequences, and campaigns',
       mcp_endpoint: '/mcp',
       auth: 'Bearer <continuum-api-key>',
       tools: TOOLS.map(t => t.name),

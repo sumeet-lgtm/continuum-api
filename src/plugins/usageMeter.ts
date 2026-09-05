@@ -161,12 +161,12 @@ async function sendUsageAlert(
 
     await sendEmail(
       user.email,
-      `You've used ${pct}% of your Continuum API quota`,
+      `You've used ${pct}% of your Continuum quota`,
       `<p>Hi,</p>
-<p>You've used <strong>${used.toLocaleString()} of ${limit.toLocaleString()} verifications</strong> (${pct}%) this month on Continuum API.</p>
+<p>You've used <strong>${used.toLocaleString()} of ${limit.toLocaleString()} verifications</strong> (${pct}%) this month on Continuum.</p>
 <p>You have <strong>${remaining.toLocaleString()} verifications remaining</strong> until your quota resets.</p>
 <p>To avoid disruption, consider <a href="https://app.continuumapi.com/dashboard/billing">upgrading your plan or purchasing additional credits</a>.</p>
-<p>— Continuum API</p>`,
+<p>— Continuum</p>`,
     );
 
     await prisma.apiKey.update({

@@ -22,7 +22,7 @@ function getSes(): SESv2Client | null {
   return _ses;
 }
 
-const FROM = `Continuum API <${config.SUPPORT_EMAIL ?? 'noreply@continuumapi.com'}>`;
+const FROM = `Continuum <${config.SUPPORT_EMAIL ?? 'noreply@continuumapi.com'}>`;
 
 export async function sendEmail(
   toOrOpts: string | { to: string; subject: string; html: string },
@@ -68,7 +68,7 @@ const LOGO = `<table cellpadding="0" cellspacing="0" border="0" style="margin-bo
             <div style="width:24px;height:24px;background:rgba(255,255,255,0.15);border-radius:5px;display:inline-block;line-height:24px;text-align:center;font-size:11px;color:#fff;font-weight:700">C</div>
           </td>
           <td style="vertical-align:middle">
-            <span style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#fff">Continuum API</span>
+            <span style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#fff">Continuum</span>
           </td>
         </tr>
       </table>
@@ -80,7 +80,7 @@ const FOOTER = `<table cellpadding="0" cellspacing="0" border="0" width="100%" s
   <tr>
     <td style="background:#F9FAFB;border-top:1px solid #E5E7EB;padding:18px 32px;border-radius:0 0 4px 4px">
       <p style="font-family:Inter,-apple-system,sans-serif;font-size:11px;color:#9CA3AF;margin:0;line-height:1.7">
-        © 2026 Continuum API &nbsp;·&nbsp;
+        © 2026 Continuum &nbsp;·&nbsp;
         <a href="https://app.continuumapi.com/terms" style="color:#9CA3AF">Terms</a>
         &nbsp;·&nbsp;
         <a href="https://app.continuumapi.com/privacy" style="color:#9CA3AF">Privacy</a>
@@ -170,11 +170,11 @@ export function welcomeEmail(keyPrefix: string, firstName?: string | null): { su
 
 export function loginAlertEmail(opts: { browser: string; location: string; ip: string; time: string; firstName?: string | null }): { subject: string; html: string } {
   return {
-    subject: 'New sign-in to your Continuum API account',
+    subject: 'New sign-in to your Continuum account',
     html: layout('New sign-in detected', `
       ${greeting(opts.firstName)}
       ${h1('New sign-in to your account.')}
-      ${p('We detected a sign-in to your Continuum API account from a new session.')}
+      ${p('We detected a sign-in to your Continuum account from a new session.')}
       ${ROW('Time', opts.time)}
       ${ROW('Browser', opts.browser)}
       ${ROW('Location', opts.location)}
@@ -250,7 +250,7 @@ export function upgradeConfirmEmail(plan: string, limit: number, firstName?: str
 
 export function planDowngradedEmail(plan: string, firstName?: string | null): { subject: string; html: string } {
   return {
-    subject: 'Your Continuum API plan has changed',
+    subject: 'Your Continuum plan has changed',
     html: layout('Plan changed', `
       ${greeting(firstName)}
       ${h1('Your plan has been updated.')}
@@ -568,7 +568,7 @@ export function weeklyDigestEmail(opts: {
 }): { subject: string; html: string } {
   const usedPct = Math.round((opts.used / opts.limit) * 100);
   return {
-    subject: `Your Continuum API week: ${opts.weekLabel}`,
+    subject: `Your Continuum week: ${opts.weekLabel}`,
     html: layout('Weekly digest', `
       ${greeting(opts.firstName)}
       ${h1('Here\'s your week.')}
@@ -667,7 +667,7 @@ export function day7CheckInEmail(firstName?: string | null): { subject: string; 
       ${p('Which one are you trying to solve? Or is it something else entirely?')}
       ${p('Hit reply and tell me — I\'ll point you to the fastest path, and if something isn\'t working the way you expected, I\'d rather know now than later.')}
       ${DIVIDER}
-      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet, founder @ Continuum API<br>You can reply directly to this email.</span>')}
+      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet, founder @ Continuum<br>You can reply directly to this email.</span>')}
     `),
   };
 }
@@ -702,7 +702,7 @@ export function day14ValueEmail(firstName?: string | null): { subject: string; h
       ${p('If any of these look like where you\'re headed, or if you\'re still figuring out the right fit — reply and I\'ll help you map it out.')}
       ${BTN('https://app.continuumapi.com/dashboard', 'Check Your Dashboard →')}
       ${DIVIDER}
-      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet @ Continuum API<br>Reply directly to this email — I\'m reachable.</span>')}
+      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet @ Continuum<br>Reply directly to this email — I\'m reachable.</span>')}
     `),
   };
 }

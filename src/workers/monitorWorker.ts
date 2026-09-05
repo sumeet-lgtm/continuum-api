@@ -414,7 +414,7 @@ async function checkProviderCredits(): Promise<void> {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({
-            text: `⚠️ Continuum API: DeBounce balance is ${balance} credits (threshold ${CREDIT_ALERT_THRESHOLD}). Top up before SMTP checks stop.`,
+            text: `⚠️ Continuum: DeBounce balance is ${balance} credits (threshold ${CREDIT_ALERT_THRESHOLD}). Top up before SMTP checks stop.`,
           }),
           signal: AbortSignal.timeout(10_000),
         }).catch(() => { /* alert delivery is best-effort */ });

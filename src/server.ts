@@ -238,7 +238,7 @@ async function buildApp(): Promise<FastifyInstance> {
   // ─── Root info ────────────────────────────────────────────────────────────
   app.get('/', async (_request, reply) => {
     return reply.send({
-      name: 'Continuum API',
+      name: 'Continuum',
       version: process.env['npm_package_version'] ?? '0.1.0',
       // Set via `railway variable set COMMIT_SHA=$(git rev-parse --short HEAD)
       // --skip-deploys` immediately before each `railway up` — deploys go
@@ -272,7 +272,7 @@ async function start(): Promise<void> {
 
     logger.info(
       { port: config.PORT, host: config.HOST, env: config.NODE_ENV },
-      'Continuum API started',
+      'Continuum started',
     );
 
     // Warn if SES credentials are present but configuration set is missing —
