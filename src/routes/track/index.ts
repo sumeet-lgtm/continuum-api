@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../../lib/prisma.js';
 import { verifyOpenToken, verifyClickToken, TRANSPARENT_GIF } from '../../lib/tracking.js';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
+import { classifyTrackingEvent } from '../../engine/botDetection.js';
 
 export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /track/open — tracking pixel. Accepts token as path param OR query param.
@@ -22,12 +23,12 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
         // trackingToken, not the row's cuid id).
         let msg = await prisma.sendMessage.findUnique({
           where: { id: payload.sendMessageId },
-          select: { id: true, to: true, apiKeyId: true, trackingToken: true },
+          select: { id: true, to: true, apiKeyId: true, trackingToken: true, sentAt: true },
         });
         if (!msg) {
           msg = await prisma.sendMessage.findUnique({
             where: { trackingToken: payload.sendMessageId },
-            select: { id: true, to: true, apiKeyId: true, trackingToken: true },
+            select: { id: true, to: true, apiKeyId: true, trackingToken: true, sentAt: true },
           });
         }
 
@@ -37,34 +38,50 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
             ? msg.trackingToken.split('_')[0]
             : null;
 
+          const occurredAt = new Date();
+          const userAgent = request.headers['user-agent'] ?? null;
+          const ip = request.ip ?? null;
+          const { isLikelyBot, botReason } = classifyTrackingEvent({ ip, userAgent, sentAt: msg.sentAt, occurredAt });
+
           await prisma.trackingEvent.create({
             data: {
               sendMessageId: msg.id,
               email: msg.to,
               type: 'open',
               ...(campaignId ? { campaignId } : {}),
-              userAgent: request.headers['user-agent'] ?? null,
-              ip: request.ip ?? null,
+              userAgent,
+              ip,
+              occurredAt,
+              isLikelyBot,
+              botReason,
             },
           }).catch(() => { /* ignore if already logged */ });
 
-          await prisma.sendMessage.update({
-            where: { id: msg.id },
-            data: { status: 'opened' as never },
-          }).catch(() => { /* ignore */ });
+          // Apple MPP prefetches this pixel for every MPP-enabled recipient
+          // regardless of whether a human ever opens the message — flipping
+          // status/counters on that would falsely mark essentially every
+          // iOS/macOS Mail recipient "opened" and (via stop_on_open /
+          // if_opened, see sequenceWorker.ts) silently end real outreach
+          // sequences before a genuine human ever engaged.
+          if (!isLikelyBot) {
+            await prisma.sendMessage.update({
+              where: { id: msg.id },
+              data: { status: 'opened' as never },
+            }).catch(() => { /* ignore */ });
 
-          // Increment campaign open count for real-time health stats
-          if (campaignId) {
-            // Check variant to update the right counter (A or B)
-            const cr = await prisma.campaignRecipient.findFirst({
-              where: { campaignId, email: msg.to },
-              select: { variant: true },
-            }).catch(() => null);
-            const isVariantB = cr?.variant === 'b';
-            await prisma.campaign.update({
-              where: { id: campaignId },
-              data: isVariantB ? { openCountB: { increment: 1 } } : { openCount: { increment: 1 } },
-            }).catch(() => { /* non-fatal */ });
+            // Increment campaign open count for real-time health stats
+            if (campaignId) {
+              // Check variant to update the right counter (A or B)
+              const cr = await prisma.campaignRecipient.findFirst({
+                where: { campaignId, email: msg.to },
+                select: { variant: true },
+              }).catch(() => null);
+              const isVariantB = cr?.variant === 'b';
+              await prisma.campaign.update({
+                where: { id: campaignId },
+                data: isVariantB ? { openCountB: { increment: 1 } } : { openCount: { increment: 1 } },
+              }).catch(() => { /* non-fatal */ });
+            }
           }
         }
       }
@@ -90,12 +107,12 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
       if (payload) {
         let msg = await prisma.sendMessage.findUnique({
           where: { id: payload.sendMessageId },
-          select: { id: true, to: true, trackingToken: true },
+          select: { id: true, to: true, trackingToken: true, sentAt: true },
         });
         if (!msg) {
           msg = await prisma.sendMessage.findUnique({
             where: { trackingToken: payload.sendMessageId },
-            select: { id: true, to: true, trackingToken: true },
+            select: { id: true, to: true, trackingToken: true, sentAt: true },
           });
         }
 
@@ -104,6 +121,11 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
             ? msg.trackingToken.split('_')[0]
             : null;
 
+          const occurredAt = new Date();
+          const userAgent = request.headers['user-agent'] ?? null;
+          const ip = request.ip ?? null;
+          const { isLikelyBot, botReason } = classifyTrackingEvent({ ip, userAgent, sentAt: msg.sentAt, occurredAt });
+
           await prisma.trackingEvent.create({
             data: {
               sendMessageId: msg.id,
@@ -111,12 +133,18 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
               type: 'click',
               linkUrl: payload.url,
               ...(campaignId ? { campaignId } : {}),
-              userAgent: request.headers['user-agent'] ?? null,
-              ip: request.ip ?? null,
+              userAgent,
+              ip,
+              occurredAt,
+              isLikelyBot,
+              botReason,
             },
           }).catch(() => { /* ignore */ });
 
-          if (campaignId) {
+          // Same reasoning as the open handler above — a security gateway's
+          // pre-send link scan shouldn't count as a real click or trigger
+          // stop_on_click.
+          if (!isLikelyBot && campaignId) {
             const crClick = await prisma.campaignRecipient.findFirst({
               where: { campaignId, email: msg.to },
               select: { variant: true },

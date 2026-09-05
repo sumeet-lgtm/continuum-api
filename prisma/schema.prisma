@@ -748,6 +748,17 @@ model TrackingEvent {
   userAgent     String?
   ip            String?
   occurredAt    DateTime @default(now())
+  // Apple Mail Privacy Protection prefetches every tracking pixel/link
+  // regardless of whether a human ever opens the message, and corporate
+  // security gateways (Mimecast, Proofpoint, Microsoft Defender) do the
+  // same before the email even reaches an inbox — on real-world B2B
+  // traffic this inflates raw open/click counts substantially. Every event
+  // is still recorded (this is the full audit log), but callers computing
+  // "did a human engage" (analytics, sequence stop_on_open/if_opened
+  // conditions) must filter on isLikelyBot:false rather than mere row
+  // existence — see engine/botDetection.ts for the classification logic.
+  isLikelyBot   Boolean  @default(false)
+  botReason     String?  // apple_mpp | bot_user_agent | prefetch_timing
 
   sendMessage SendMessage? @relation(fields: [sendMessageId], references: [id])
 

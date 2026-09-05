@@ -36,20 +36,35 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const apiKeyId = request.apiKey.id;
       const where = buildWhere(apiKeyId, q);
 
-      const [sent, delivered, bounced, complained, opens, clicks] = await Promise.all([
+      const [sent, delivered, bounced, complained, opensRaw, clicksRaw, opensBot, clicksBot] = await Promise.all([
         prisma.sendMessage.count({ where: { ...where, status: { in: ['sent', 'delivered', 'bounced', 'complained', 'failed'] } } }),
         prisma.sendMessage.count({ where: { ...where, status: 'delivered' } }),
         prisma.sendMessage.count({ where: { ...where, status: 'bounced' } }),
         prisma.sendMessage.count({ where: { ...where, status: 'complained' } }),
         prisma.trackingEvent.count({ where: { type: 'open', sendMessage: { apiKeyId } } }),
         prisma.trackingEvent.count({ where: { type: 'click', sendMessage: { apiKeyId } } }),
+        prisma.trackingEvent.count({ where: { type: 'open', isLikelyBot: true, sendMessage: { apiKeyId } } }),
+        prisma.trackingEvent.count({ where: { type: 'click', isLikelyBot: true, sendMessage: { apiKeyId } } }),
       ]);
+
+      // Apple Mail Privacy Protection and corporate security gateways
+      // inflate raw open/click counts substantially (M3AAWG puts non-human
+      // clicks at 20-80% of raw B2B volume) — the headline rate reflects
+      // only verified human engagement (isLikelyBot:false); raw counts are
+      // still exposed alongside it for anyone who wants the unfiltered
+      // number. See engine/botDetection.ts for the classification.
+      const opens = opensRaw - opensBot;
+      const clicks = clicksRaw - clicksBot;
 
       return reply.status(200).send({
         sent, delivered, bounced, complained, opens, clicks,
+        opens_raw: opensRaw, clicks_raw: clicksRaw,
+        opens_filtered_as_bot: opensBot, clicks_filtered_as_bot: clicksBot,
         delivery_rate: sent > 0 ? +(delivered / sent * 100).toFixed(1) : 0,
         open_rate: delivered > 0 ? +(opens / delivered * 100).toFixed(1) : 0,
         click_rate: delivered > 0 ? +(clicks / delivered * 100).toFixed(1) : 0,
+        open_rate_raw: delivered > 0 ? +(opensRaw / delivered * 100).toFixed(1) : 0,
+        click_rate_raw: delivered > 0 ? +(clicksRaw / delivered * 100).toFixed(1) : 0,
         bounce_rate: sent > 0 ? +(bounced / sent * 100).toFixed(1) : 0,
         complaint_rate: sent > 0 ? +(complained / sent * 100).toFixed(1) : 0,
       });

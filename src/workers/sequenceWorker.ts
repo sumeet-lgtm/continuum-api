@@ -21,23 +21,28 @@ async function evaluateCondition(
 
   const trackingId = `${enrollment.sequenceId}_step${enrollment.currentStep - 1}_${enrollment.email}`;
 
+  // isLikelyBot:false excludes Apple Mail Privacy Protection prefetches and
+  // security-gateway pre-scans (see engine/botDetection.ts) — without this,
+  // "if opened" branches fire and "if not opened" branches never do for
+  // essentially every iOS/macOS Mail recipient, regardless of whether a
+  // human ever actually engaged.
   if (step.condition === 'if_not_opened') {
     const opened = await prisma.trackingEvent.findFirst({
-      where: { sendMessageId: trackingId, type: 'open' },
+      where: { sendMessageId: trackingId, type: 'open', isLikelyBot: false },
     });
     return !opened;
   }
 
   if (step.condition === 'if_opened') {
     const opened = await prisma.trackingEvent.findFirst({
-      where: { sendMessageId: trackingId, type: 'open' },
+      where: { sendMessageId: trackingId, type: 'open', isLikelyBot: false },
     });
     return !!opened;
   }
 
   if (step.condition === 'if_not_clicked') {
     const clicked = await prisma.trackingEvent.findFirst({
-      where: { sendMessageId: trackingId, type: 'click' },
+      where: { sendMessageId: trackingId, type: 'click', isLikelyBot: false },
     });
     return !clicked;
   }
@@ -127,11 +132,14 @@ export async function processSequenceTick(): Promise<void> {
     // Check send window
     if (!isWithinSendWindow(sequence)) continue;
 
-    // Check stopOnOpen: if any open event for this enrollment email, stop
+    // Check stopOnOpen: if any genuinely-human open event for this
+    // enrollment email, stop (isLikelyBot:false — see engine/botDetection.ts;
+    // without it, Apple MPP's prefetch alone would end the sequence for
+    // every iOS/macOS Mail recipient the moment the email is delivered).
     const seqAny = sequence as { stopOnOpen?: boolean; stopOnClick?: boolean; stopOnReply: boolean };
     if (seqAny.stopOnOpen) {
       const openTrackId = `${sequence.id}_step${enrollment.currentStep - 1}_${enrollment.email}`;
-      const opened = await prisma.trackingEvent.findFirst({ where: { sendMessageId: openTrackId, type: 'open' } });
+      const opened = await prisma.trackingEvent.findFirst({ where: { sendMessageId: openTrackId, type: 'open', isLikelyBot: false } });
       if (opened) {
         await prisma.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } });
         // Trigger OPENED subsequences
@@ -147,10 +155,11 @@ export async function processSequenceTick(): Promise<void> {
       }
     }
 
-    // Check stopOnClick: if any click event for this enrollment email, stop
+    // Check stopOnClick: if any genuinely-human click event for this
+    // enrollment email, stop
     if (seqAny.stopOnClick) {
       const clickTrackId = `${sequence.id}_step${enrollment.currentStep - 1}_${enrollment.email}`;
-      const clicked = await prisma.trackingEvent.findFirst({ where: { sendMessageId: clickTrackId, type: 'click' } });
+      const clicked = await prisma.trackingEvent.findFirst({ where: { sendMessageId: clickTrackId, type: 'click', isLikelyBot: false } });
       if (clicked) {
         await prisma.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } });
         const clickedSubseqs = await prisma.sequence.findMany({ where: { parentSequenceId: sequence.id, triggerEvent: 'CLICKED' }, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
