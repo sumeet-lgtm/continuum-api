@@ -539,7 +539,16 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
       );
 
       let imported = 0, skipped = 0;
-      const BATCH = 500;
+      // Was 500 — each contact does 2 sequential round-trips (contact +
+      // membership upsert) inside one interactive transaction, so a batch
+      // of 500 real customer contacts (1,000 round-trips) reliably blew
+      // past Prisma's default 5s interactive-transaction timeout and
+      // rolled the whole batch back with a bare 500, even though every
+      // individual write would have succeeded on its own. Found live
+      // importing 332 real contacts — a batch smaller than this still
+      // failed the same way at the default timeout. Smaller batch + an
+      // explicit generous timeout as a second line of defense.
+      const BATCH = 100;
 
       for (let i = 0; i < contacts.length; i += BATCH) {
         const batch = contacts.slice(i, i + BATCH).filter(c => !suppressionEmails.has(c.email.toLowerCase()));
@@ -571,7 +580,7 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
               });
             }
           }
-        });
+        }, { timeout: 20_000 });
 
         imported += batch.length;
         skipped += BATCH - batch.length;
