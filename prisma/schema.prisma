@@ -121,6 +121,17 @@ model ApiKey {
   currentMonthSendUsage Int @default(0)   // sends used this month — separate counter from verification usage
   sendUsageResetAt DateTime @default(dbgenerated("date_trunc('month', now() + interval '1 month')"))
 
+  // Finder gets its own guaranteed monthly allowance, separate from the
+  // general verification pool — a customer who bulk-verifies their own
+  // list early in the month must never find themselves locked out of
+  // lead-finding for the rest of it. Resets alongside currentMonthUsage
+  // (same usageResetAt cadence — no need for a third reset timestamp).
+  // Once this allowance is spent, Finder overflows into the general
+  // verification pool at 2 credits/lead (see usageMeter.ts) — the same
+  // pool the existing extraVerificationCredits top-ups already refill, so
+  // no separate "lead pack" purchase flow is needed.
+  currentMonthFinderUsage Int @default(0) @map("current_month_finder_usage")
+
   // Pay-per-use credit packs (non-expiring top-ups on top of monthly quota)
   extraVerificationCredits Int @default(0) @map("extra_verification_credits")
   extraSendCredits         Int @default(0) @map("extra_send_credits")

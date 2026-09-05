@@ -85,10 +85,12 @@ export async function requireMonthlyQuota(
         where: { id: key.id },
         data: {
           currentMonthUsage: 0,
+          currentMonthFinderUsage: 0,
           usageResetAt: nextReset,
         },
       });
       key.currentMonthUsage = 0;
+      (key as { currentMonthFinderUsage?: number }).currentMonthFinderUsage = 0;
       key.usageResetAt = nextReset;
     }
 
@@ -189,6 +191,83 @@ export async function incrementUsageBy(apiKeyId: string, count: number): Promise
     });
   } catch (err) {
     logger.warn({ err, apiKeyId, count }, 'Failed to increment usage counter');
+  }
+}
+
+// ─── Finder allowance ───────────────────────────────────────────────────────
+// Finder gets its own guaranteed monthly lead-finding allowance, separate
+// from the general verification pool — a customer who bulk-verifies their
+// own list early in the month must never find themselves locked out of
+// lead-finding for the rest of it. Sized as a small, deliberately generous
+// slice of the plan price (real cost is ~$0.003/lead all-in — scrape +
+// verify): well under 4% of plan revenue at every tier, with value-per-
+// dollar increasing at higher tiers as a real upgrade incentive.
+const PLAN_FINDER_LIMITS: Record<string, number> = {
+  free:    25,
+  starter: 250,
+  growth:  750,
+  scale:   2_500,
+};
+
+export function getFinderLimit(plan: string | null): number {
+  return PLAN_FINDER_LIMITS[plan ?? 'free'] ?? PLAN_FINDER_LIMITS['free']!;
+}
+
+/**
+ * How many more Finder leads this key can afford right now, combining its
+ * dedicated Finder allowance with its general verification pool (which the
+ * existing credit-pack top-ups already refill) at the overflow rate below.
+ */
+export const FINDER_OVERFLOW_VERIFICATION_COST = 2;
+
+export function getFinderAffordability(key: {
+  plan: string | null;
+  monthlyLimit?: number | null;
+  currentMonthUsage?: number | null;
+  extraVerificationCredits?: number | null;
+  currentMonthFinderUsage?: number | null;
+}): { finderRemaining: number; verificationAsFinderRemaining: number; maxAffordable: number } {
+  const finderLimit = getFinderLimit(key.plan);
+  const finderUsed = key.currentMonthFinderUsage ?? 0;
+  const finderRemaining = Math.max(0, finderLimit - finderUsed);
+
+  const verificationLimit = getPlanLimit(key.plan, key.monthlyLimit) + (key.extraVerificationCredits ?? 0);
+  const verificationUsed = key.currentMonthUsage ?? 0;
+  const verificationRemaining = Math.max(0, verificationLimit - verificationUsed);
+  const verificationAsFinderRemaining = Math.floor(verificationRemaining / FINDER_OVERFLOW_VERIFICATION_COST);
+
+  return { finderRemaining, verificationAsFinderRemaining, maxAffordable: finderRemaining + verificationAsFinderRemaining };
+}
+
+/**
+ * Bill `count` Finder-found-and-verified leads: first against the
+ * dedicated Finder allowance (1 unit/lead), then any remainder against the
+ * shared verification pool at the overflow rate (2 credits/lead) — the
+ * same pool the existing credit packs already top up, so no separate
+ * "lead pack" purchase flow is needed for a customer who wants more.
+ */
+export async function incrementFinderUsage(apiKeyId: string, count: number): Promise<void> {
+  if (count <= 0) return;
+  try {
+    const key = await prisma.apiKey.findUnique({
+      where: { id: apiKeyId },
+      select: { plan: true, monthlyLimit: true, currentMonthUsage: true, extraVerificationCredits: true, currentMonthFinderUsage: true },
+    });
+    if (!key) return;
+
+    const { finderRemaining } = getFinderAffordability(key);
+    const fromFinderAllowance = Math.min(count, finderRemaining);
+    const overflow = count - fromFinderAllowance;
+
+    await prisma.apiKey.update({
+      where: { id: apiKeyId },
+      data: {
+        ...(fromFinderAllowance > 0 && { currentMonthFinderUsage: { increment: fromFinderAllowance } }),
+        ...(overflow > 0 && { currentMonthUsage: { increment: overflow * FINDER_OVERFLOW_VERIFICATION_COST } }),
+      },
+    });
+  } catch (err) {
+    logger.warn({ err, apiKeyId, count }, 'Failed to increment Finder usage counter');
   }
 }
 

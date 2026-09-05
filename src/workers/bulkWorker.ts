@@ -36,7 +36,17 @@ import { prisma } from '../lib/prisma.js';
 import { downloadFromStorage, uploadToStorage } from '../lib/supabase.js';
 import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
 import { verifyEmail } from '../engine/index.js';
-import { incrementUsageBy } from '../plugins/usageMeter.js';
+import { incrementUsageBy, incrementFinderUsage } from '../plugins/usageMeter.js';
+
+// Finder's own auto-created verify jobs are tagged with this prefix in
+// storagePath (see routes/finder/index.ts's verifyTag) — a Finder-sourced
+// job bills against the dedicated Finder allowance (+ 2x overflow into the
+// general pool) instead of the flat 1-credit-per-email rate a customer's
+// own CSV/list upload uses, since Finder bundles two services (finding the
+// lead, then verifying it) into one.
+function isFinderSourcedJob(storagePath: string): boolean {
+  return storagePath.includes('/finder-');
+}
 import { loadDisposableList } from '../engine/disposable.js';
 import { parseCsv } from '../routes/bulk-jobs/index.js';
 import { config } from '../config.js';
@@ -192,7 +202,11 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
     if ((fresh?.status as string) === 'cancelled' || fresh?.cancelledAt) {
       log.info('Job cancelled — stopping processing');
       // Verifications already performed still count toward the monthly quota
-      await incrementUsageBy(apiKeyId, processedCount);
+      if (isFinderSourcedJob(storagePath)) {
+        await incrementFinderUsage(apiKeyId, processedCount);
+      } else {
+        await incrementUsageBy(apiKeyId, processedCount);
+      }
       return;
     }
 
@@ -385,7 +399,11 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
   });
 
   // Bulk verifications count toward the key's monthly quota
-  await incrementUsageBy(apiKeyId, processedCount);
+  if (isFinderSourcedJob(storagePath)) {
+    await incrementFinderUsage(apiKeyId, processedCount);
+  } else {
+    await incrementUsageBy(apiKeyId, processedCount);
+  }
 
   log.info({ processedCount, validCount, invalidCount, riskyCount, unknownCount, errorCount },
     'Bulk job completed');
