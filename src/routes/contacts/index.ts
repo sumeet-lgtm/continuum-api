@@ -539,58 +539,74 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
       );
 
       let imported = 0, skipped = 0;
-      // Was 500 — each contact does 2 sequential round-trips (contact +
-      // membership upsert) inside one interactive transaction, so a batch
-      // of 500 real customer contacts (1,000 round-trips) reliably blew
-      // past Prisma's default 5s interactive-transaction timeout and
-      // rolled the whole batch back with a bare 500, even though every
-      // individual write would have succeeded on its own. Found live
-      // importing 332 real contacts — a batch smaller than this still
-      // failed the same way at the default timeout. Smaller batch + an
-      // explicit generous timeout as a second line of defense.
-      const BATCH = 100;
+      // Wrapping this in an interactive transaction was never actually
+      // necessary — each contact's upsert pair doesn't depend on any other
+      // row in the batch, so there's nothing that needs cross-row
+      // atomicity. But it meant every one of a batch's round-trips shared
+      // ONE transaction's timeout budget, and round-trip latency turned out
+      // to be the real constraint: on the transaction-mode PgBouncer pooler
+      // (needed elsewhere to fix connection exhaustion), sequential small
+      // queries run markedly slower than on a dedicated session connection.
+      // A batch of 100 contacts (200 round-trips) still blew past a 20s
+      // transaction timeout live — shrinking the batch further and raising
+      // the timeout further was a losing game against that per-query cost.
+      // Dropping the transaction and running with bounded concurrency
+      // instead sidesteps the shared-timeout problem entirely: each pair
+      // succeeds or fails on its own, same as a real migration import
+      // should behave (one bad row was never worth failing the whole
+      // batch).
+      const CONCURRENCY = 20;
 
-      for (let i = 0; i < contacts.length; i += BATCH) {
-        const batch = contacts.slice(i, i + BATCH).filter(c => !suppressionEmails.has(c.email.toLowerCase()));
-        if (batch.length === 0) { skipped += BATCH; continue; }
+      async function upsertOne(c: { email: string; first_name?: string | null; last_name?: string | null; custom_fields?: Record<string, string> }): Promise<boolean> {
+        const email = c.email.toLowerCase();
+        try {
+          const contact = await prisma.contact.upsert({
+            where: { apiKeyId_email: { apiKeyId, email } },
+            create: {
+              apiKeyId, email,
+              firstName: c.first_name ?? null,
+              lastName: c.last_name ?? null,
+              customFields: (c.custom_fields ?? {}) as Prisma.InputJsonValue,
+            },
+            update: {
+              ...(c.first_name != null && { firstName: c.first_name }),
+              ...(c.last_name != null && { lastName: c.last_name }),
+            },
+            select: { id: true },
+          });
 
-        await prisma.$transaction(async (tx) => {
-          for (const c of batch) {
-            const email = c.email.toLowerCase();
-            const contact = await tx.contact.upsert({
-              where: { apiKeyId_email: { apiKeyId, email } },
-              create: {
-                apiKeyId, email,
-                firstName: c.first_name ?? null,
-                lastName: c.last_name ?? null,
-                customFields: (c.custom_fields ?? {}) as Prisma.InputJsonValue,
-              },
-              update: {
-                ...(c.first_name != null && { firstName: c.first_name }),
-                ...(c.last_name != null && { lastName: c.last_name }),
-              },
-              select: { id: true },
+          if (resolvedListId) {
+            await prisma.contactListMembership.upsert({
+              where: { contactId_listId: { contactId: contact.id, listId: resolvedListId } },
+              create: { contactId: contact.id, listId: resolvedListId, status: 'subscribed' },
+              update: {},
             });
-
-            if (resolvedListId) {
-              await tx.contactListMembership.upsert({
-                where: { contactId_listId: { contactId: contact.id, listId: resolvedListId } },
-                create: { contactId: contact.id, listId: resolvedListId, status: 'subscribed' },
-                update: {},
-              });
-            }
           }
-        }, { timeout: 20_000 });
-
-        imported += batch.length;
-        skipped += BATCH - batch.length;
+          return true;
+        } catch {
+          return false;
+        }
       }
 
-      // Bulk-upsert suppressions
+      const toImport = contacts.filter(c => !suppressionEmails.has(c.email.toLowerCase()));
+      skipped += contacts.length - toImport.length;
+
+      for (let i = 0; i < toImport.length; i += CONCURRENCY) {
+        const chunk = toImport.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(chunk.map(upsertOne));
+        imported += results.filter(Boolean).length;
+        skipped += results.filter(r => !r).length;
+      }
+
+      // Bulk-upsert suppressions — a single set-based statement per batch
+      // (not a loop of individual queries), so this doesn't share the
+      // per-query-latency problem the contact loop above had; a much
+      // larger batch size is fine here.
+      const SUPPRESSION_BATCH = 1000;
       let suppressionsAdded = 0;
       if (suppressions.length > 0) {
-        for (let i = 0; i < suppressions.length; i += BATCH) {
-          const batch = suppressions.slice(i, i + BATCH);
+        for (let i = 0; i < suppressions.length; i += SUPPRESSION_BATCH) {
+          const batch = suppressions.slice(i, i + SUPPRESSION_BATCH);
           await prisma.$executeRaw`
             INSERT INTO suppressions (email, reason, "createdAt")
             SELECT unnest(${batch.map(s => s.email.toLowerCase())}::text[]),
