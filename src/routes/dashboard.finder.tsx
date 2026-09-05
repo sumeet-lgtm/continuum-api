@@ -64,6 +64,7 @@ const SENIORITY_OPTIONS = [
   { value: "entry", label: "Entry" },
   { value: "owner", label: "Owner" },
   { value: "partner", label: "Partner" },
+  { value: "intern", label: "Intern" },
 ];
 
 const DEPARTMENT_OPTIONS = [
@@ -77,6 +78,7 @@ const DEPARTMENT_OPTIONS = [
   { value: "business_development", label: "Biz Dev" },
   { value: "support", label: "Support" },
   { value: "consulting", label: "Consulting" },
+  { value: "education", label: "Education" },
 ];
 
 const HEADCOUNT_OPTIONS = [
@@ -521,7 +523,7 @@ function FinderPage() {
 
         <PillSelect label="Department" options={DEPARTMENT_OPTIONS} selected={functionIncludes} onChange={setFunctionIncludes} />
 
-        <TagInput label="Industry" placeholder="e.g. SaaS, FinTech — Enter to add" values={companyIndustryIncludes} onChange={setCompanyIndustryIncludes} />
+        <TagInput label="Industry" placeholder="e.g. Computer Software, Financial Services — Enter to add" values={companyIndustryIncludes} onChange={setCompanyIndustryIncludes} />
 
         <div className="space-y-2">
           <TagInput label="Country" placeholder="e.g. United States — Enter to add" values={personLocationCountryIncludes} onChange={setPersonLocationCountryIncludes} />
