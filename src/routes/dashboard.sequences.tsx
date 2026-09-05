@@ -46,6 +46,17 @@ interface SequenceStep {
   condition: string;
 }
 
+interface DeepGenEmail {
+  segmentLabel: string;
+  matchCount: number;
+  matchPct: number;
+  subject: string;
+  textBody: string;
+  htmlBody: string;
+  hookUsed: string;
+  revised: boolean;
+}
+
 interface StepVariant {
   id: string;
   stepId: string;
@@ -145,6 +156,8 @@ function SequencesPage() {
   const [seqStats, setSeqStats] = useState<Record<string, { sent: number; openRate: number; clickRate: number; replyRate: number; totalEnrolled: number }>>({});
   const [stepSaving, setStepSaving] = useState(false);
   const [stepAiGenerating, setStepAiGenerating] = useState(false);
+  const [deepGenStepResults, setDeepGenStepResults] = useState<DeepGenEmail[] | null>(null);
+  const [deepGenStepAppliedIdx, setDeepGenStepAppliedIdx] = useState<number | null>(null);
 
   // AI brief modal for generating a full sequence
   const [showAIBrief, setShowAIBrief] = useState<string | null>(null); // seqId
@@ -381,31 +394,49 @@ function SequencesPage() {
     }
   };
 
+  // Deep-generate for a sequence step — same non-slop engine as Campaigns
+  // (POST /v1/campaigns/generate-copy), applied here to this sequence's
+  // actual enrolled leads via POST /v1/sequences/:id/generate-copy. Reads
+  // real title/industry from Lead+Account, not a hypothetical audience,
+  // and frames the request with this step's actual position in the
+  // sequence so a step 3 follow-up gets a genuinely different angle from
+  // step 1, not a rephrase.
   const generateStepWithAI = async () => {
-    if (!primaryKey?.keyRaw) return;
+    if (!primaryKey?.keyRaw || !addingStep) return;
     if (!stepForm.subject.trim()) { toast.error("Enter a subject or topic hint first"); return; }
     setStepAiGenerating(true);
+    setDeepGenStepResults(null);
+    setDeepGenStepAppliedIdx(null);
+    const priorSteps = (steps[addingStep] ?? []).length;
+    const stepContext = priorSteps === 0
+      ? "step 1 — the opening touch, no prior contact"
+      : `step ${priorSteps + 1} — follow-up after ${priorSteps} prior touch${priorSteps > 1 ? "es" : ""} with no reply yet`;
     try {
-      const result = await api.withKey.post<{ variants: Array<{ subject: string; body?: string }> }>(
-        "/v1/ai/generate-email",
-        { type: "cold_outreach", about: stepForm.subject, tone: "professional", num_variants: 1 },
+      const result = await api.withKey.post<{ totalContacts: number; emails: DeepGenEmail[] }>(
+        `/v1/sequences/${addingStep}/generate-copy`,
+        { about: stepForm.subject, tone: "professional", step_context: stepContext },
         primaryKey.keyRaw,
       );
-      const variant = result.variants?.[0];
-      if (variant) {
-        setStepForm((f) => ({ ...f, subject: variant.subject ?? f.subject, htmlBody: variant.body ?? f.htmlBody }));
-        toast.success("AI generated email content — review and edit before saving");
-      }
+      setDeepGenStepResults(result.emails ?? []);
+      if (!result.emails?.length) toast.info("No segments could be generated — enroll some leads first.");
     } catch (e: unknown) {
       const msg = (e as Error).message;
       if (msg.includes("Growth") || msg.includes("Scale")) {
         toast.error("AI features require a Growth or Scale plan");
+      } else if (msg.includes("no enrolled leads")) {
+        toast.error("This sequence has no enrolled leads yet — enroll leads first so there's a real audience to write for.");
       } else {
         toast.error("AI generation failed — try again");
       }
     } finally {
       setStepAiGenerating(false);
     }
+  };
+
+  const applyDeepGenStepDraft = (email: DeepGenEmail, idx: number) => {
+    setStepForm((f) => ({ ...f, subject: email.subject, htmlBody: email.htmlBody, text_body: email.textBody, bodyMode: "html" }));
+    setDeepGenStepAppliedIdx(idx);
+    toast.success(`Applied the "${email.segmentLabel}" draft — review and edit before saving`);
   };
 
   const generateSequenceWithAI = async (seqId: string) => {
@@ -1455,11 +1486,32 @@ function SequencesPage() {
                                     className="flex items-center gap-1 text-xs text-violet-500 hover:text-violet-400 disabled:opacity-50 transition-colors"
                                   >
                                     <Sparkles className="h-3 w-3" />
-                                    {stepAiGenerating ? "Generating…" : "Generate with AI"}
+                                    {stepAiGenerating ? "Reading enrolled leads…" : "Deep-generate with AI"}
                                   </button>
                                 </div>
-                                <Input placeholder="Quick question about {{company}}" value={stepForm.subject} onChange={(e) => setStepForm((f) => ({ ...f, subject: e.target.value }))} className="h-8 text-sm" />
+                                <Input placeholder="Describe the offer — e.g. 'pentesting-as-a-service for security teams'" value={stepForm.subject} onChange={(e) => setStepForm((f) => ({ ...f, subject: e.target.value }))} className="h-8 text-sm" />
                               </div>
+
+                              {deepGenStepResults && deepGenStepResults.length > 0 && (
+                                <div className="space-y-2">
+                                  <p className="text-xs text-muted-foreground">{deepGenStepResults.length} segment{deepGenStepResults.length > 1 ? "s" : ""} found among enrolled leads — pick a draft, then edit before saving.</p>
+                                  {deepGenStepResults.map((email, idx) => (
+                                    <div key={idx} className={`rounded-md border p-2.5 space-y-1 ${deepGenStepAppliedIdx === idx ? "border-violet-400 bg-violet-50 dark:bg-violet-950/30" : "border-border bg-background"}`}>
+                                      <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="text-xs font-semibold">{email.segmentLabel}</span>
+                                          <span className="text-[10px] text-muted-foreground">{email.matchPct}% ({email.matchCount})</span>
+                                        </div>
+                                        <Button type="button" size="sm" variant={deepGenStepAppliedIdx === idx ? "secondary" : "outline"} className="text-xs h-6" onClick={() => applyDeepGenStepDraft(email, idx)}>
+                                          {deepGenStepAppliedIdx === idx ? "Applied" : "Use this draft"}
+                                        </Button>
+                                      </div>
+                                      <p className="text-xs font-medium">{email.subject}</p>
+                                      <p className="text-xs text-muted-foreground whitespace-pre-wrap line-clamp-3">{email.textBody}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                               {/* Content type toggle */}
                               <div>
                                 <Label className="text-xs font-medium text-muted-foreground mb-1.5 block">Email Format</Label>
