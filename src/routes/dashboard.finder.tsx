@@ -92,6 +92,39 @@ const HEADCOUNT_OPTIONS = [
   { value: "10001+", label: "10,000+" },
 ];
 
+const REVENUE_OPTIONS = [
+  { value: "lt_1m", label: "< $1M" },
+  { value: "1m_10m", label: "$1M–$10M" },
+  { value: "10m_50m", label: "$10M–$50M" },
+  { value: "50m_200m", label: "$50M–$200M" },
+  { value: "200m_1b", label: "$200M–$1B" },
+  { value: "gt_1b", label: "> $1B" },
+];
+
+const FUNDING_STAGE_OPTIONS = [
+  { value: "pre_seed", label: "Pre-Seed" },
+  { value: "seed", label: "Seed" },
+  { value: "series_a", label: "Series A" },
+  { value: "series_b", label: "Series B" },
+  { value: "series_c", label: "Series C" },
+  { value: "series_d", label: "Series D" },
+  { value: "series_e", label: "Series E" },
+  { value: "series_f", label: "Series F" },
+  { value: "series_g", label: "Series G" },
+  { value: "series_h", label: "Series H" },
+  { value: "private_equity", label: "Private Equity" },
+  { value: "debt_financing", label: "Debt Financing" },
+  { value: "convertible_note", label: "Convertible Note" },
+  { value: "corporate_round", label: "Corporate Round" },
+  { value: "equity_crowdfunding", label: "Equity Crowdfunding" },
+  { value: "grant", label: "Grant" },
+  { value: "secondary_market", label: "Secondary Market" },
+  { value: "post_ipo_equity", label: "Post-IPO Equity" },
+  { value: "post_ipo_debt", label: "Post-IPO Debt" },
+  { value: "initial_public_offering", label: "IPO" },
+  { value: "undisclosed", label: "Undisclosed" },
+];
+
 const PAGE_SIZE = 50;
 const SAVED_KEY = "continuum_finder_saved_searches";
 
@@ -110,6 +143,8 @@ interface SavedSearch {
     companySizeIncludes: string[];
     companyKeywordIncludes: string[];
     technologiesIncludes: string[];
+    annualRevenueIncludes?: string[];
+    fundingStageIncludes?: string[];
     hasEmail: boolean;
     totalResults: number;
   };
@@ -225,6 +260,8 @@ function FinderPage() {
   const [companySizeIncludes, setCompanySizeIncludes] = useState<string[]>([]);
   const [companyKeywordIncludes, setCompanyKeywordIncludes] = useState<string[]>([]);
   const [technologiesIncludes, setTechnologiesIncludes] = useState<string[]>([]);
+  const [annualRevenueIncludes, setAnnualRevenueIncludes] = useState<string[]>([]);
+  const [fundingStageIncludes, setFundingStageIncludes] = useState<string[]>([]);
   const [hasEmail, setHasEmail] = useState(true);
   const [totalResults, setTotalResults] = useState(100);
   const [minResponseSignal, setMinResponseSignal] = useState<"all" | "medium" | "high">("all");
@@ -256,11 +293,13 @@ function FinderPage() {
     companyIndustryIncludes, personLocationCountryIncludes,
     personLocationCityIncludes, companyNameIncludes, companyDomainIncludes,
     companySizeIncludes, companyKeywordIncludes, technologiesIncludes,
+    annualRevenueIncludes, fundingStageIncludes,
     hasEmail, totalResults,
   }), [personTitleIncludes, seniorityIncludes, functionIncludes,
     companyIndustryIncludes, personLocationCountryIncludes, personLocationCityIncludes,
     companyNameIncludes, companyDomainIncludes, companySizeIncludes,
-    companyKeywordIncludes, technologiesIncludes, hasEmail, totalResults]);
+    companyKeywordIncludes, technologiesIncludes, annualRevenueIncludes,
+    fundingStageIncludes, hasEmail, totalResults]);
 
   const saveCurrentSearch = () => {
     const name = saveSearchName.trim();
@@ -287,6 +326,8 @@ function FinderPage() {
     setCompanySizeIncludes(f.companySizeIncludes);
     setCompanyKeywordIncludes(f.companyKeywordIncludes);
     setTechnologiesIncludes(f.technologiesIncludes);
+    setAnnualRevenueIncludes(f.annualRevenueIncludes ?? []);
+    setFundingStageIncludes(f.fundingStageIncludes ?? []);
     setHasEmail(f.hasEmail);
     setTotalResults(f.totalResults);
     toast.success(`Loaded "${s.name}"`);
@@ -390,6 +431,8 @@ function FinderPage() {
     if (companySizeIncludes.length) payload.companySizeIncludes = companySizeIncludes;
     if (companyKeywordIncludes.length) payload.companyKeywordIncludes = companyKeywordIncludes;
     if (technologiesIncludes.length) payload.technologiesIncludes = technologiesIncludes;
+    if (annualRevenueIncludes.length) payload.annualRevenueIncludes = annualRevenueIncludes;
+    if (fundingStageIncludes.length) payload.fundingStageIncludes = fundingStageIncludes;
     payload.hasEmail = hasEmail;
 
     try {
@@ -535,6 +578,10 @@ function FinderPage() {
         <TagInput label="Company Domain" placeholder="e.g. salesforce.com — Enter to add" values={companyDomainIncludes} onChange={setCompanyDomainIncludes} />
 
         <PillSelect label="Company Size" options={HEADCOUNT_OPTIONS} selected={companySizeIncludes} onChange={setCompanySizeIncludes} />
+
+        <PillSelect label="Annual Revenue" options={REVENUE_OPTIONS} selected={annualRevenueIncludes} onChange={setAnnualRevenueIncludes} />
+
+        <PillSelect label="Funding Stage" options={FUNDING_STAGE_OPTIONS} selected={fundingStageIncludes} onChange={setFundingStageIncludes} />
 
         <TagInput label="Company Keywords" placeholder="e.g. Series B, AI — Enter to add" values={companyKeywordIncludes} onChange={setCompanyKeywordIncludes} />
 
