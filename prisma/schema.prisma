@@ -884,12 +884,22 @@ model Mailbox {
   lastErrorMsg     String?
   lastCheckedAt    DateTime?
   createdAt        DateTime  @default(now())
+  // House-owned seed mailbox, dedicated purely to warming up customer
+  // mailboxes against — see warmupWorker.ts. The shared warmup pool is
+  // cross-customer with no apiKeyId scoping, and needs at least one other
+  // active mailbox to pair with; with few real customers enrolled at once
+  // that requirement was never met and ticks silently no-op'd forever.
+  // House-pool mailboxes are guaranteed partners so a single customer's
+  // mailbox can always warm up, independent of how many other customers
+  // happen to be enrolled at the same time.
+  isHousePool      Boolean   @default(false)
 
   apiKey       ApiKey        @relation(fields: [apiKeyId], references: [id])
   warmupConfig WarmupConfig?
   replyEvents  ReplyEvent[]
 
   @@index([apiKeyId, status])
+  @@index([isHousePool, status])
   @@map("mailboxes")
 }
 

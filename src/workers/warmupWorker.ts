@@ -171,7 +171,7 @@ async function autoOpenAndReply(
   }
 }
 
-async function processWarmupTick(): Promise<void> {
+export async function processWarmupTick(): Promise<void> {
   const cfg = config as Record<string, unknown>;
   if (!cfg['WARMUP_POOL_ENABLED']) return;
 
@@ -187,7 +187,19 @@ async function processWarmupTick(): Promise<void> {
   });
 
   if (warmupConfigs.length < 2) {
-    logger.info('Not enough mailboxes in warmup pool — need at least 2');
+    // This is the exact condition that silently blocked every tick for
+    // this product's entire history — the pool has no per-customer
+    // scoping (any enabled mailbox can pair with any other), but with at
+    // most 1-2 mailboxes ever enrolled at once, this never passed. House-
+    // pool mailboxes (see scripts/add-house-warmup-mailbox.ts) are meant
+    // to guarantee this never happens again once at least one exists.
+    const housePoolCount = warmupConfigs.filter(w => w.mailbox.isHousePool).length;
+    logger.warn(
+      { totalEnabled: warmupConfigs.length, housePoolCount },
+      housePoolCount === 0
+        ? 'Warmup pool has fewer than 2 enabled mailboxes and no house-pool mailboxes exist — every enrolled customer mailbox is silently not warming up. Run scripts/add-house-warmup-mailbox.ts to fix.'
+        : 'Warmup pool has fewer than 2 enabled mailboxes despite house-pool mailboxes existing — check they have status=active and real credentials.',
+    );
     return;
   }
 
@@ -214,7 +226,10 @@ async function processWarmupTick(): Promise<void> {
 
     // Pick a random different mailbox to send to
     const otherMailboxes = warmupConfigs.filter(w => w.mailboxId !== wc.mailboxId && w.mailbox.status === 'active' && w.mailbox.host);
-    if (otherMailboxes.length === 0) continue;
+    if (otherMailboxes.length === 0) {
+      logger.warn({ mailboxId: mailbox.id }, 'No warmup partner mailbox available for this mailbox this tick');
+      continue;
+    }
 
     const target = randomItem(otherMailboxes);
     const sendCount = Math.min(remaining, Math.ceil(todayTarget / 24)); // Spread sends throughout the day
