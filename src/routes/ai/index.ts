@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { requireMonthlyQuota, incrementUsage, incrementUsageBy } from '../../plugins/usageMeter.js';
-import { Errors } from '../../plugins/errorHandler.js';
+import { Errors, AppError } from '../../plugins/errorHandler.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
 import { detectESP } from '../../lib/espMatch.js';
@@ -305,7 +305,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
 
       const anthropicKey = config.ANTHROPIC_API_KEY;
       if (!anthropicKey) {
-        throw Errors.serviceUnavailable('AI personalization service is temporarily unavailable.');
+        throw Errors.serviceUnavailable('AI personalization service');
       }
 
       const parsed = personalizeSchema.safeParse(request.body);
@@ -352,7 +352,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.forbidden('AI email generation requires a Growth or Scale plan.');
       }
       const anthropicKey = config.ANTHROPIC_API_KEY;
-      if (!anthropicKey) throw Errors.serviceUnavailable('AI service temporarily unavailable.');
+      if (!anthropicKey) throw Errors.serviceUnavailable('AI service');
 
       const parsed = emailGenerateSchema.safeParse(request.body);
       if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
@@ -368,7 +368,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'generation failed';
         logger.error({ err: msg }, 'AI generate-email failed');
-        throw Errors.serviceUnavailable('AI generation failed. Please try again.');
+        throw Errors.serviceUnavailable('AI generation');
       }
     },
   );
@@ -386,7 +386,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.forbidden('AI reply classification requires a Growth or Scale plan.');
       }
       const anthropicKey = config.ANTHROPIC_API_KEY;
-      if (!anthropicKey) throw Errors.serviceUnavailable('AI service temporarily unavailable.');
+      if (!anthropicKey) throw Errors.serviceUnavailable('AI service');
 
       const parsed = classifyReplySchema.safeParse(request.body);
       if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
@@ -398,7 +398,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'classify failed';
         logger.error({ err: msg }, 'AI classify-reply failed');
-        throw Errors.serviceUnavailable('AI classification failed. Please try again.');
+        throw Errors.serviceUnavailable('AI classification');
       }
     },
   );
@@ -416,7 +416,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.forbidden('AI sequence generation requires a Growth or Scale plan.');
       }
       const anthropicKey = config.ANTHROPIC_API_KEY;
-      if (!anthropicKey) throw Errors.serviceUnavailable('AI service temporarily unavailable.');
+      if (!anthropicKey) throw Errors.serviceUnavailable('AI service');
 
       const seqGenSchema = z.object({
         icp_description: z.string().min(10).max(1000),
@@ -509,7 +509,7 @@ Return ONLY valid JSON in this exact format:
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'generation failed';
         logger.error({ err: msg }, 'AI generate-sequence failed');
-        throw Errors.serviceUnavailable('AI sequence generation failed. Please try again.');
+        throw Errors.serviceUnavailable('AI sequence generation');
       }
     },
   );
@@ -528,7 +528,7 @@ Return ONLY valid JSON in this exact format:
         throw Errors.forbidden('AI features are not enabled on this account.');
       }
       const anthropicKey = config.ANTHROPIC_API_KEY;
-      if (!anthropicKey) throw Errors.serviceUnavailable('AI service temporarily unavailable.');
+      if (!anthropicKey) throw Errors.serviceUnavailable('AI service');
 
       const parsed = z.object({ query: z.string().min(1).max(500) }).safeParse(request.body);
       if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
@@ -548,7 +548,13 @@ Return ONLY valid JSON in this exact format:
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'query failed';
         logger.error({ err: msg, query: parsed.data.query }, 'AI ask-leads failed');
-        throw Errors.serviceUnavailable('Could not process that question. Try rephrasing it.');
+        // Not a service-outage case (that's what Errors.serviceUnavailable's
+        // auto-appended "is temporarily unavailable" suffix assumes) — this
+        // is the model failing to interpret this specific query, so the
+        // message needs to say that plainly instead of getting mangled into
+        // "Could not process that question. Try rephrasing it. is
+        // temporarily unavailable".
+        throw new AppError(503, 'SERVICE_UNAVAILABLE', 'Could not process that question. Try rephrasing it.');
       }
     },
   );

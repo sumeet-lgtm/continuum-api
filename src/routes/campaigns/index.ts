@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
-import { Errors } from '../../plugins/errorHandler.js';
+import { Errors, AppError } from '../../plugins/errorHandler.js';
 import { campaignQueue } from '../../lib/queue.js';
 import { sendViaSes, isSesConfigured } from '../../lib/ses.js';
 import { generateOpenToken, generateClickToken, injectTracking } from '../../lib/tracking.js';
@@ -548,7 +548,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
       throw Errors.forbidden('AI campaign copy generation requires a Growth or Scale plan.');
     }
     const anthropicKey = config.ANTHROPIC_API_KEY;
-    if (!anthropicKey) throw Errors.serviceUnavailable('AI service temporarily unavailable.');
+    if (!anthropicKey) throw Errors.serviceUnavailable('AI service');
 
     const parsed = generateCopySchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
@@ -576,7 +576,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'generation failed';
       logger.error({ err: msg }, 'Campaign copy generation failed');
-      throw Errors.serviceUnavailable('Copy generation failed. Please try again.');
+      throw new AppError(503, 'SERVICE_UNAVAILABLE', 'Copy generation failed. Please try again.');
     }
   });
 }

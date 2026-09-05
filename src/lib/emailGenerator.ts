@@ -76,7 +76,16 @@ function extractJson(text: string): Record<string, unknown> {
   const stripped = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
   const match = stripped.match(/\{[\s\S]*\}/);
   const jsonStr = match ? match[0] : stripped;
-  return JSON.parse(jsonStr) as Record<string, unknown>;
+  try {
+    return JSON.parse(jsonStr) as Record<string, unknown>;
+  } catch (err) {
+    // Log the actual raw text on parse failure — "Unexpected end of JSON
+    // input" alone gives no way to tell a truncated response (hit
+    // max_tokens) apart from the model wrapping JSON in prose the regex
+    // above didn't fully capture.
+    logger.error({ err, rawTextLength: text.length, rawTextPreview: text.slice(0, 500) }, 'Failed to parse model output as JSON');
+    throw err;
+  }
 }
 
 const DRAFT_OUTPUT_CONTRACT = `Return ONLY valid JSON, no other text, in exactly this shape:
@@ -103,7 +112,7 @@ Follow the Generation Protocol (section 7) and the single-email structure (secti
 
 ${DRAFT_OUTPUT_CONTRACT}`;
 
-  const raw = await callClaude(apiKey, system, user, 2000);
+  const raw = await callClaude(apiKey, system, user, 4096);
   const parsed = extractJson(raw);
   return {
     subject: String(parsed.subject ?? ''),
@@ -137,7 +146,7 @@ Run the full checklist in section 8. Return ONLY valid JSON in exactly this shap
 
 If the draft already passes every checklist item, return it unchanged with "changed": false. Do not make stylistic changes for their own sake — only fix genuine checklist failures.`;
 
-  const raw = await callClaude(apiKey, system, user, 2000);
+  const raw = await callClaude(apiKey, system, user, 4096);
   const parsed = extractJson(raw);
   return {
     subject: String(parsed.subject ?? draft.subject),
