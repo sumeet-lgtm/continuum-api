@@ -169,8 +169,19 @@ function TransactionalPage() {
     setLoading(true);
     setResult(null);
     try {
+      // The API takes from_name/from_email as separate fields, not a combined
+      // "Name <email>" string — this form's single "From" input was sending a
+      // literal `from` key the API schema doesn't recognize at all (Zod
+      // silently drops unknown fields), so every send here fell through to
+      // the generic no-reply@relay.continuumapi.com fallback regardless of
+      // what was typed. Parse it the same way the API itself documents.
+      const fromMatch = form.from.trim().match(/^(.*)<(.+)>$/);
+      const fromEmail = (fromMatch ? fromMatch[2] : form.from).trim();
+      const fromName = fromMatch ? fromMatch[1].trim() : undefined;
+
       const body: Record<string, unknown> = {
-        from: form.from,
+        from_email: fromEmail || undefined,
+        from_name: fromName || undefined,
         to: form.to.trim(),
         subject: form.subject || undefined,
         html_body: form.html || undefined,

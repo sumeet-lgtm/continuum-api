@@ -120,8 +120,15 @@ function BatchSendPage() {
     setResults(null);
     setSummary(null);
 
+    // API takes from_name/from_email at the batch level (one sender per
+    // batch), not a per-message "from" string — the schema didn't recognize
+    // "from" at all, so every batch send silently used the generic fallback
+    // sender regardless of what was typed here.
+    const fromMatch = from.trim().match(/^(.*)<(.+)>$/);
+    const fromEmail = (fromMatch ? fromMatch[2] : from).trim();
+    const fromName = fromMatch ? fromMatch[1].trim() : undefined;
+
     const messages = unique.map((r) => ({
-      from: from.trim(),
       to: r.email,
       subject: applyVars(form.subject.trim(), r.vars),
       ...(form.htmlBody.trim() ? { html_body: applyVars(form.htmlBody.trim(), r.vars) } : {}),
@@ -133,7 +140,7 @@ function BatchSendPage() {
       const res = await fetch("https://api.continuumapi.com/v1/send/batch", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": primaryKey.keyRaw! },
-        body: JSON.stringify({ messages }),
+        body: JSON.stringify({ from_email: fromEmail || undefined, from_name: fromName || undefined, messages }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error((data as { error?: string })?.error ?? `Failed (${res.status})`);
