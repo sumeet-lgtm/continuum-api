@@ -28,6 +28,15 @@ const attachmentSchema = z.object({
 
 const bodySchema = z.object({
   to: z.string().email().transform((s) => s.trim().toLowerCase()),
+  // Optional — falls back to no-reply@<verified domain> when omitted (the
+  // previous, only behavior). Campaigns already lets callers pass any
+  // from_name/from_email with no extra app-level check (SES itself is the
+  // real enforcement: an unverified sending identity fails at send time
+  // regardless of what's claimed here) — matching that existing
+  // convention rather than inventing a second, inconsistent rule for this
+  // route specifically.
+  from_name: z.string().min(1).max(200).optional(),
+  from_email: z.string().email().optional(),
   cc: z.array(z.string().email()).max(50).optional(),
   bcc: z.array(z.string().email()).max(50).optional(),
   subject: z.string().min(1).max(500).optional(),
@@ -104,7 +113,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         to, cc, bcc, subject: rawSubject, reply_to, attachments, headers, tags,
         idempotency_key, scheduled_at, domain_id, verify_before_send,
         track_opens: requestTrackOpens, track_clicks: requestTrackClicks,
-        test: isTestMode,
+        test: isTestMode, from_name, from_email,
       } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
@@ -158,6 +167,15 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         if (!sendingDomain) throw Errors.validationFailed([{ field: 'domain_id', message: 'Domain not found or not verified.' }]);
       }
 
+      // from_email/from_name take precedence over the no-reply@<domain>
+      // default when given — same convention Campaigns already uses (no
+      // extra domain-ownership check here either; SES itself rejects an
+      // unverified sending identity at send time regardless of what's
+      // claimed in the request).
+      const resolvedFrom = from_email
+        ? (from_name ? `${from_name} <${from_email}>` : from_email)
+        : buildFromAddress(sendingDomain);
+
       // ── Build email content ────────────────────────────────────────────────────
       const { subject, htmlBody: rawHtml, textBody } = await buildEmailContent(parsed.data, apiKeyId);
 
@@ -171,7 +189,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
 
         const record = await prisma.sendMessage.create({
           data: {
-            apiKeyId, to, from: buildFromAddress(sendingDomain), subject,
+            apiKeyId, to, from: resolvedFrom, subject,
             replyTo: Array.isArray(reply_to) ? reply_to.join(', ') : (reply_to ?? null),
             cc: cc ?? [], bcc: bcc ?? [],
             scheduledAt: scheduledDate, status: 'scheduled',
@@ -184,7 +202,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
 
         await sendQueue.add('send', {
           sendMessageId: record.id, to, subject, htmlBody: rawHtml, textBody,
-          from: buildFromAddress(sendingDomain), replyTo: reply_to,
+          from: resolvedFrom, replyTo: reply_to,
           cc, bcc, attachments, headers, apiKeyId, domainId: domain_id,
         }, { delay: delayMs, jobId: record.id });
 
@@ -194,7 +212,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       // ── Test mode — simulate the send without hitting SES ─────────────────────
       if (isTestMode) {
         const { subject: testSubject, htmlBody: testHtml, textBody: testText } = await buildEmailContent(parsed.data, apiKeyId);
-        const testFrom = buildFromAddress(sendingDomain);
+        const testFrom = resolvedFrom;
         return reply.status(200).send({
           id: `test_${Date.now()}`,
           status: 'simulated',
@@ -214,7 +232,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       // ── Inject tracking ────────────────────────────────────────────────────────
       if (!isSesConfigured()) throw Errors.serviceUnavailable('Send (SES not configured)');
 
-      const from = buildFromAddress(sendingDomain);
+      const from = resolvedFrom;
       const trackOpens = requestTrackOpens ?? sendingDomain?.trackOpens ?? true;
       const trackClicks = requestTrackClicks ?? sendingDomain?.trackClicks ?? true;
       const unsubToken = generateUnsubToken(to, apiKeyId);

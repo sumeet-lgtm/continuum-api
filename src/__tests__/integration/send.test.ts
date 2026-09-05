@@ -184,6 +184,35 @@ describe('POST /v1/send', () => {
     expect(mockSendViaSes).toHaveBeenCalledTimes(1);
   });
 
+  it('uses the default no-reply@<domain> from-address when from_email is not given', async () => {
+    await send({ to: 'user@example.com', subject: 'Hi', html_body: '<p>hi</p>' });
+    expect(mockSendViaSes).toHaveBeenCalledWith(
+      expect.objectContaining({ from: expect.stringContaining('no-reply@') }),
+    );
+  });
+
+  it('uses a custom from_email/from_name when given, instead of the no-reply default', async () => {
+    // WyberAi's transactional emails (hello@wyberai.com, expecting real
+    // replies) are exactly why this needed to exist — the previous
+    // hardcoded no-reply@<domain> made every migrated email look like it
+    // could never be replied to, which several of them explicitly promise
+    // ("this goes straight to me").
+    await send({
+      to: 'user@example.com', subject: 'Hi', html_body: '<p>hi</p>',
+      from_name: 'WyberAi', from_email: 'hello@wyberai.com',
+    });
+    expect(mockSendViaSes).toHaveBeenCalledWith(
+      expect.objectContaining({ from: 'WyberAi <hello@wyberai.com>' }),
+    );
+  });
+
+  it('uses a bare from_email with no display name when from_name is omitted', async () => {
+    await send({ to: 'user@example.com', subject: 'Hi', html_body: '<p>hi</p>', from_email: 'hello@wyberai.com' });
+    expect(mockSendViaSes).toHaveBeenCalledWith(
+      expect.objectContaining({ from: 'hello@wyberai.com' }),
+    );
+  });
+
   it('still returns 200 when SES succeeds but the DB write to record it fails', async () => {
     // The real bug this guards against: SES already sent the email, so a
     // 500 here would tell the customer their send failed — they'd retry and
