@@ -21,18 +21,26 @@ export function deriveImapHost(smtpHost: string): string {
   return smtpHost;
 }
 
-// STARTTLS, not implicit TLS (993) — found live (2026-09-05) that every
-// single IMAP connect from our production network failed against port 993
-// with DEPTH_ZERO_SELF_SIGNED_CERT for every mailbox, on every provider,
-// 100% of the time, while the exact same network's outbound SMTP on 587
-// (STARTTLS — starts in plaintext, upgrades in-band) worked cleanly. That
-// split points at an egress path that inspects/intercepts traffic on ports
-// where TLS begins on the very first byte (993, 465, 636...) but passes
-// through ports that start in plaintext and upgrade via STARTTLS. Port 143
-// is universally supported by every real IMAP provider (Gmail included)
-// specifically as the STARTTLS alternative to 993, so this switches to it
-// instead of guessing at network config we don't control.
-export const IMAP_PORT = 143;
+// IMAPS (implicit TLS) — practically universal regardless of whatever SMTP
+// port (587 STARTTLS, 465 implicit) the user entered for sending.
+//
+// Known issue, live-confirmed 2026-09-05, NOT fixable by changing this
+// constant: every IMAP connect from our production network fails against
+// this port with DEPTH_ZERO_SELF_SIGNED_CERT, for every mailbox, on every
+// provider, 100% of the time — while the exact same network's outbound SMTP
+// on 587 works cleanly. Switching to port 143 (STARTTLS) was tried as a fix
+// and made it worse: every attempt (2 different mailboxes, repeated) came
+// back AggregateError/ETIMEDOUT — nothing on the network path responds on
+// 143 at all. Together this points at a Railway platform-level egress
+// restriction on IMAP specifically (993 hits some intercepting proxy that
+// terminates TLS with its own cert; 143 is dropped outright), not something
+// our own connect options can route around. Fixing this for real needs
+// either a Railway support request to allow outbound IMAP, or routing IMAP
+// through an external relay the way SMTP_PROBE_URL already does for the
+// verification SMTP probe (see config.ts) — both out of scope for a code
+// change here. Left at 993 rather than 143 since 993 at least reaches a
+// live TLS endpoint; 143 reaches nothing.
+export const IMAP_PORT = 993;
 
 /**
  * Auth-only IMAP reachability check — connects and logs in, doesn't touch
@@ -62,8 +70,7 @@ export async function testImapConnection(creds: {
         user: creds.username,
         host: deriveImapHost(creds.host),
         port: IMAP_PORT,
-        tls: false,
-        autotls: 'required',
+        tls: true,
         tlsOptions: { rejectUnauthorized: true },
         authTimeout: 10000,
         ...imapConfig,
@@ -72,12 +79,13 @@ export async function testImapConnection(creds: {
     connection.end();
     return { ok: true };
   } catch (err) {
-    // TEMP diagnostic (2026-09-05): a live test returned error:"" after
-    // switching to STARTTLS/143 — err.message was empty, which the plain
-    // `.message` read couldn't explain. Widening the fields returned here
-    // to actually see what's failing on the real production network before
-    // deciding on a next step. Revert to the plain .message read once
-    // understood.
+    // node-imap's own connection/socket errors (an AggregateError from a
+    // failed TCP connect chief among them) commonly carry an empty
+    // `.message` with the real information on `.name`/`.code`/`.source`
+    // instead — a plain `.message` read silently returned "" for exactly
+    // that case while investigating the live IMAP network issue documented
+    // on IMAP_PORT above. Surfacing all of them gives the dashboard's "Test
+    // connection" a diagnosable message instead of a blank one.
     const anyErr = err as { message?: string; name?: string; code?: string; source?: string } | undefined;
     const detail = [anyErr?.name, anyErr?.code, anyErr?.source, anyErr?.message].filter(Boolean).join(' | ');
     return { ok: false, error: detail || 'IMAP connection failed (no error detail)' };
