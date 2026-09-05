@@ -29,6 +29,19 @@ export function decryptPrivateKey(enc: string, secret: string): string {
   return decryptValue(enc, secret);
 }
 
+// SES's BYODKIM CreateEmailIdentity/DkimSigningAttributes.DomainSigningPrivateKey
+// requires the raw base64 key body ONLY — no PEM header/footer, no newlines
+// (SES validates against ^[a-zA-Z0-9+\/]+={0,2}$). Passing the full PEM string
+// straight through fails that regex on every single call, which the call
+// sites' own try/catch silently swallowed — meaning no domain ever actually
+// registered with SES, regardless of how correct its DNS records were.
+export function pemToRawBase64(pem: string): string {
+  return pem
+    .replace(/-----BEGIN [A-Z ]+-----/, '')
+    .replace(/-----END [A-Z ]+-----/, '')
+    .replace(/\s/g, '');
+}
+
 // Format public key for DNS TXT record value
 export function dnsPublicKeyValue(pemPublicKey: string): string {
   const b64 = pemPublicKey

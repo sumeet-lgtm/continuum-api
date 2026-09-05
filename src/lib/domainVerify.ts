@@ -55,8 +55,12 @@ export async function verifyDomain(domain: DomainToVerify) {
       const sesIdentity = await ses.send(new GetEmailIdentityCommand({ EmailIdentity: domain.name }));
       const dkimStatus = sesIdentity.DkimAttributes?.Status;
       if (dkimStatus === 'SUCCESS') sesDkimVerified = true;
-    } catch {
-      /* SES domain may not be registered yet */
+    } catch (err) {
+      // Was silently swallowed with no visibility at all — a domain whose
+      // SES identity creation failed (or was never registered) looked
+      // identical to one still waiting on normal DNS propagation, forever,
+      // with nothing in our own logs pointing at the real cause either.
+      logger.debug({ err, domainId: domain.id, domain: domain.name }, 'SES GetEmailIdentity failed — domain identity may not be registered yet');
     }
   }
 

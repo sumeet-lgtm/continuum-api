@@ -6,11 +6,12 @@ import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { logAudit } from '../../lib/audit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
-import { generateDkimKeyPair, dnsPublicKeyValue } from '../../lib/dkim.js';
+import { generateDkimKeyPair, dnsPublicKeyValue, pemToRawBase64 } from '../../lib/dkim.js';
 import { getDomainHealth } from '../../lib/deliverability.js';
 import { checkDomainBlacklists } from '../../engine/deliverability.js';
 import { config } from '../../config.js';
 import { verifyDomain } from '../../lib/domainVerify.js';
+import { logger } from '../../lib/logger.js';
 
 let _sesClient: SESv2Client | null = null;
 function getSesClient(region: string): SESv2Client {
@@ -75,13 +76,17 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
             EmailIdentity: name,
             DkimSigningAttributes: {
               DomainSigningSelector: kp.selector,
-              DomainSigningPrivateKey: kp.rawPrivateKey, // raw PEM key for SES BYODKIM
+              // SES requires the raw base64 body only, not the full PEM
+              // string — passing the PEM straight through fails validation
+              // on every call (see pemToRawBase64's own comment).
+              DomainSigningPrivateKey: pemToRawBase64(kp.rawPrivateKey),
             },
           }));
         } catch (sesErr) {
           // Don't fail the API call if SES registration fails — DNS records are still useful
           // The user can retry verification which will re-check SES status
           const errMsg = sesErr instanceof Error ? sesErr.message : 'Unknown SES error';
+          logger.error({ err: sesErr, domainId: domain.id, domain: name }, 'SES CreateEmailIdentity failed at domain-add time');
           await prisma.sendingDomain.update({ where: { id: domain.id }, data: { status: 'pending' } }).catch(() => {});
           void errMsg; // logged via healthcheck
         }
@@ -258,8 +263,13 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const domain = await prisma.sendingDomain.findFirst({ where: { id, apiKeyId } });
       if (!domain) throw Errors.notFound('Domain not found.');
 
-      // Generate fresh key pair with a new time-stamped selector
-      const kp = await generateDkimKeyPair(domain.name);
+      // Generate fresh key pair with a new time-stamped selector.
+      // Was passing domain.name (public, guessable) as the encryption
+      // secret instead of the real DOMAIN_KEY_SECRET — every rotated DKIM
+      // private key was encrypted with a "secret" anyone could read off the
+      // domain's own DNS records, and any code correctly decrypting with
+      // the real secret would fail against it anyway.
+      const kp = generateDkimKeyPair(getDkimSecret());
 
       // Update domain record — status resets to pending until DNS re-verifies
       const updated = await prisma.sendingDomain.update({
@@ -281,10 +291,12 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
             EmailIdentity: domain.name,
             DkimSigningAttributes: {
               DomainSigningSelector:   kp.selector,
-              DomainSigningPrivateKey: kp.rawPrivateKey,
+              DomainSigningPrivateKey: pemToRawBase64(kp.rawPrivateKey),
             },
           }));
-        } catch { /* SES may not be configured — ignore */ }
+        } catch (sesErr) {
+          logger.error({ err: sesErr, domainId: domain.id, domain: domain.name }, 'SES CreateEmailIdentity failed during DKIM rotation');
+        }
       }
 
       void logAudit(
