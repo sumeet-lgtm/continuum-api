@@ -237,7 +237,14 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       const runId = runData?.data?.id;
       if (!runId) throw Errors.internalError('Search could not be started. Try again.');
 
-      return reply.status(202).send({ runId, status: 'running', estimatedSeconds: 90 });
+      return reply.status(202).send({
+        runId,
+        status: 'running',
+        estimatedSeconds: 90,
+        totalResultsRequested: body.totalResults ?? 100,
+        totalResultsUsed: totalResults,
+        cappedByQuota: totalResults < Math.min(Math.max(body.totalResults ?? 100, 1), 2500),
+      });
     },
   );
 
