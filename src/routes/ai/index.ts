@@ -4,6 +4,7 @@ import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { requireMonthlyQuota, incrementUsage, incrementUsageBy } from '../../plugins/usageMeter.js';
 import { Errors, AppError } from '../../plugins/errorHandler.js';
+import { getEmailKnowledgeBase } from '../../lib/emailKnowledgeBase.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
 import { detectESP } from '../../lib/espMatch.js';
@@ -437,7 +438,23 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
       const senderCtx = [sender_name, sender_product, sender_company].filter(Boolean).join(' at ') || 'the sender';
       const typesAllowed = allowed_step_types.join(', ');
 
-      const system = `You are an expert outbound sales strategist. Design multi-channel sequences that convert. Tone: ${tone}. Be specific, not generic. Mix channel types for maximum engagement.`;
+      // Was a one-line "be specific, not generic" prompt with none of the
+      // actual specifics — the exact generic-AI-copy problem the campaign/
+      // sequence-step deep-generate engine (emailGenerator.ts) exists to
+      // fix, and this endpoint's email steps were bypassing that fix
+      // entirely since generate-sequence writes its own subject/html_body
+      // directly rather than routing through it. No real per-recipient
+      // signal exists yet at this stage (a sequence is being designed
+      // before any leads are enrolled), so this can't ground copy in a
+      // real segment the way emailGenerator.ts does — but it can and
+      // should still obey every banned-word/structural rule and the
+      // awareness-stage guidance in the knowledge base, using the ICP
+      // description as the best available audience context per the
+      // Generation Protocol's explicit fallback (§7: "infer the sharpest
+      // reasonable interpretation" when given a described-not-real
+      // audience).
+      const knowledgeBase = getEmailKnowledgeBase();
+      const system = `${knowledgeBase}\n\n---\n\nYou are an expert outbound sales strategist designing a multi-channel sequence. Every email step's subject and html_body must follow every rule above literally, not as inspiration — the banned-word list, banned-opener list, and structural rules in section 2 are hard constraints. Tone: ${tone}. Mix channel types for maximum engagement, not email-only.`;
 
       const userPrompt = `Design a ${num_steps}-step outbound sequence.
 
@@ -480,16 +497,21 @@ Return ONLY valid JSON in this exact format:
             'anthropic-version': '2023-06-01',
           },
           body: JSON.stringify({
-            model: 'claude-haiku-4-5-20251001',
-            max_tokens: 4000,
+            model: 'claude-sonnet-5',
+            max_tokens: 8192,
             system,
             messages: [{ role: 'user', content: userPrompt }],
           }),
         });
 
         if (!resp.ok) throw new Error(`Anthropic error: ${resp.status}`);
-        const data = await resp.json() as { content?: Array<{ text?: string }> };
-        const text = data.content?.[0]?.text?.trim() ?? '{}';
+        const data = await resp.json() as { content?: Array<{ type?: string; text?: string }> };
+        // Sonnet reliably returns a leading `thinking` block before the
+        // `text` block for a prompt this instruction-dense (same issue
+        // fixed in emailGenerator.ts's callClaude) — content[0] is not
+        // reliably the answer.
+        const textBlock = data.content?.find((c) => c.type === 'text');
+        const text = textBlock?.text?.trim() ?? '{}';
         const stripped = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
         const jsonMatch = stripped.match(/\{[\s\S]*\}/);
 
@@ -504,7 +526,7 @@ Return ONLY valid JSON in this exact format:
         return reply.status(200).send({
           sequence_name: result.sequence_name ?? 'Generated Sequence',
           steps: result.steps ?? [],
-          model: 'claude-haiku-4-5-20251001',
+          model: 'claude-sonnet-5',
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'generation failed';
