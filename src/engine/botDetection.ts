@@ -14,8 +14,12 @@
  *
  * Layered cheapest-and-most-certain first — each check runs in-process
  * with no external API call, since this sits in the hot path of every
- * single tracking pixel/redirect request.
+ * single tracking pixel/redirect request. checkIpFanout below is the one
+ * exception (it needs a DB round trip) — kept as a separate function so
+ * classifyTrackingEvent stays a pure, dependency-free unit under test.
  */
+
+import { prisma } from '../lib/prisma.js';
 
 // Apple's Mail Privacy Protection proxy egresses from Apple's own
 // allocated 17.0.0.0/8 block — never a residential or mobile ISP range —
@@ -68,9 +72,11 @@ export interface TrackingClassificationInput {
   occurredAt: Date;
 }
 
+export type BotReason = 'apple_mpp' | 'bot_user_agent' | 'prefetch_timing' | 'ip_fanout';
+
 export interface TrackingClassification {
   isLikelyBot: boolean;
-  botReason: 'apple_mpp' | 'bot_user_agent' | 'prefetch_timing' | null;
+  botReason: BotReason | null;
 }
 
 export function classifyTrackingEvent(input: TrackingClassificationInput): TrackingClassification {
@@ -90,4 +96,37 @@ export function classifyTrackingEvent(input: TrackingClassificationInput): Track
   }
 
   return { isLikelyBot: false, botReason: null };
+}
+
+// A single human never touches more than a handful of *different* people's
+// tracking links in a tight window — but a shared corporate security
+// gateway or scanning proxy does exactly that, fanning out across an
+// entire campaign's recipient list from one IP shortly after send. This is
+// the pattern behind "why do all our opens/clicks come from one server" —
+// one IP hitting many distinct messages in a short window, independent of
+// user-agent or IP block, so it catches scanners the checks above miss
+// entirely (a gateway that sends a normal browser UA and isn't in a known
+// range). Deliberately windowed + thresholded rather than "any repeat IP":
+// a real company's shared NAT/VPN gateway also produces genuine human
+// opens from one IP, but those spread across a whole business day — a
+// scanner's fanout compresses into minutes, not hours.
+const FANOUT_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+const FANOUT_DISTINCT_THRESHOLD = 8; // distinct messages from one IP within the window
+
+export async function checkIpFanout(ip: string | null, occurredAt: Date): Promise<boolean> {
+  if (!ip) return false;
+  try {
+    const recent = await prisma.trackingEvent.findMany({
+      where: {
+        ip,
+        occurredAt: { gte: new Date(occurredAt.getTime() - FANOUT_WINDOW_MS) },
+      },
+      distinct: ['sendMessageId'],
+      select: { sendMessageId: true },
+      take: FANOUT_DISTINCT_THRESHOLD,
+    });
+    return recent.length >= FANOUT_DISTINCT_THRESHOLD;
+  } catch {
+    return false; // fail open — a DB hiccup here shouldn't block a real tracking event
+  }
 }

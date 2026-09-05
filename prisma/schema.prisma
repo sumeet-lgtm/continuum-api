@@ -758,13 +758,18 @@ model TrackingEvent {
   // conditions) must filter on isLikelyBot:false rather than mere row
   // existence — see engine/botDetection.ts for the classification logic.
   isLikelyBot   Boolean  @default(false)
-  botReason     String?  // apple_mpp | bot_user_agent | prefetch_timing
+  botReason     String?  // apple_mpp | bot_user_agent | prefetch_timing | ip_fanout
 
   sendMessage SendMessage? @relation(fields: [sendMessageId], references: [id])
 
   @@index([sendMessageId])
   @@index([campaignId])
   @@index([sequenceId])
+  // Backs checkIpFanout in engine/botDetection.ts — one shared security
+  // scanner/proxy IP hitting many different recipients' tracking links
+  // within a short window, a pattern the per-event checks alone (IP block,
+  // user-agent, send timing) can miss entirely.
+  @@index([ip, occurredAt])
   @@map("tracking_events")
 }
 

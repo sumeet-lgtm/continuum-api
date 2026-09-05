@@ -2,7 +2,22 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../../lib/prisma.js';
 import { verifyOpenToken, verifyClickToken, TRANSPARENT_GIF } from '../../lib/tracking.js';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
-import { classifyTrackingEvent } from '../../engine/botDetection.js';
+import { classifyTrackingEvent, checkIpFanout, type BotReason } from '../../engine/botDetection.js';
+
+// One shared scanner/proxy IP hitting many different recipients' tracking
+// links is a pattern the per-event checks (IP block, user-agent, send
+// timing) can miss entirely — see checkIpFanout's own comment. Only runs
+// when the fast, zero-cost checks didn't already flag the event, since it
+// costs a DB round trip.
+async function classifyWithFanout(
+  fast: { isLikelyBot: boolean; botReason: BotReason | null },
+  ip: string | null,
+  occurredAt: Date,
+): Promise<{ isLikelyBot: boolean; botReason: BotReason | null }> {
+  if (fast.isLikelyBot) return fast;
+  const isFanout = await checkIpFanout(ip, occurredAt);
+  return isFanout ? { isLikelyBot: true, botReason: 'ip_fanout' } : fast;
+}
 
 export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /track/open — tracking pixel. Accepts token as path param OR query param.
@@ -41,7 +56,8 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
           const occurredAt = new Date();
           const userAgent = request.headers['user-agent'] ?? null;
           const ip = request.ip ?? null;
-          const { isLikelyBot, botReason } = classifyTrackingEvent({ ip, userAgent, sentAt: msg.sentAt, occurredAt });
+          const fast = classifyTrackingEvent({ ip, userAgent, sentAt: msg.sentAt, occurredAt });
+          const { isLikelyBot, botReason } = await classifyWithFanout(fast, ip, occurredAt);
 
           await prisma.trackingEvent.create({
             data: {
@@ -124,7 +140,8 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
           const occurredAt = new Date();
           const userAgent = request.headers['user-agent'] ?? null;
           const ip = request.ip ?? null;
-          const { isLikelyBot, botReason } = classifyTrackingEvent({ ip, userAgent, sentAt: msg.sentAt, occurredAt });
+          const fast = classifyTrackingEvent({ ip, userAgent, sentAt: msg.sentAt, occurredAt });
+          const { isLikelyBot, botReason } = await classifyWithFanout(fast, ip, occurredAt);
 
           await prisma.trackingEvent.create({
             data: {
