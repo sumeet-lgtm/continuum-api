@@ -7,10 +7,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // instead, scoped per-route so one public endpoint's traffic can't eat
 // another's budget.
 
-const { incrMock, expireMock, ttlMock } = vi.hoisted(() => ({
+const { incrMock, expireMock, ttlMock, isReconnectingMock } = vi.hoisted(() => ({
   incrMock: vi.fn(),
   expireMock: vi.fn(),
   ttlMock: vi.fn(),
+  isReconnectingMock: vi.fn(),
 }));
 
 vi.mock('../../lib/redis.js', () => ({
@@ -19,12 +20,17 @@ vi.mock('../../lib/redis.js', () => ({
     rateLimit: (apiKeyId: string) => `rl:${apiKeyId}`,
     ipRateLimit: (scope: string, ip: string) => `rl:ip:${scope}:${ip}`,
   },
+  isReconnecting: isReconnectingMock,
 }));
 
-import { requireIpRateLimit } from '../../plugins/rateLimit.js';
+import { requireIpRateLimit, requireRateLimit } from '../../plugins/rateLimit.js';
 
 function fakeRequest(ip = '203.0.113.9') {
   return { ip } as never;
+}
+
+function fakeApiKeyRequest(apiKeyId = 'key-001', rateLimit: number | null = null) {
+  return { apiKey: { id: apiKeyId, rateLimit } } as never;
 }
 
 function fakeReply() {
@@ -41,6 +47,7 @@ function fakeReply() {
 beforeEach(() => {
   vi.clearAllMocks();
   ttlMock.mockResolvedValue(60);
+  isReconnectingMock.mockReturnValue(false);
 });
 
 describe('requireIpRateLimit', () => {
@@ -76,5 +83,55 @@ describe('requireIpRateLimit', () => {
     const handler = requireIpRateLimit('sns-events', 600);
 
     await expect(handler(fakeRequest(), fakeReply())).resolves.toBeUndefined();
+  });
+});
+
+describe('reconnect-window retry — a dropped idle Redis connection must not silently disable rate limiting', () => {
+  // Railway's proxy dropping an idle connection throws "Stream isn't
+  // writeable" for whatever command was in flight, even though Redis is
+  // fine again a few hundred ms later — this is not a genuine outage. Both
+  // requireRateLimit (API-key path) and requireIpRateLimit (IP path) must
+  // retry once through exactly this window before falling back to
+  // fail-open, so a routine proxy blip doesn't give one request a free
+  // pass on rate limiting.
+
+  it('requireRateLimit retries once and enforces the limit when the first attempt hits a reconnect-window error', async () => {
+    isReconnectingMock.mockReturnValue(true);
+    incrMock
+      .mockRejectedValueOnce(new Error("Stream isn't writeable and enableOfflineQueue options is false"))
+      .mockResolvedValueOnce(301); // retry succeeds — over the limit
+    const reply = fakeReply();
+
+    await expect(requireRateLimit(fakeApiKeyRequest('key-001', 300), reply)).rejects.toMatchObject({ statusCode: 429 });
+    expect(incrMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('requireRateLimit falls back to fail-open if the retry also fails', async () => {
+    isReconnectingMock.mockReturnValue(true);
+    incrMock.mockRejectedValue(new Error("Stream isn't writeable and enableOfflineQueue options is false"));
+
+    await expect(requireRateLimit(fakeApiKeyRequest('key-001', 300), fakeReply())).resolves.toBeUndefined();
+    expect(incrMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('requireRateLimit does NOT retry when the error is a genuine outage (not mid-reconnect)', async () => {
+    isReconnectingMock.mockReturnValue(false);
+    incrMock.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    await expect(requireRateLimit(fakeApiKeyRequest('key-001', 300), fakeReply())).resolves.toBeUndefined();
+    expect(incrMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('requireIpRateLimit retries once through the same reconnect window', async () => {
+    isReconnectingMock.mockReturnValue(true);
+    incrMock
+      .mockRejectedValueOnce(new Error("Stream isn't writeable and enableOfflineQueue options is false"))
+      .mockResolvedValueOnce(1);
+    const reply = fakeReply();
+
+    await requireIpRateLimit('track-open', 300)(fakeRequest(), reply);
+
+    expect(incrMock).toHaveBeenCalledTimes(2);
+    expect((reply as unknown as { _headers: Record<string, string> })._headers['X-RateLimit-Remaining']).toBe('299');
   });
 });

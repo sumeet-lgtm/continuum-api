@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { redis, redisKey } from '../lib/redis.js';
+import { redis, redisKey, isReconnecting } from '../lib/redis.js';
 import { config } from '../config.js';
 import { Errors } from './errorHandler.js';
 import { logger } from '../lib/logger.js';
@@ -11,11 +11,39 @@ interface RateLimitInfo {
   resetAt: number;
 }
 
+async function runRateLimitCheck(key: string, limitRpm: number): Promise<RateLimitInfo> {
+  const count = await redis.incr(key);
+
+  if (count === 1) {
+    // First request in this window — set TTL
+    await redis.expire(key, 60);
+  }
+
+  if (count > limitRpm) {
+    const ttl = await redis.ttl(key);
+    const retryAfterMs = ttl > 0 ? ttl * 1000 : 60_000;
+    throw Errors.rateLimited(retryAfterMs);
+  }
+
+  const remaining = Math.max(0, limitRpm - count);
+  const ttl = await redis.ttl(key);
+  const resetAt = Date.now() + (ttl > 0 ? ttl * 1000 : 60_000);
+
+  return { limit: limitRpm, remaining, resetAt };
+}
+
 /**
  * Fixed-window rate limiter using Redis INCR + EXPIRE.
  *
  * Window resets on the minute boundary of the first request in that window.
  * Fails open if Redis is unavailable — Redis outage will not take down the API.
+ *
+ * One retry on a mid-reconnect error (see isReconnecting in lib/redis.ts):
+ * without it, every request that happened to land during Railway's proxy
+ * dropping an idle connection — routine, not an actual Redis outage — got a
+ * free pass on rate limiting for that request. "Stream isn't writeable"
+ * means the command was never actually sent, so retrying can't double-count
+ * the INCR.
  */
 async function checkRateLimit(
   apiKeyId: string,
@@ -24,29 +52,20 @@ async function checkRateLimit(
   const key = redisKey.rateLimit(apiKeyId);
 
   try {
-    const count = await redis.incr(key);
-
-    if (count === 1) {
-      // First request in this window — set TTL
-      await redis.expire(key, 60);
-    }
-
-    if (count > limitRpm) {
-      const ttl = await redis.ttl(key);
-      const retryAfterMs = ttl > 0 ? ttl * 1000 : 60_000;
-      throw Errors.rateLimited(retryAfterMs);
-    }
-
-    const remaining = Math.max(0, limitRpm - count);
-    const ttl = await redis.ttl(key);
-    const resetAt = Date.now() + (ttl > 0 ? ttl * 1000 : 60_000);
-
-    return { limit: limitRpm, remaining, resetAt };
+    return await runRateLimitCheck(key, limitRpm);
   } catch (err) {
-    // Re-throw AppErrors (e.g. RATE_LIMITED) — swallow Redis connectivity errors
-    if (err instanceof Error && 'statusCode' in err) {
-      throw err;
+    if (err instanceof Error && 'statusCode' in err) throw err; // real RATE_LIMITED
+
+    if (isReconnecting()) {
+      try {
+        return await runRateLimitCheck(key, limitRpm);
+      } catch (retryErr) {
+        if (retryErr instanceof Error && 'statusCode' in retryErr) throw retryErr;
+        logger.warn({ err: retryErr, apiKeyId }, 'Redis rate limit check failed after reconnect retry — failing open');
+        return undefined;
+      }
     }
+
     logger.warn({ err, apiKeyId }, 'Redis rate limit check failed — failing open');
     return undefined;
   }
@@ -60,27 +79,20 @@ async function checkIpRateLimit(
   const key = redisKey.ipRateLimit(scope, ip);
 
   try {
-    const count = await redis.incr(key);
-
-    if (count === 1) {
-      await redis.expire(key, 60);
-    }
-
-    if (count > limitRpm) {
-      const ttl = await redis.ttl(key);
-      const retryAfterMs = ttl > 0 ? ttl * 1000 : 60_000;
-      throw Errors.rateLimited(retryAfterMs);
-    }
-
-    const remaining = Math.max(0, limitRpm - count);
-    const ttl = await redis.ttl(key);
-    const resetAt = Date.now() + (ttl > 0 ? ttl * 1000 : 60_000);
-
-    return { limit: limitRpm, remaining, resetAt };
+    return await runRateLimitCheck(key, limitRpm);
   } catch (err) {
-    if (err instanceof Error && 'statusCode' in err) {
-      throw err;
+    if (err instanceof Error && 'statusCode' in err) throw err;
+
+    if (isReconnecting()) {
+      try {
+        return await runRateLimitCheck(key, limitRpm);
+      } catch (retryErr) {
+        if (retryErr instanceof Error && 'statusCode' in retryErr) throw retryErr;
+        logger.warn({ err: retryErr, scope, ip }, 'Redis IP rate limit check failed after reconnect retry — failing open');
+        return undefined;
+      }
     }
+
     logger.warn({ err, scope, ip }, 'Redis IP rate limit check failed — failing open');
     return undefined;
   }

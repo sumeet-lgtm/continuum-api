@@ -65,6 +65,20 @@ export function getRedis(): typeof redis {
 }
 
 /**
+ * True while the client is mid-reconnect (a dropped idle connection on
+ * Railway's proxy, not a genuine outage) — commands issued in this exact
+ * window throw "Stream isn't writeable" even though Redis itself is fine
+ * again a few hundred ms later. Callers on a security-relevant path (rate
+ * limiting) should retry once through this window rather than immediately
+ * falling back to fail-open, which the pingRedis pattern below already does
+ * for health checks.
+ */
+export function isReconnecting(): boolean {
+  const status = getClient().status;
+  return status === 'connecting' || status === 'reconnecting';
+}
+
+/**
  * Ping Redis to verify connectivity. Returns true if reachable.
  *
  * ioredis is configured with enableOfflineQueue: false so rate-limit/lock
