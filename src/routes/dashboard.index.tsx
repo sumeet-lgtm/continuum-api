@@ -112,7 +112,7 @@ function Overview() {
         const dateFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
         const [usageRes, histRes, healthRes, seqRes, campRes, seqStatsRes, leadsRes] = await Promise.allSettled([
           api.withKey.get<UsageData>("/v1/usage", primaryKey.keyRaw!),
-          api.withKey.get<{ history: HistoryItem[]; total: number }>("/v1/history?page=1&limit=10", primaryKey.keyRaw!),
+          api.withKey.get<{ data: { id: string; email: string; status: string; score: number | null; checkedAt: string }[]; pagination: { total: number } }>("/v1/verifications?page=1&limit=10", primaryKey.keyRaw!),
           api.withKey.get<{ bounce_rate: number; complaint_rate: number; delivery_rate: number; open_rate: number; sent: number }>(`/v1/analytics/sends?date_from=${dateFrom}`, primaryKey.keyRaw!),
           api.withKey.get<{ sequences: unknown[]; total: number }>("/v1/sequences?limit=1", primaryKey.keyRaw!),
           api.withKey.get<{ data: CampaignAnalytic[] }>("/v1/analytics/campaigns?limit=50", primaryKey.keyRaw!),
@@ -126,7 +126,13 @@ function Overview() {
         if (seqStatsRes.status === "fulfilled") setSequenceStats(seqStatsRes.value.data ?? []);
         if (leadsRes.status === "fulfilled") setTotalLeads(leadsRes.value.total ?? leadsRes.value.data?.length ?? 0);
         if (histRes.status === "fulfilled") {
-          const rows = histRes.value.history ?? [];
+          const rows: HistoryItem[] = (histRes.value.data ?? []).map((v) => ({
+            id: v.id,
+            email: v.email,
+            status: v.status,
+            score: v.score,
+            createdAt: v.checkedAt,
+          }));
           setRecent(rows);
           // Build last-30-days chart from history (simplified — not paginated)
           const buckets = new Map<string, number>();
@@ -184,7 +190,7 @@ function Overview() {
 
   // 5-pillar derived metrics
   const validPct = recent.length > 0
-    ? Math.round(recent.filter((r) => r.status === "deliverable").length / recent.length * 100)
+    ? Math.round(recent.filter((r) => r.status === "valid").length / recent.length * 100)
     : null;
   const deliveryRate = sendHealth?.delivery_rate ?? null;
   const avgOpenRate = campaignStats.length > 0

@@ -149,6 +149,7 @@ function VerifyPage() {
   const [verifQInput, setVerifQInput] = useState("");
 
   const loadVerifs = useCallback(async (page: number, status: string, q: string) => {
+    console.log("[DIAG] loadVerifs called", { hasApiKey: !!apiKey, keyRaw: apiKey?.keyRaw, page, status, q });
     if (!apiKey?.keyRaw) return;
     setVerifLoading(true);
     try {
