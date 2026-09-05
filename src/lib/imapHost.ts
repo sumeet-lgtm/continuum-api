@@ -72,7 +72,15 @@ export async function testImapConnection(creds: {
     connection.end();
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : 'IMAP connection failed' };
+    // TEMP diagnostic (2026-09-05): a live test returned error:"" after
+    // switching to STARTTLS/143 — err.message was empty, which the plain
+    // `.message` read couldn't explain. Widening the fields returned here
+    // to actually see what's failing on the real production network before
+    // deciding on a next step. Revert to the plain .message read once
+    // understood.
+    const anyErr = err as { message?: string; name?: string; code?: string; source?: string } | undefined;
+    const detail = [anyErr?.name, anyErr?.code, anyErr?.source, anyErr?.message].filter(Boolean).join(' | ');
+    return { ok: false, error: detail || 'IMAP connection failed (no error detail)' };
   }
 }
 
