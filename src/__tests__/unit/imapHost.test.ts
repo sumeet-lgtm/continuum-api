@@ -20,7 +20,7 @@ describe('deriveImapHost', () => {
 });
 
 describe('IMAP_PORT', () => {
-  it('is the standard implicit-TLS IMAPS port, independent of whatever SMTP port was stored', () => {
-    expect(IMAP_PORT).toBe(993);
+  it('is the STARTTLS IMAP port, not implicit-TLS 993 — production egress breaks TLS on 993 (see imapHost.ts)', () => {
+    expect(IMAP_PORT).toBe(143);
   });
 });

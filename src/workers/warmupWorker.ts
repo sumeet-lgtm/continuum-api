@@ -114,7 +114,8 @@ async function autoOpenAndReply(
         user: targetMailbox.username,
         host: deriveImapHost(targetMailbox.host),
         port: IMAP_PORT,
-        tls: true,
+        tls: false,
+        autotls: 'required',
         tlsOptions: { rejectUnauthorized: true },
         authTimeout: 10000,
         ...authConfig,
@@ -174,6 +175,7 @@ async function autoOpenAndReply(
 export async function processWarmupTick(): Promise<void> {
   const cfg = config as Record<string, unknown>;
   if (!cfg['WARMUP_POOL_ENABLED']) return;
+  logger.info('Warmup tick starting (jittering up to 10 min before real work begins)');
 
   // Jitter the start of each tick — without this, every day's sends land
   // at the same predictable minute-past-the-hour, which is itself a
@@ -303,6 +305,8 @@ export async function processWarmupTick(): Promise<void> {
       });
     }
   }
+
+  logger.info({ mailboxCount: warmupConfigs.length }, 'Warmup tick complete');
 }
 
 export function startWarmupWorker(): Worker {

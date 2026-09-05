@@ -21,9 +21,18 @@ export function deriveImapHost(smtpHost: string): string {
   return smtpHost;
 }
 
-// IMAPS (implicit TLS) — practically universal regardless of whatever SMTP
-// port (587 STARTTLS, 465 implicit) the user entered for sending.
-export const IMAP_PORT = 993;
+// STARTTLS, not implicit TLS (993) — found live (2026-09-05) that every
+// single IMAP connect from our production network failed against port 993
+// with DEPTH_ZERO_SELF_SIGNED_CERT for every mailbox, on every provider,
+// 100% of the time, while the exact same network's outbound SMTP on 587
+// (STARTTLS — starts in plaintext, upgrades in-band) worked cleanly. That
+// split points at an egress path that inspects/intercepts traffic on ports
+// where TLS begins on the very first byte (993, 465, 636...) but passes
+// through ports that start in plaintext and upgrade via STARTTLS. Port 143
+// is universally supported by every real IMAP provider (Gmail included)
+// specifically as the STARTTLS alternative to 993, so this switches to it
+// instead of guessing at network config we don't control.
+export const IMAP_PORT = 143;
 
 /**
  * Auth-only IMAP reachability check — connects and logs in, doesn't touch
@@ -53,7 +62,8 @@ export async function testImapConnection(creds: {
         user: creds.username,
         host: deriveImapHost(creds.host),
         port: IMAP_PORT,
-        tls: true,
+        tls: false,
+        autotls: 'required',
         tlsOptions: { rejectUnauthorized: true },
         authTimeout: 10000,
         ...imapConfig,
