@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -248,6 +249,7 @@ function PillSelect({
 
 function FinderPage() {
   const navigate = useNavigate();
+  const { primaryKey } = useAuth();
   // Filters
   const [personTitleIncludes, setPersonTitleIncludes] = useState<string[]>([]);
   const [seniorityIncludes, setSeniorityIncludes] = useState<string[]>([]);
@@ -343,14 +345,15 @@ function FinderPage() {
   useEffect(() => {
     if ((phase !== "searching" && phase !== "verifying") || !runId) return;
     pollRef.current = setInterval(async () => {
+      if (!primaryKey?.keyRaw) return;
       try {
-        const data = await api.get<{
+        const data = await api.withKey.get<{
           status: string;
           phase?: string;
           verifyJobId?: string;
           progress?: number;
           total?: number;
-        }>(`/v1/finder/jobs/${runId}/status`);
+        }>(`/v1/finder/jobs/${runId}/status`, primaryKey.keyRaw);
 
         if (data.status === "failed") {
           clearInterval(pollRef.current!);
@@ -384,13 +387,15 @@ function FinderPage() {
       }
     }, 5000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [phase, runId]);
+  }, [phase, runId, primaryKey]);
 
   async function fetchPage(rid: string, pg: number, vjId?: string) {
+    if (!primaryKey?.keyRaw) return;
     try {
       const vjParam = vjId ? `&verifyJobId=${vjId}` : "";
-      const data = await api.get<{ results: FinderResult[]; total: number; rawTotal?: number; isVerified?: boolean }>(
+      const data = await api.withKey.get<{ results: FinderResult[]; total: number; rawTotal?: number; isVerified?: boolean }>(
         `/v1/finder/jobs/${rid}/results?offset=${pg * PAGE_SIZE}&limit=${PAGE_SIZE}${vjParam}`,
+        primaryKey.keyRaw,
       );
       setResults(data.results);
       setTotal(data.total);
@@ -400,15 +405,16 @@ function FinderPage() {
       toast.error("Failed to load results.");
     }
     // Load sequences once so user can pick one to enroll into
-    if (sequences.length === 0) {
+    if (sequences.length === 0 && primaryKey?.keyRaw) {
       try {
-        const seqData = await api.get<{ data?: { id: string; name: string }[] }>("/v1/sequences");
+        const seqData = await api.withKey.get<{ data?: { id: string; name: string }[] }>("/v1/sequences", primaryKey.keyRaw);
         setSequences(seqData.data ?? []);
       } catch { /* non-fatal */ }
     }
   }
 
   async function handleSearch() {
+    if (!primaryKey?.keyRaw) { toast.error("No API key available."); return; }
     if (pollRef.current) clearInterval(pollRef.current);
     setPhase("searching");
     setResults([]);
@@ -436,7 +442,7 @@ function FinderPage() {
     payload.hasEmail = hasEmail;
 
     try {
-      const data = await api.post<{ runId: string; totalResultsUsed: number; cappedByQuota: boolean }>("/v1/finder/search", payload);
+      const data = await api.withKey.post<{ runId: string; totalResultsUsed: number; cappedByQuota: boolean }>("/v1/finder/search", payload, primaryKey.keyRaw);
       setRunId(data.runId);
       if (data.cappedByQuota) {
         toast.warning(`Searching for ${data.totalResultsUsed} results instead of ${totalResults} — that's what's left of your monthly verification quota.`);
@@ -448,12 +454,13 @@ function FinderPage() {
   }
 
   async function handleVerify() {
-    if (!runId) return;
+    if (!runId || !primaryKey?.keyRaw) return;
     setVerifying(true);
     try {
-      const data = await api.post<{ jobId: string | null; total?: number; message?: string }>(
+      const data = await api.withKey.post<{ jobId: string | null; total?: number; message?: string }>(
         `/v1/finder/jobs/${runId}/verify`,
         {},
+        primaryKey.keyRaw,
       );
       if (data.jobId) {
         toast.success(`Verifying ${data.total} emails — check Verify → Jobs for results.`);
@@ -468,7 +475,7 @@ function FinderPage() {
   }
 
   async function handleImport(importAll = false) {
-    if (!runId) return;
+    if (!runId || !primaryKey?.keyRaw) return;
     if (!importAll && selected.size === 0) return;
     setImporting(true);
     try {
@@ -480,9 +487,10 @@ function FinderPage() {
         ? { ...base, importAll: true }
         : { ...base, emails: [...selected].map((i) => filteredResults[i]?.email).filter(Boolean) };
 
-      const data = await api.post<{ imported: number; skipped: number }>(
+      const data = await api.withKey.post<{ imported: number; skipped: number }>(
         `/v1/finder/jobs/${runId}/import`,
         body,
+        primaryKey.keyRaw,
       );
       const count = data.imported;
       if (targetSequenceId) {

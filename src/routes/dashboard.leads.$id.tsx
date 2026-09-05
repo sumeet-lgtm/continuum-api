@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -89,6 +90,7 @@ function fmtDate(iso: string) {
 function LeadProfilePage() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
+  const { primaryKey } = useAuth();
   const [lead, setLead] = useState<LeadDetail | null>(null);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
@@ -99,10 +101,12 @@ function LeadProfilePage() {
   const [savingTags, setSavingTags] = useState(false);
 
   async function load() {
+    if (!primaryKey?.keyRaw) return;
     setLoading(true);
     try {
-      const data = await api.get<{ lead: LeadDetail; timeline: TimelineEvent[]; enrollments: Enrollment[] }>(
+      const data = await api.withKey.get<{ lead: LeadDetail; timeline: TimelineEvent[]; enrollments: Enrollment[] }>(
         `/v1/leads/${id}/activity`,
+        primaryKey.keyRaw,
       );
       setLead(data.lead);
       setTimeline(data.timeline);
@@ -114,7 +118,7 @@ function LeadProfilePage() {
     }
   }
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [id, primaryKey]);
 
   async function addTag(tag: string) {
     if (!lead || !tag.trim()) return;
@@ -129,10 +133,10 @@ function LeadProfilePage() {
   }
 
   async function saveTags(tags: string[]) {
-    if (!lead) return;
+    if (!lead || !primaryKey?.keyRaw) return;
     setSavingTags(true);
     try {
-      await api.patch(`/v1/leads/${lead.id}/tags`, { tags });
+      await api.withKey.patch(`/v1/leads/${lead.id}/tags`, { tags }, primaryKey.keyRaw);
       setLead((prev) => prev ? { ...prev, tags } : prev);
     } catch { toast.error("Failed to update tags."); }
     finally { setSavingTags(false); }
