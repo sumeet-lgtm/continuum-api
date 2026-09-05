@@ -18,10 +18,11 @@ import { verifyEmail } from '../../engine/index.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
 import { config } from '../../config.js';
+import { getFinderLimit } from '../../plugins/usageMeter.js';
 
 const SERVER_INFO = {
   name: 'continuum-api',
-  version: '1.1.0',
+  version: '1.2.0',
 };
 
 const CAPABILITIES = {
@@ -211,14 +212,112 @@ const TOOLS = [
       },
     },
   },
+  // ─── Finder (Pillar 5 — competes with Apollo) ──────────────────────────────
+  // Three tools mirroring the REST search→poll→results flow, since a people
+  // search runs on Apify in the background (~90s) and can't return results
+  // synchronously in a single tool call.
+  {
+    name: 'find_leads',
+    description: 'Start a people-search (find new leads matching filters — job title, seniority, industry, company size, location). Runs in the background; returns a run_id to poll with get_lead_search_status. Counts against your monthly Finder allowance, then your verification credits.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        person_title_includes:    { type: 'array', items: { type: 'string' }, description: 'Job titles to match, e.g. ["VP of Sales", "Head of Growth"]' },
+        seniority_includes:       { type: 'array', items: { type: 'string' }, description: 'Seniority levels, e.g. ["director", "vp", "c_suite"]' },
+        function_includes:        { type: 'array', items: { type: 'string' }, description: 'Job functions, e.g. ["sales", "marketing"]' },
+        company_industry_includes: { type: 'array', items: { type: 'string' }, description: 'Industries, e.g. ["Computer Software"]' },
+        company_size_includes:    { type: 'array', items: { type: 'string' }, description: 'Company size ranges, e.g. ["11-50", "51-200"]' },
+        person_location_country_includes: { type: 'array', items: { type: 'string' }, description: 'Countries the person is located in' },
+        company_location_country_includes: { type: 'array', items: { type: 'string' }, description: 'Countries the company is headquartered in' },
+        has_email:    { type: 'boolean', description: 'Only return people with a known email address' },
+        total_results: { type: 'number', description: 'How many leads to find (max 2,500, capped by your remaining Finder + verification allowance)' },
+      },
+    },
+  },
+  {
+    name: 'get_lead_search_status',
+    description: 'Check progress of a find_leads search. Phases: "searching" (Apify running), "verifying" (Continuum confirming deliverability), "verified" (done — call get_lead_search_results).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        run_id: { type: 'string', description: 'run_id returned by find_leads' },
+      },
+      required: ['run_id'],
+    },
+  },
+  {
+    name: 'get_lead_search_results',
+    description: 'Fetch the leads from a completed find_leads search — only returns leads Continuum confirmed as deliverable or risky, never unverified rows.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        run_id: { type: 'string', description: 'run_id returned by find_leads' },
+        offset: { type: 'number', description: 'Pagination offset (default 0)' },
+        limit:  { type: 'number', description: 'Results per page (max 200, default 50)' },
+      },
+      required: ['run_id'],
+    },
+  },
+  {
+    name: 'preflight_check',
+    description: 'Check whether a list will bounce BEFORE sending — classifies each address as likely deliverable, risky, likely to bounce, suppressed, or unknown, using data Continuum already has (global suppression list + shared verification cache). Free — spends no verification credits.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        list_id: { type: 'string', description: 'A Continuum mailing list ID to check (provide this OR emails, not both)' },
+        emails:  { type: 'array', items: { type: 'string' }, description: 'Specific email addresses to check (provide this OR list_id, not both)' },
+      },
+    },
+  },
 ] as const;
+
+// A self-call to the REST API this same server exposes, forwarding the
+// caller's own auth header — this is the entry point for any MCP tool whose
+// real logic already lives in a route handler (Finder's search→poll→results
+// flow, Preflight), so there is exactly one implementation of that logic to
+// keep correct instead of two copies that can quietly drift apart.
+async function selfCall(
+  request: FastifyRequest,
+  method: 'GET' | 'POST',
+  path: string,
+  body?: unknown,
+): Promise<unknown> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (request.headers['x-api-key']) {
+    headers['X-API-Key'] = String(request.headers['x-api-key']);
+  } else if (request.headers['authorization']) {
+    headers['Authorization'] = String(request.headers['authorization']);
+  }
+
+  const res = await fetch(`http://127.0.0.1:${config.PORT}${path}`, {
+    method,
+    headers,
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+
+  const json = await res.json().catch(() => ({})) as { error?: { message?: string } };
+  if (!res.ok) {
+    throw new Error(json?.error?.message ?? `Request to ${path} failed (${res.status})`);
+  }
+  return json;
+}
 
 // ─── Tool Handlers ─────────────────────────────────────────────────────────────
 
 async function callTool(
   toolName: string,
   args: Record<string, unknown>,
-  apiKey: { id: string; currentMonthUsage: number; monthlyLimit: number; currentMonthSendUsage: number; monthlySendLimit: number },
+  apiKey: {
+    id: string;
+    plan: string | null;
+    currentMonthUsage: number;
+    monthlyLimit: number;
+    currentMonthSendUsage: number;
+    monthlySendLimit: number;
+    extraVerificationCredits?: number | null;
+    currentMonthFinderUsage?: number | null;
+  },
+  request: FastifyRequest,
 ): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const apiKeyId = apiKey.id;
 
@@ -385,8 +484,17 @@ async function callTool(
     case 'get_account_usage': {
       return {
         content: text({
-          verifications: { used: apiKey.currentMonthUsage, limit: apiKey.monthlyLimit },
-          sends:         { used: apiKey.currentMonthSendUsage, limit: apiKey.monthlySendLimit },
+          verifications: {
+            used: apiKey.currentMonthUsage,
+            limit: apiKey.monthlyLimit,
+            extra_credits: apiKey.extraVerificationCredits ?? 0,
+          },
+          sends: { used: apiKey.currentMonthSendUsage, limit: apiKey.monthlySendLimit },
+          finder: {
+            used: apiKey.currentMonthFinderUsage ?? 0,
+            limit: getFinderLimit(apiKey.plan),
+            note: 'Once this monthly allowance is spent, Finder draws from your verification credits at 2 credits/lead.',
+          },
         }),
       };
     }
@@ -486,6 +594,51 @@ async function callTool(
       return { content: text({ leads, count: leads.length }) };
     }
 
+    // ─── Finder — thin wrappers over the REST routes (see selfCall) ─────────
+    case 'find_leads': {
+      const body: Record<string, unknown> = {};
+      const passArr = (mcpKey: string, restKey: string) => {
+        const v = args[mcpKey];
+        if (Array.isArray(v) && v.length) body[restKey] = v.map(String);
+      };
+      passArr('person_title_includes', 'personTitleIncludes');
+      passArr('seniority_includes', 'seniorityIncludes');
+      passArr('function_includes', 'functionIncludes');
+      passArr('company_industry_includes', 'companyIndustryIncludes');
+      passArr('company_size_includes', 'companySizeIncludes');
+      passArr('person_location_country_includes', 'personLocationCountryIncludes');
+      passArr('company_location_country_includes', 'companyLocationCountryIncludes');
+      if (typeof args['has_email'] === 'boolean') body['hasEmail'] = args['has_email'];
+      if (typeof args['total_results'] === 'number') body['totalResults'] = args['total_results'];
+
+      const result = await selfCall(request, 'POST', '/v1/finder/search', body);
+      return { content: text(result) };
+    }
+
+    case 'get_lead_search_status': {
+      const runId = String(args['run_id'] ?? '');
+      const result = await selfCall(request, 'GET', `/v1/finder/jobs/${encodeURIComponent(runId)}/status`);
+      return { content: text(result) };
+    }
+
+    case 'get_lead_search_results': {
+      const runId = String(args['run_id'] ?? '');
+      const params = new URLSearchParams();
+      if (args['offset'] !== undefined) params.set('offset', String(args['offset']));
+      if (args['limit'] !== undefined) params.set('limit', String(args['limit']));
+      const qs = params.toString();
+      const result = await selfCall(request, 'GET', `/v1/finder/jobs/${encodeURIComponent(runId)}/results${qs ? `?${qs}` : ''}`);
+      return { content: text(result) };
+    }
+
+    case 'preflight_check': {
+      const body: Record<string, unknown> = {};
+      if (args['list_id']) body['list_id'] = String(args['list_id']);
+      if (Array.isArray(args['emails'])) body['emails'] = args['emails'].map(String);
+      const result = await selfCall(request, 'POST', '/v1/preflight', body);
+      return { content: text(result) };
+    }
+
     default:
       throw new Error(`Unknown tool: ${toolName}`);
   }
@@ -554,7 +707,7 @@ export async function mcpRoutes(fastify: FastifyInstance): Promise<void> {
 
           logger.info({ toolName, apiKeyId: request.apiKey.id }, 'MCP tool call');
 
-          const result = await callTool(toolName, args, request.apiKey as Parameters<typeof callTool>[2]);
+          const result = await callTool(toolName, args, request.apiKey as Parameters<typeof callTool>[2], request);
           return respond(result);
         }
 

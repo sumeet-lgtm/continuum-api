@@ -13,7 +13,7 @@ import { normalizeFinderFilters } from '../../lib/apifyActorSchema.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getSearchToken(): string {
+export function getSearchToken(): string {
   const token = (config as Record<string, unknown>)['APIFY_API_TOKEN'] as string | undefined;
   if (!token) {
     throw new AppError(503, 'SERVICE_UNAVAILABLE', 'Lead Finder is not configured. Contact support.');
@@ -21,7 +21,7 @@ function getSearchToken(): string {
   return token;
 }
 
-function getSearchActorId(): string {
+export function getSearchActorId(): string {
   const actorId = (config as Record<string, unknown>)['APIFY_ACTOR_ID'] as string | undefined;
   return actorId ?? 'kVYdvNOefemtiDXO5';
 }
@@ -55,7 +55,7 @@ export function computeResponseSignal(row: Record<string, unknown>): 'high' | 'm
 }
 
 // Pipeline Labs actor output → Continuum lead shape
-function mapLeadRow(row: Record<string, unknown>): {
+export function mapLeadRow(row: Record<string, unknown>): {
   email: string | null;
   firstName: string | null;
   lastName: string | null;
