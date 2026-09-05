@@ -24,6 +24,13 @@ const messageSchema = z.object({
 });
 
 const batchSchema = z.object({
+  // Batch-wide, not per-message — the frontend collects one "From" for the
+  // whole batch. Same from_name/from_email convention as /v1/send and
+  // campaigns; falls back to the generic no-reply@<SES_FROM_DOMAIN> when
+  // omitted (the only previous behavior — this route had no way at all to
+  // send from a customer's own verified domain until now).
+  from_name: z.string().min(1).max(200).optional(),
+  from_email: z.string().email().optional(),
   messages: z.array(messageSchema).min(1).max(100),
 });
 
@@ -37,7 +44,7 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
         throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
       }
 
-      const { messages } = parsed.data;
+      const { messages, from_name, from_email } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
       if (!isSesConfigured()) throw Errors.serviceUnavailable('Send (SES not configured)');
@@ -45,9 +52,9 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
       // Check combined quota
       await (requireMonthlySendQuota as Function)(request, reply);
 
-      const from = config.SES_FROM_DOMAIN.includes('@')
-        ? config.SES_FROM_DOMAIN
-        : `no-reply@${config.SES_FROM_DOMAIN}`;
+      const from = from_email
+        ? (from_name ? `${from_name} <${from_email}>` : from_email)
+        : (config.SES_FROM_DOMAIN.includes('@') ? config.SES_FROM_DOMAIN : `no-reply@${config.SES_FROM_DOMAIN}`);
 
       const results: Array<{ id: string; status: string; error?: string }> = [];
       let successCount = 0;
