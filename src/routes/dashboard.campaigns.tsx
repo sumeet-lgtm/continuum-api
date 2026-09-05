@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
 import { cn } from "@/lib/utils";
-import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target, Play, Trophy, Sparkles, Bold, Italic, Underline, List, ListOrdered, Link, AlignLeft, AlignCenter, AlignRight, Code2, Minus } from "lucide-react";
+import { Plus, Megaphone, Send, FlaskConical, X, Copy, AlertTriangle, Users, Clock, Edit2, XCircle, CheckCircle2, Circle, Monitor, Smartphone, Eye, TrendingUp, BarChart2, ChevronRight, Target, Play, Trophy, Sparkles, Code2 } from "lucide-react";
+import { EmailBlockEditor, type Block, blocksToHtml, htmlAsCustomBlocks } from "@/components/EmailBlockEditor";
 
 // ── Subject line scorer (client-side, no API) ─────────────────────────────────
 
@@ -151,136 +152,74 @@ interface CampaignHealth {
 }
 
 // ── Rich Email Editor ─────────────────────────────────────────────────────────
+// Now backed by the same structured block editor Templates uses (see
+// components/EmailBlockEditor.tsx), instead of a free-form contentEditable
+// box with no image/button insertion in visual mode at all — two different
+// editors doing the same job, producing incompatible HTML shapes.
 
 type EditorMode = "visual" | "html";
 
 function RichEmailEditor({
   value,
   onChange,
-  placeholder,
 }: {
   value: string;
   onChange: (html: string) => void;
-  placeholder?: string;
 }) {
   const [mode, setMode] = useState<EditorMode>("visual");
-  const editorRef = useRef<HTMLDivElement>(null);
-  const isInternalUpdate = useRef(false);
+  const [blocks, setBlocks] = useState<Block[]>(() => htmlAsCustomBlocks(value));
+  const skipNextSync = useRef(true); // this component's own useState initializer already consumed the initial value
 
-  // Sync external value changes into the visual editor (e.g. AI fill, template load)
+  // Sync in value changes that didn't originate from this editor's own
+  // onChange below (an AI-generated draft, "Load from template", switching
+  // back from a hand-edited HTML view) — landed as a single custom-HTML
+  // block rather than fragile-parsed back into structured blocks, so
+  // nothing in it is lost even though its individual pieces (a header, a
+  // button) aren't separately editable again until rebuilt.
   useEffect(() => {
-    if (mode === "visual" && editorRef.current && !isInternalUpdate.current) {
-      if (editorRef.current.innerHTML !== value) {
-        editorRef.current.innerHTML = value;
-      }
-    }
-  }, [value, mode]);
+    if (skipNextSync.current) { skipNextSync.current = false; return; }
+    if (value !== blocksToHtml(blocks)) setBlocks(htmlAsCustomBlocks(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
 
-  const handleVisualInput = useCallback(() => {
-    if (!editorRef.current) return;
-    isInternalUpdate.current = true;
-    onChange(editorRef.current.innerHTML);
-    setTimeout(() => { isInternalUpdate.current = false; }, 0);
-  }, [onChange]);
-
-  const exec = useCallback((command: string, val?: string) => {
-    document.execCommand(command, false, val);
-    editorRef.current?.focus();
-    handleVisualInput();
-  }, [handleVisualInput]);
-
-  const insertLink = useCallback(() => {
-    const url = prompt("Enter URL:");
-    if (url) exec("createLink", url.startsWith("http") ? url : `https://${url}`);
-  }, [exec]);
-
-  const switchMode = (m: EditorMode) => {
-    if (m === mode) return;
-    // When switching to HTML view, value is already up-to-date from visual input
-    // When switching back to visual, update contenteditable from current value
-    setMode(m);
-    if (m === "visual") {
-      setTimeout(() => {
-        if (editorRef.current) editorRef.current.innerHTML = value;
-      }, 0);
-    }
+  const handleBlocksChange = (next: Block[]) => {
+    setBlocks(next);
+    onChange(blocksToHtml(next));
   };
 
-  const ToolBtn = ({ onClick, title, children }: { onClick: () => void; title: string; children: React.ReactNode }) => (
-    <button
-      type="button"
-      onMouseDown={(e) => { e.preventDefault(); onClick(); }}
-      title={title}
-      className="h-7 w-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-    >
-      {children}
-    </button>
-  );
-
-  const Sep = () => <div className="w-px h-4 bg-border mx-0.5" />;
+  const switchToVisual = () => {
+    if (value !== blocksToHtml(blocks)) setBlocks(htmlAsCustomBlocks(value));
+    setMode("visual");
+  };
 
   return (
     <div className="rounded-md border border-input overflow-hidden focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-0">
-      {/* Toolbar */}
-      <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-border bg-muted/30 flex-wrap">
-        {mode === "visual" ? (
-          <>
-            <ToolBtn onClick={() => exec("bold")} title="Bold"><Bold className="h-3.5 w-3.5" /></ToolBtn>
-            <ToolBtn onClick={() => exec("italic")} title="Italic"><Italic className="h-3.5 w-3.5" /></ToolBtn>
-            <ToolBtn onClick={() => exec("underline")} title="Underline"><Underline className="h-3.5 w-3.5" /></ToolBtn>
-            <Sep />
-            <ToolBtn onClick={() => exec("insertUnorderedList")} title="Bullet list"><List className="h-3.5 w-3.5" /></ToolBtn>
-            <ToolBtn onClick={() => exec("insertOrderedList")} title="Numbered list"><ListOrdered className="h-3.5 w-3.5" /></ToolBtn>
-            <Sep />
-            <ToolBtn onClick={() => exec("justifyLeft")} title="Align left"><AlignLeft className="h-3.5 w-3.5" /></ToolBtn>
-            <ToolBtn onClick={() => exec("justifyCenter")} title="Align center"><AlignCenter className="h-3.5 w-3.5" /></ToolBtn>
-            <ToolBtn onClick={() => exec("justifyRight")} title="Align right"><AlignRight className="h-3.5 w-3.5" /></ToolBtn>
-            <Sep />
-            <ToolBtn onClick={insertLink} title="Insert link"><Link className="h-3.5 w-3.5" /></ToolBtn>
-            <ToolBtn onClick={() => exec("insertHorizontalRule")} title="Horizontal rule"><Minus className="h-3.5 w-3.5" /></ToolBtn>
-            <ToolBtn onClick={() => exec("removeFormat")} title="Clear formatting"><X className="h-3.5 w-3.5" /></ToolBtn>
-          </>
-        ) : (
-          <span className="text-xs text-muted-foreground px-1 font-mono">HTML</span>
-        )}
-        <div className="ml-auto flex items-center gap-0">
-          <button
-            type="button"
-            onClick={() => switchMode("visual")}
-            className={cn("px-2.5 py-1 text-xs rounded-l-md border transition-colors", mode === "visual" ? "bg-foreground text-background border-foreground" : "bg-transparent text-muted-foreground border-border hover:bg-muted")}
-          >
-            Visual
-          </button>
-          <button
-            type="button"
-            onClick={() => switchMode("html")}
-            className={cn("px-2.5 py-1 text-xs rounded-r-md border-y border-r transition-colors flex items-center gap-1", mode === "html" ? "bg-foreground text-background border-foreground" : "bg-transparent text-muted-foreground border-border hover:bg-muted")}
-          >
-            <Code2 className="h-3 w-3" /> HTML
-          </button>
-        </div>
+      <div className="flex items-center justify-end gap-0.5 px-2 py-1.5 border-b border-border bg-muted/30">
+        <button
+          type="button"
+          onClick={switchToVisual}
+          className={cn("px-2.5 py-1 text-xs rounded-l-md border transition-colors", mode === "visual" ? "bg-foreground text-background border-foreground" : "bg-transparent text-muted-foreground border-border hover:bg-muted")}
+        >
+          Visual
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode("html")}
+          className={cn("px-2.5 py-1 text-xs rounded-r-md border-y border-r transition-colors flex items-center gap-1", mode === "html" ? "bg-foreground text-background border-foreground" : "bg-transparent text-muted-foreground border-border hover:bg-muted")}
+        >
+          <Code2 className="h-3 w-3" /> HTML
+        </button>
       </div>
 
-      {/* Visual editor */}
-      {mode === "visual" && (
-        <div
-          ref={editorRef}
-          contentEditable
-          suppressContentEditableWarning
-          onInput={handleVisualInput}
-          className="min-h-[160px] px-3 py-2.5 text-sm outline-none leading-relaxed [&_a]:text-blue-600 [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5"
-          style={{ fontFamily: "inherit" }}
-          data-placeholder={placeholder ?? "<p>Hi {{first_name}},</p>"}
-        />
-      )}
-
-      {/* HTML source view */}
-      {mode === "html" && (
+      {mode === "visual" ? (
+        <div className="p-3">
+          <EmailBlockEditor blocks={blocks} onChange={handleBlocksChange} />
+        </div>
+      ) : (
         <textarea
           className="w-full min-h-[160px] px-3 py-2.5 text-sm font-mono resize-y outline-none bg-background"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder ?? "<p>Hi {{first_name}},</p>"}
           spellCheck={false}
         />
       )}
@@ -914,7 +853,6 @@ function CampaignsPage() {
             <RichEmailEditor
               value={form.htmlBody}
               onChange={(html) => setForm((f) => ({ ...f, htmlBody: html }))}
-              placeholder="<p>Hi {{first_name}},</p>"
             />
             <p className="text-xs text-muted-foreground">Use {"{{first_name}}"}, {"{{email}}"}, {"{{unsubscribe_url}}"} as personalization tokens.</p>
           </div>
