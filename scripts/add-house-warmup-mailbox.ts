@@ -87,16 +87,26 @@ async function main() {
   });
   console.log('Registered house-pool mailbox:', mailbox.id, username);
 
+  const targetPerDay = process.env['HOUSE_MAILBOX_TARGET_PER_DAY'] ? parseInt(process.env['HOUSE_MAILBOX_TARGET_PER_DAY'], 10) : 40;
+  // House-pool mailboxes are meant to already be established senders (the
+  // whole point of using a real account instead of a fresh one), so this
+  // skips getTodayTarget's ramp entirely by starting currentPerDay at the
+  // target — no reason to slow-ramp an account back up from 5/day that's
+  // already been sending real volume elsewhere for months. Pass
+  // HOUSE_MAILBOX_ALREADY_WARM=false to ramp a genuinely new house mailbox
+  // normally instead.
+  const alreadyWarm = process.env['HOUSE_MAILBOX_ALREADY_WARM'] !== 'false';
   await prisma.warmupConfig.create({
     data: {
       mailboxId: mailbox.id,
       enabled: true,
-      targetPerDay: 40,
+      targetPerDay,
+      currentPerDay: alreadyWarm ? targetPerDay : 5,
       rampUpDays: 30,
       poolTier: 'premium', // house mailboxes always auto-open/reply — see poolTier gate in warmupWorker.ts
     },
   });
-  console.log('Enabled warmup for this mailbox.');
+  console.log(`Enabled warmup for this mailbox${alreadyWarm ? ' — already warm, starting at full target/day, no ramp' : ' — ramping up from 5/day over 30 days'}.`);
 
   const totalHouseMailboxes = await prisma.mailbox.count({ where: { isHousePool: true, status: 'active' } });
   console.log(`\nTotal active house-pool mailboxes now: ${totalHouseMailboxes}.`);
