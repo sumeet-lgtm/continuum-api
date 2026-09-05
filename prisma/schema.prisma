@@ -534,6 +534,26 @@ model SmtpCache {
   @@map("smtp_cache")
 }
 
+// Whether a domain's mail server accepts RCPT TO for any address ("catch-all")
+// is a property of that domain's mail server config, not of any one mailbox
+// on it — but SmtpCache above can only ever cache a hit for the exact email
+// checked before. A bulk list is routinely dozens or hundreds of different
+// addresses at the same handful of company domains (a Finder-sourced lead
+// list, or a company's own contact export), so re-probing catch-all status
+// live for every single email in it is pure waste. This lets every email
+// after the first at a given domain skip that live SMTP round trip entirely
+// — shared across all customers, same reasoning as SmtpCache being shared.
+model DomainCatchAllCache {
+  id         String   @id @default(cuid())
+  domain     String   @unique
+  isCatchAll Boolean
+  checkedAt  DateTime @default(now())
+  expiresAt  DateTime // 7d TTL — mail-server config can change, but rarely
+
+  @@index([expiresAt])
+  @@map("domain_catchall_cache")
+}
+
 // ─── Phase 6: Send ────────────────────────────────────────────────────────────
 // Transactional sending on top of verification. verifyEmail() already exists
 // and stores per-address history — SendMessage reads from it (verify-before-send)

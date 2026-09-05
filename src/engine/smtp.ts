@@ -3,11 +3,41 @@ import type { SmtpProbeResult } from '../types/verification.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { isFreeEmailProvider } from './lookalike.js';
+import { prisma } from '../lib/prisma.js';
 
 const CATCHALL_PROBE_LOCAL = 'cnt-probe-v1-xq7z2k9m';
 const SMTP_PORT = 25;
 const SMTP_PORT_FALLBACK = 587;
 const MAX_MX_ATTEMPTS = 3;
+const DOMAIN_CATCHALL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Catch-all status belongs to the domain's mail server, not to any one
+// mailbox on it — a bulk list is routinely dozens or hundreds of different
+// addresses at the same handful of company domains, so the second (and
+// 500th) email at a domain we've already probed shouldn't pay for a live
+// SMTP round trip just to learn the same answer again. Shared across every
+// customer, same reasoning as the per-email SmtpCache elsewhere.
+async function getDomainCatchAll(domain: string): Promise<boolean | null> {
+  try {
+    const cached = await prisma.domainCatchAllCache.findUnique({ where: { domain } });
+    if (!cached || cached.expiresAt < new Date()) return null;
+    return cached.isCatchAll;
+  } catch (err) {
+    logger.warn({ err, domain }, 'Domain catch-all cache read failed — probing live');
+    return null;
+  }
+}
+
+function setDomainCatchAll(domain: string, isCatchAll: boolean): void {
+  const expiresAt = new Date(Date.now() + DOMAIN_CATCHALL_TTL_MS);
+  prisma.domainCatchAllCache
+    .upsert({
+      where: { domain },
+      create: { domain, isCatchAll, expiresAt },
+      update: { isCatchAll, checkedAt: new Date(), expiresAt },
+    })
+    .catch((err) => logger.warn({ err, domain }, 'Failed to cache domain catch-all status'));
+}
 
 /**
  * Probe a domain's MX hosts in priority order, stopping at the first one
@@ -74,19 +104,21 @@ async function localProbe(email: string, domain: string, mxHost: string): Promis
     return notChecked(`Cannot connect to ${mxHost} on port 25 or 587`);
   }
 
-  // The target probe and the catch-all probe are independent connections to
-  // the same mxHost — there is no reason for the second to wait on the
-  // first. Firing both at once roughly halves wall-clock latency for every
-  // accepted address (measured live: ~16s sequential -> ~8s parallel), which
-  // is where most of a bulk job's runtime goes, since EMAIL_CONCURRENCY
-  // chunks are gated on the slowest email in the batch. The catch-all
-  // result is simply unused below whenever the target probe didn't accept
-  // (greylisted / connection failed / rejected) — nothing to fall back on
-  // detecting a catch-all for an address that isn't itself reachable.
+  // Skip the live catch-all probe entirely when we already know this
+  // domain's answer — this is the common case for any bulk list clustered
+  // by company domain (a Finder-sourced lead list, a company's own contact
+  // export), since only the first email at a given domain ever needs to
+  // pay for it. When we do still need it, it's an independent connection
+  // to the same mxHost with no ordering dependency on the target probe, so
+  // it runs in parallel rather than after (measured live: ~16s sequential
+  // -> ~8s parallel for the cache-miss case) — this is where most of a
+  // bulk job's runtime goes, since EMAIL_CONCURRENCY chunks are gated on
+  // the slowest email in the batch.
+  const cachedCatchAll = await getDomainCatchAll(domain);
   const catchAllAddr = `${CATCHALL_PROBE_LOCAL}@${domain}`;
   const [targetResult, catchAllResult] = await Promise.all([
     probeAddress(email, mxHost, port),
-    probeAddress(catchAllAddr, mxHost, port),
+    cachedCatchAll !== null ? Promise.resolve(null) : probeAddress(catchAllAddr, mxHost, port),
   ]);
 
   if (!targetResult.connected) {
@@ -115,7 +147,14 @@ async function localProbe(email: string, domain: string, mxHost: string): Promis
     };
   }
 
-  const isCatchAll = catchAllResult.connected && catchAllResult.accepted && !catchAllResult.greylisted;
+  const isCatchAll = cachedCatchAll !== null
+    ? cachedCatchAll
+    : (catchAllResult!.connected && catchAllResult!.accepted && !catchAllResult!.greylisted);
+
+  if (cachedCatchAll === null) {
+    // Fire-and-forget — never let a slow cache write hold up the response.
+    setDomainCatchAll(domain, isCatchAll);
+  }
 
   return {
     checked:     true,
