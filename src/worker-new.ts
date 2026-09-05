@@ -4,7 +4,8 @@ import { startWarmupWorker, scheduleWarmupTicks } from './workers/warmupWorker.j
 import { startImapWorker, scheduleImapTicks } from './workers/imapWorker.js';
 import { runAutomationWorker } from './workers/automationWorker.js';
 import { startSalesforceSyncWorker, scheduleSalesforceSyncTicks } from './workers/salesforceSyncWorker.js';
-import { sequenceQueue, warmupQueue, imapQueue, salesforceSyncQueue } from './lib/queue.js';
+import { startDomainVerifyWorker, scheduleDomainVerifyTicks } from './workers/domainVerifyWorker.js';
+import { sequenceQueue, warmupQueue, imapQueue, salesforceSyncQueue, domainVerifyQueue } from './lib/queue.js';
 import { isSalesforceOAuthConfigured } from './lib/oauth/salesforce.js';
 
 const closable: Array<{ close(): Promise<void> }> = [];
@@ -15,6 +16,17 @@ closable.push(startSequenceWorker());
 // Schedule recurring sequence ticks (every 5 minutes) — idempotent, safe to call on every restart
 void scheduleSequenceTicks(sequenceQueue).catch((err: unknown) => {
   console.error('[worker-new] failed to schedule sequence ticks:', err);
+});
+
+// Unconditional (not feature-flagged like warmup/IMAP below) — every
+// customer with a sending domain needs this recheck, not just an opt-in
+// subset. Without a real background recheck, a pending domain only ever
+// moves to verified if the customer manually clicks Re-verify again later
+// — DKIM verification is Amazon SES polling on its own schedule, which can
+// take minutes to hours after the DNS record is already live and correct.
+closable.push(startDomainVerifyWorker());
+void scheduleDomainVerifyTicks(domainVerifyQueue).catch((err: unknown) => {
+  console.error('[worker-new] failed to schedule domain verify ticks:', err);
 });
 
 if (process.env['WARMUP_POOL_ENABLED'] === 'true') {

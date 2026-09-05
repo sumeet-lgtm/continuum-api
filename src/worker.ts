@@ -9,7 +9,8 @@ import { startWarmupWorker, scheduleWarmupTicks } from './workers/warmupWorker.j
 import { startImapWorker, scheduleImapTicks } from './workers/imapWorker.js';
 import { startDailyChecksWorker, scheduleDailyChecks, QUEUE_DAILY } from './workers/scheduledChecks.js';
 import { startSalesforceSyncWorker, scheduleSalesforceSyncTicks } from './workers/salesforceSyncWorker.js';
-import { QUEUE_SEQUENCE, QUEUE_WARMUP, QUEUE_IMAP, QUEUE_SALESFORCE_SYNC, closeQueues, redisConnection } from './lib/queue.js';
+import { startDomainVerifyWorker, scheduleDomainVerifyTicks } from './workers/domainVerifyWorker.js';
+import { QUEUE_SEQUENCE, QUEUE_WARMUP, QUEUE_IMAP, QUEUE_SALESFORCE_SYNC, QUEUE_DOMAIN_VERIFY, closeQueues, redisConnection } from './lib/queue.js';
 import { isSalesforceOAuthConfigured } from './lib/oauth/salesforce.js';
 import { Queue } from 'bullmq';
 import { disconnectPrisma } from './lib/prisma.js';
@@ -29,6 +30,13 @@ async function main(): Promise<void> {
 
   const sequenceQueue = new Queue(QUEUE_SEQUENCE, { connection: redisConnection });
   await scheduleSequenceTicks(sequenceQueue);
+
+  // Unconditional (not feature-flagged like warmup/IMAP below) — every
+  // customer with a sending domain needs this, not just an opt-in subset.
+  closable.push(startDomainVerifyWorker());
+  const domainVerifyQueue = new Queue(QUEUE_DOMAIN_VERIFY, { connection: redisConnection });
+  await scheduleDomainVerifyTicks(domainVerifyQueue);
+  logger.info('Domain verify worker started');
 
   if (process.env['WARMUP_POOL_ENABLED'] === 'true') {
     closable.push(startWarmupWorker());

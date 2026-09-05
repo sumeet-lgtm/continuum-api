@@ -33,6 +33,7 @@ export const QUEUE_IMAP = 'continuum-imap';
 export const QUEUE_SEND = 'continuum-send';
 export const QUEUE_DISPOSABLE_LIST = 'continuum-disposable-list';
 export const QUEUE_SALESFORCE_SYNC = 'continuum-salesforce-sync';
+export const QUEUE_DOMAIN_VERIFY = 'continuum-domain-verify';
 
 // ─── Queue instances ──────────────────────────────────────────────────────────
 // Queues are lightweight producers — instantiated in the API server.
@@ -134,6 +135,15 @@ export const salesforceSyncQueue = new Queue(QUEUE_SALESFORCE_SYNC, {
   },
 });
 
+export const domainVerifyQueue = new Queue(QUEUE_DOMAIN_VERIFY, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 1,
+    removeOnComplete: { count: 20, age: 86400 },
+    removeOnFail: { count: 20, age: 604800 },
+  },
+});
+
 /**
  * Gracefully close all queue connections.
  * Call this during server shutdown.
@@ -143,6 +153,6 @@ export async function closeQueues(): Promise<void> {
     bulkQueue.close(), monitorQueue.close(), webhookQueue.close(),
     campaignQueue.close(), sequenceQueue.close(), warmupQueue.close(),
     imapQueue.close(), sendQueue.close(), disposableListQueue.close(),
-    salesforceSyncQueue.close(),
+    salesforceSyncQueue.close(), domainVerifyQueue.close(),
   ]);
 }

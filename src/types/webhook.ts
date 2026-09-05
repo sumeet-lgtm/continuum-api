@@ -23,7 +23,9 @@ export type WebhookEventV2 =
   | 'campaign.sent'
   | 'campaign.failed'
   | 'campaign.paused_bounce'
-  | 'campaign.paused_quota';
+  | 'campaign.paused_quota'
+  // Domain verification
+  | 'domain.verified';
 
 // Legacy aliases (Phase 1-4 code paths still emit these)
 export type WebhookEventLegacy =
@@ -48,6 +50,7 @@ export const ALL_WEBHOOK_EVENTS: WebhookEvent[] = [
   'campaign.failed',
   'campaign.paused_bounce',
   'campaign.paused_quota',
+  'domain.verified',
   // Legacy aliases
   'verification_complete',
   'bulk_job_complete',
@@ -82,6 +85,7 @@ export type WebhookEventPayload =
   | CampaignFailedPayload
   | CampaignPausedBouncePayload
   | CampaignPausedQuotaPayload
+  | DomainVerifiedPayload
   // Legacy aliases
   | VerificationCompletePayload
   | BulkJobCompletePayload
@@ -306,6 +310,16 @@ export interface CampaignPausedQuotaPayload {
   event:       'campaign.paused_quota';
   campaign_id: string;
   apiVersion:  '2';
+}
+
+/** domain.verified — fired once, the moment SPF+DKIM+DMARC all pass, whether
+ *  that happens via a manual POST /v1/domains/:id/verify call or the
+ *  periodic background recheck (domainVerifyWorker.ts) picking it up. */
+export interface DomainVerifiedPayload {
+  event:      'domain.verified';
+  domain_id:  string;
+  domain:     string;
+  apiVersion: '2';
 }
 
 // ─── Dispatch helper input ────────────────────────────────────────────────────

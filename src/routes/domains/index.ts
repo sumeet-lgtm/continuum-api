@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { SESv2Client, CreateEmailIdentityCommand, DeleteEmailIdentityCommand, GetEmailIdentityCommand } from '@aws-sdk/client-sesv2';
+import { SESv2Client, CreateEmailIdentityCommand, DeleteEmailIdentityCommand } from '@aws-sdk/client-sesv2';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { logAudit } from '../../lib/audit.js';
@@ -10,6 +10,7 @@ import { generateDkimKeyPair, dnsPublicKeyValue } from '../../lib/dkim.js';
 import { getDomainHealth } from '../../lib/deliverability.js';
 import { checkDomainBlacklists } from '../../engine/deliverability.js';
 import { config } from '../../config.js';
+import { verifyDomain } from '../../lib/domainVerify.js';
 
 let _sesClient: SESv2Client | null = null;
 function getSesClient(region: string): SESv2Client {
@@ -169,35 +170,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const domain = await prisma.sendingDomain.findFirst({ where: { id, apiKeyId } });
       if (!domain) throw Errors.notFound('Domain not found.');
 
-      const health = await getDomainHealth(domain.name, domain.dkimStatus === 'verified');
-
-      // Also check SES verification status if AWS is configured
-      let sesDkimVerified = domain.dkimStatus === 'verified';
-      if (config.AWS_ACCESS_KEY_ID && config.AWS_SECRET_ACCESS_KEY) {
-        try {
-          const ses = getSesClient(domain.region);
-          const sesIdentity = await ses.send(new GetEmailIdentityCommand({ EmailIdentity: domain.name }));
-          const dkimStatus = sesIdentity.DkimAttributes?.Status;
-          if (dkimStatus === 'SUCCESS') sesDkimVerified = true;
-        } catch { /* SES domain may not be registered yet */ }
-      }
-
-      const allVerified = health.spf.valid && (health.dkim.valid || sesDkimVerified) && health.dmarc.valid;
-
-      const updated = await prisma.sendingDomain.update({
-        where: { id },
-        data: {
-          spfStatus: health.spf.valid ? 'verified' : 'pending',
-          dkimStatus: (health.dkim.valid || sesDkimVerified) ? 'verified' : 'pending',
-          status: allVerified ? 'verified' : 'pending',
-          ...(allVerified ? { verifiedAt: new Date() } : {}),
-        },
-        select: { id: true, name: true, status: true, spfStatus: true, dkimStatus: true, returnPathStatus: true, verifiedAt: true },
-      });
-
-      if (allVerified && !domain.verifiedAt) {
-        void logAudit(null, 'sending_domain.verified', { id: apiKeyId, email: 'api', ip: (request.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ?? request.ip }, [{ type: 'domain', id: domain.id, name: domain.name }], apiKeyId);
-      }
+      const { updated, health } = await verifyDomain(domain);
 
       return reply.status(200).send({ ...updated, health });
     },
