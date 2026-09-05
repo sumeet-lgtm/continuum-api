@@ -67,6 +67,7 @@ function isWithinSendWindow(sequence: { sendDays: string[]; sendStartHour: numbe
 
 export async function processSequenceTick(): Promise<void> {
   const now = new Date();
+  logger.info({ now: now.toISOString() }, 'Sequence tick starting');
 
   // Find all enrollments due for their next send
   const dueEnrollments = await prisma.sequenceEnrollment.findMany({
@@ -83,6 +84,7 @@ export async function processSequenceTick(): Promise<void> {
     },
     take: 100, // Process 100 per tick
   });
+  logger.info({ dueCount: dueEnrollments.length }, 'Sequence tick found due enrollments');
 
   // Suppression is shared across every send surface (transactional, campaigns,
   // sequences) precisely so an unsubscribe or bounce on ONE channel protects
@@ -375,6 +377,8 @@ export async function processSequenceTick(): Promise<void> {
       logger.error({ err, enrollmentId: enrollment.id, email: enrollment.email }, 'Sequence step send failed');
     }
   }
+
+  logger.info({ processed: dueEnrollments.length }, 'Sequence tick complete');
 }
 
 export function startSequenceWorker(): Worker {
