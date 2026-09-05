@@ -1194,7 +1194,7 @@ function CampaignsPage() {
                       <div className="text-xs text-muted-foreground">{c.fromName} &lt;{c.fromEmail}&gt;</div>
                     </td>
                     <td className="px-5 py-3">
-                      <StatusBadge status={c.status}>{c.status === "paused_bounce" ? "Paused – High Bounce" : undefined}</StatusBadge>
+                      <StatusBadge status={c.status}>{c.status === "paused_bounce" ? "Paused – High Bounce" : c.status === "paused_quota" ? "Paused – Send Quota Reached" : undefined}</StatusBadge>
                     </td>
                     <td className="px-5 py-3 tabular-nums">{c.totalRecipients.toLocaleString()}</td>
                     <td className="px-5 py-3 tabular-nums">
@@ -1267,18 +1267,18 @@ function CampaignsPage() {
                             <Users className="h-3 w-3" /> Recipients
                           </Button>
                         )}
-                        {(c.status === "sending" || c.status === "paused_bounce") && (
+                        {(c.status === "sending" || c.status === "paused_bounce" || c.status === "paused_quota") && (
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => openRecipients(c)}>
                             <Users className="h-3 w-3" /> Recipients
                           </Button>
                         )}
-                        {isAB && (c.status === "sending" || c.status === "paused_bounce") && (
+                        {isAB && (c.status === "sending" || c.status === "paused_bounce" || c.status === "paused_quota") && (
                           <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs" onClick={() => pickWinner(c, aWins ? "a" : "b")} disabled={pickingWinner === c.id} title={`Pick ${aWins ? "A" : bWins ? "B" : "a"} as winner`}>
                             <Trophy className="h-3 w-3" /> Pick Winner
                           </Button>
                         )}
-                        {c.status === "paused_bounce" && (
-                          <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs text-[oklch(0.55_0.16_145)] hover:text-[oklch(0.45_0.16_145)]" onClick={() => resumeCampaign(c)} disabled={resumingCampaign === c.id}>
+                        {(c.status === "paused_bounce" || c.status === "paused_quota") && (
+                          <Button size="sm" variant="ghost" className="gap-1 h-7 px-2 text-xs text-[oklch(0.55_0.16_145)] hover:text-[oklch(0.45_0.16_145)]" onClick={() => resumeCampaign(c)} disabled={resumingCampaign === c.id} title={c.status === "paused_quota" ? "Resume once your monthly send quota has more room" : undefined}>
                             <Play className="h-3 w-3" /> Resume
                           </Button>
                         )}
