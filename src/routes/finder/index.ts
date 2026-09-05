@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { bulkQueue } from '../../lib/queue.js';
 import { uploadToStorage } from '../../lib/supabase.js';
 import { getPlanLimit } from '../../plugins/usageMeter.js';
+import { normalizeFinderFilters } from '../../lib/apifyActorSchema.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -196,33 +197,63 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       addArr('personTitleIncludes', body.personTitleIncludes);
       addArr('personTitleExcludes', body.personTitleExcludes);
       addBool('includeTitleVariants', body.includeTitleVariants);
-      addArr('seniorityIncludes', body.seniorityIncludes);
-      addArr('seniorityExcludes', body.seniorityExcludes);
-      addArr('functionIncludes', body.functionIncludes);
-      addArr('functionExcludes', body.functionExcludes);
       addStr('roleMatchMode', body.roleMatchMode);
       addBool('hasEmail', body.hasEmail);
       addBool('hasPhone', body.hasPhone);
-      addArr('personLocationCountryIncludes', body.personLocationCountryIncludes);
-      addArr('personLocationCountryExcludes', body.personLocationCountryExcludes);
-      addArr('personLocationStateIncludes', body.personLocationStateIncludes);
       addArr('personLocationCityIncludes', body.personLocationCityIncludes);
       addArr('companyNameIncludes', body.companyNameIncludes);
       addArr('companyNameExcludes', body.companyNameExcludes);
-      addArr('companyIndustryIncludes', body.companyIndustryIncludes);
-      addArr('companyIndustryExcludes', body.companyIndustryExcludes);
       addArr('companyKeywordIncludes', body.companyKeywordIncludes);
       addArr('companyKeywordExcludes', body.companyKeywordExcludes);
-      addArr('companySizeIncludes', body.companySizeIncludes);
       addNum('companyEmployeeMin', body.companyEmployeeMin);
       addNum('companyEmployeeMax', body.companyEmployeeMax);
       addArr('companyDomainIncludes', body.companyDomainIncludes);
-      addArr('companyLocationCountryIncludes', body.companyLocationCountryIncludes);
-      addArr('companyLocationStateIncludes', body.companyLocationStateIncludes);
       addArr('companyLocationCityIncludes', body.companyLocationCityIncludes);
-      addArr('technologiesIncludes', body.technologiesIncludes);
-      addArr('annualRevenueIncludes', body.annualRevenueIncludes);
-      addArr('fundingStageIncludes', body.fundingStageIncludes);
+
+      // These fields are strict enums on the actor's side (industry, country,
+      // seniority, function, company size, technologies, revenue, funding
+      // stage) — a free-text value that doesn't match exactly used to fail
+      // the whole search with an opaque Apify actor error (this is exactly
+      // what happened investigating the Finder industry-filter gap: typing
+      // "SaaS" instead of the actor's "Computer Software" broke the search
+      // with no useful message). Normalize against the actor's real,
+      // live-fetched enum list instead of forwarding raw user input.
+      const { actorInput: normalizedInput, rejectedByField, droppedByField } = await normalizeFinderFilters({
+        seniorityIncludes: body.seniorityIncludes,
+        seniorityExcludes: body.seniorityExcludes,
+        functionIncludes: body.functionIncludes,
+        functionExcludes: body.functionExcludes,
+        personLocationCountryIncludes: body.personLocationCountryIncludes,
+        personLocationCountryExcludes: body.personLocationCountryExcludes,
+        personLocationStateIncludes: body.personLocationStateIncludes,
+        companyIndustryIncludes: body.companyIndustryIncludes,
+        companyIndustryExcludes: body.companyIndustryExcludes,
+        companySizeIncludes: body.companySizeIncludes,
+        companyLocationCountryIncludes: body.companyLocationCountryIncludes,
+        companyLocationStateIncludes: body.companyLocationStateIncludes,
+        technologiesIncludes: body.technologiesIncludes,
+        annualRevenueIncludes: body.annualRevenueIncludes,
+        fundingStageIncludes: body.fundingStageIncludes,
+      });
+
+      if (Object.keys(rejectedByField).length > 0) {
+        const details = Object.entries(rejectedByField).map(([field, { invalid, validSample, totalValid }]) => ({
+          field,
+          message: `"${invalid.join('", "')}" ${invalid.length > 1 ? "aren't" : "isn't"} a recognized value for ${field}. Examples of valid values (${totalValid} total): ${validSample.join(', ')}${totalValid > validSample.length ? ', …' : ''}`,
+        }));
+        // A custom top-level message (not the generic validationFailed one) —
+        // the frontend surfaces error.message directly in a toast and
+        // doesn't currently read the structured `details` array, so the
+        // per-field explanation needs to be in the message itself to
+        // actually reach the user instead of just sitting in the API
+        // response for programmatic consumers.
+        throw new AppError(422, 'VALIDATION_FAILED', details.map((d) => d.message).join(' '), details);
+      }
+
+      for (const [field, values] of Object.entries(normalizedInput)) {
+        actorInput[field] = values;
+      }
+      const droppedFields = Object.keys(droppedByField);
 
       const runRes = await fetch(
         `https://api.apify.com/v2/acts/${actorId}/runs?token=${token}`,
@@ -249,6 +280,7 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
         totalResultsRequested: body.totalResults ?? 100,
         totalResultsUsed: totalResults,
         cappedByQuota: totalResults < Math.min(Math.max(body.totalResults ?? 100, 1), 2500),
+        ...(droppedFields.length > 0 ? { droppedFilterValues: droppedByField } : {}),
       });
     },
   );
