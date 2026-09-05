@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ─── Mock everything the worker module touches at import time ─────────────────
 
@@ -49,7 +49,7 @@ vi.mock('bullmq', () => ({
   Queue:  vi.fn().mockImplementation(() => ({ add: vi.fn(), close: vi.fn() })),
 }));
 
-import { processSequenceTick } from '../../workers/sequenceWorker.js';
+import { processSequenceTick, isWithinSendWindow } from '../../workers/sequenceWorker.js';
 import { prisma } from '../../lib/prisma.js';
 import { sendViaSes } from '../../lib/ses.js';
 
@@ -202,5 +202,64 @@ describe('processSequenceTick — manual-channel steps (linkedin/task/call)', ()
     expect(mockUpdate).not.toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'awaiting_manual_action' }) }),
     );
+  });
+});
+
+describe('isWithinSendWindow — respects the sequence\'s configured timezone', () => {
+  // Every container clock runs in UTC, so a naive now.getHours()/getDay()
+  // check silently ignored the `timezone` field entirely — a customer's
+  // "9am-5pm America/Los_Angeles" window was actually gated by 9am-5pm UTC
+  // (1am-9am Pacific), the opposite of what they configured. Found live
+  // 2026-09-05 while verifying a real sequence enrollment stalled outside
+  // its (correctly UTC, in that case) send window.
+  const FIXED_INSTANT = '2024-01-10T13:00:00Z'; // Wednesday, 13:00 UTC
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(FIXED_INSTANT));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('treats the window in UTC when timezone is UTC (13:00 UTC is inside 8-17)', () => {
+    const result = isWithinSendWindow({
+      sendDays: ['wednesday'], sendStartHour: 8, sendEndHour: 17, timezone: 'UTC',
+    });
+    expect(result).toBe(true);
+  });
+
+  it('converts to the configured timezone instead of using server-local UTC hour', () => {
+    // 13:00 UTC is 05:00 in America/Los_Angeles (UTC-8 in January) — outside
+    // an 8am-5pm window in that timezone, even though the raw UTC hour (13)
+    // would have passed the old, buggy UTC-only check.
+    const result = isWithinSendWindow({
+      sendDays: ['wednesday'], sendStartHour: 8, sendEndHour: 17, timezone: 'America/Los_Angeles',
+    });
+    expect(result).toBe(false);
+  });
+
+  it('correctly allows a send when the configured timezone\'s local hour is inside the window', () => {
+    // 13:00 UTC is 05:00 in Los Angeles — expand the window to include it.
+    const result = isWithinSendWindow({
+      sendDays: ['wednesday'], sendStartHour: 0, sendEndHour: 12, timezone: 'America/Los_Angeles',
+    });
+    expect(result).toBe(true);
+  });
+
+  it('rejects a send once the configured timezone\'s local hour rolls past sendEndHour', () => {
+    // 13:00 UTC is 18:30 in Asia/Kolkata (UTC+5:30) — past a 17:00 end hour.
+    const result = isWithinSendWindow({
+      sendDays: ['wednesday'], sendStartHour: 8, sendEndHour: 17, timezone: 'Asia/Kolkata',
+    });
+    expect(result).toBe(false);
+  });
+
+  it('falls back to allowed on an invalid timezone string instead of throwing', () => {
+    const result = isWithinSendWindow({
+      sendDays: ['wednesday'], sendStartHour: 8, sendEndHour: 17, timezone: 'Not/ARealZone',
+    });
+    expect(result).toBe(true);
   });
 });

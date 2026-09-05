@@ -49,19 +49,32 @@ async function evaluateCondition(
   return true;
 }
 
-function isWithinSendWindow(sequence: { sendDays: string[]; sendStartHour: number; sendEndHour: number; timezone: string }): boolean {
+// Every container runs its system clock in UTC, so `new Date().getHours()`/
+// `.getDay()` are always UTC regardless of what timezone the customer
+// configured for their sequence. That silently made the `timezone` field
+// pure decoration — a customer in America/New_York setting "9am-5pm" was
+// actually being gated by 9am-5pm UTC (4am-noon Eastern), sending at hours
+// they explicitly tried to avoid. Intl.DateTimeFormat resolves the real
+// wall-clock day/hour in the configured zone without adding a dependency.
+export function isWithinSendWindow(sequence: { sendDays: string[]; sendStartHour: number; sendEndHour: number; timezone: string }): boolean {
   try {
     const now = new Date();
-    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-    const dayName = dayNames[now.getDay()] ?? 'sunday';
-    const hour = now.getHours();
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: sequence.timezone || 'UTC',
+      weekday: 'long',
+      hour: 'numeric',
+      hourCycle: 'h23',
+    }).formatToParts(now);
+    const dayName = (parts.find(p => p.type === 'weekday')?.value ?? 'Sunday').toLowerCase();
+    let hour = Number(parts.find(p => p.type === 'hour')?.value ?? '0');
+    if (hour === 24) hour = 0; // some ICU builds emit "24" for midnight even under h23
 
     const days = sequence.sendDays as string[];
     if (!days.includes(dayName)) return false;
     if (hour < sequence.sendStartHour || hour >= sequence.sendEndHour) return false;
     return true;
   } catch {
-    return true; // Default to allowed
+    return true; // Default to allowed (e.g. an invalid timezone string)
   }
 }
 
