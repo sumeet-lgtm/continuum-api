@@ -341,11 +341,17 @@ function FinderPage() {
     persistSavedSearches(next);
   };
 
-  // Poll for status — handles two phases: searching → verifying → succeeded
+  // Poll for status — handles two phases: searching → verifying → succeeded.
+  // Depend on the raw key STRING, not the primaryKey object — auth-context
+  // recomputes `primaryKey` via apiKeys.find(...) on every AuthProvider
+  // render, and if that ever returns a new object reference (e.g. after any
+  // apiKeys refresh, even with identical data), using the object itself as
+  // a dependency tears the interval down and recreates it before its first
+  // 5s tick ever fires — the poll never advances past the initial call.
+  const apiKeyRaw = primaryKey?.keyRaw;
   useEffect(() => {
-    if ((phase !== "searching" && phase !== "verifying") || !runId) return;
+    if ((phase !== "searching" && phase !== "verifying") || !runId || !apiKeyRaw) return;
     pollRef.current = setInterval(async () => {
-      if (!primaryKey?.keyRaw) return;
       try {
         const data = await api.withKey.get<{
           status: string;
@@ -353,7 +359,7 @@ function FinderPage() {
           verifyJobId?: string;
           progress?: number;
           total?: number;
-        }>(`/v1/finder/jobs/${runId}/status`, primaryKey.keyRaw);
+        }>(`/v1/finder/jobs/${runId}/status`, apiKeyRaw);
 
         if (data.status === "failed") {
           clearInterval(pollRef.current!);
