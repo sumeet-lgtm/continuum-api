@@ -120,6 +120,19 @@ export async function deriveListSegments(
     };
   });
 
+  return { totalContacts, segments: clusterSignals(signals, totalContacts, maxSegments) };
+}
+
+/**
+ * Pure clustering step, shared by every real-signal source (campaign
+ * lists via customFields+Lead enrichment here, sequence enrollments via
+ * Lead/Account directly in sequenceSegments.ts) — the segmentation logic
+ * itself doesn't care where the signal came from, only whether there's
+ * enough of it to build a real segment claim on.
+ */
+export function clusterSignals(signals: ContactSignal[], totalContacts: number, maxSegments: number): CampaignSegment[] {
+  if (totalContacts === 0) return [];
+
   // 1. Industry-based segmentation if enough of the list has it (>= 30%
   //    coverage and at least 2 distinct real values — otherwise industry
   //    data is too sparse to build a real segment claim on).
@@ -133,10 +146,7 @@ export async function deriveListSegments(
 
   if (withIndustry.length / totalContacts >= 0.3 && industryGroups.size >= 2) {
     const sorted = [...industryGroups.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, maxSegments);
-    return {
-      totalContacts,
-      segments: sorted.map(([industry, group]) => buildSegment(industry, group, totalContacts)),
-    };
+    return sorted.map(([industry, group]) => buildSegment(industry, group, totalContacts));
   }
 
   // 2. Seniority-based segmentation from titles, if titles are present
@@ -152,20 +162,14 @@ export async function deriveListSegments(
     }
     const sorted = [...senGroups.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, maxSegments);
     if (sorted.length >= 2) {
-      return {
-        totalContacts,
-        segments: sorted.map(([label, group]) => buildSegment(label, group, totalContacts)),
-      };
+      return sorted.map(([label, group]) => buildSegment(label, group, totalContacts));
     }
   }
 
   // 3. Fallback — not enough structured signal to split meaningfully.
   // One segment, but the summary is honest about what's actually known
   // rather than inventing a fake breakdown.
-  return {
-    totalContacts,
-    segments: [buildSegment('Full list', signals, totalContacts, /* wholeList */ true)],
-  };
+  return [buildSegment('Full list', signals, totalContacts, /* wholeList */ true)];
 }
 
 function buildSegment(label: string, group: ContactSignal[], totalContacts: number, wholeList = false): CampaignSegment {

@@ -3,7 +3,14 @@ import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
-import { Errors } from '../../plugins/errorHandler.js';
+import { Errors, AppError } from '../../plugins/errorHandler.js';
+import { config } from '../../config.js';
+import { logger } from '../../lib/logger.js';
+import { requireMonthlyQuota, incrementUsageBy } from '../../plugins/usageMeter.js';
+import { deriveSequenceSegments } from '../../lib/sequenceSegments.js';
+import { generateSegmentEmail } from '../../lib/emailGenerator.js';
+
+const GROWTH_PLANS = new Set(['growth', 'scale']);
 
 const createSchema = z.object({
   name: z.string().min(1).max(200),
@@ -654,4 +661,71 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(200).send({ completed: true, enrollment: updated });
     },
   );
+
+  // POST /v1/sequences/:id/generate-copy — the same non-slop engine used
+  // by Campaigns (see campaigns/index.ts's generate-copy route and
+  // docs/email-generation-knowledge-base.md), applied here to a
+  // sequence's real enrolled leads instead of a mailing list. Sequences
+  // enroll individual Leads directly, which already carry title/company
+  // and link to Account (industry/employees) — richer, cleaner signal
+  // than Contact.customFields, no heuristic column-name matching needed.
+  const seqGenerateCopySchema = z.object({
+    about: z.string().min(1).max(1000),
+    sender: z.object({
+      name: z.string().max(200).optional(),
+      company: z.string().max(200).optional(),
+      product: z.string().max(200).optional(),
+    }).optional(),
+    tone: z.enum(['professional', 'casual', 'direct', 'technical']).optional(),
+    step_context: z.string().max(300).optional(),
+    // Leads about to be enrolled, for a brand-new sequence with no
+    // enrollments yet — segmentation shouldn't be stuck waiting for the
+    // sequence to already be running before it can say anything real.
+    lead_ids: z.array(z.string()).optional(),
+    max_segments: z.number().int().min(1).max(5).default(3),
+  });
+
+  fastify.post('/sequences/:id/generate-copy', { preHandler: [requireAuth, requireRateLimit, requireMonthlyQuota] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!config.AI_PERSONALIZATION_ENABLED) {
+      throw Errors.forbidden('AI features are not enabled on this account.');
+    }
+    const plan: string = (request.apiKey as { plan?: string }).plan ?? 'free';
+    if (!GROWTH_PLANS.has(plan)) {
+      throw Errors.forbidden('AI sequence copy generation requires a Growth or Scale plan.');
+    }
+    const anthropicKey = config.ANTHROPIC_API_KEY;
+    if (!anthropicKey) throw Errors.serviceUnavailable('AI service');
+
+    const { id } = request.params as { id: string };
+    const apiKeyId = request.apiKey.id;
+    const sequence = await prisma.sequence.findFirst({ where: { id, apiKeyId }, select: { id: true } });
+    if (!sequence) throw Errors.notFound('Sequence not found.');
+
+    const parsed = seqGenerateCopySchema.safeParse(request.body);
+    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+
+    const { about, sender, tone, step_context, lead_ids, max_segments } = parsed.data;
+
+    const { totalContacts, segments } = await deriveSequenceSegments(apiKeyId, id, lead_ids ?? [], max_segments);
+    if (totalContacts === 0) {
+      throw Errors.validationFailed([{ field: 'lead_ids', message: 'This sequence has no enrolled leads yet — pass lead_ids for the leads you plan to enroll so there is a real audience to write for.' }]);
+    }
+
+    try {
+      const emails = await Promise.all(
+        segments.map((segment) => generateSegmentEmail(anthropicKey, { about, sender, tone, segment, stepContext: step_context })),
+      );
+      void incrementUsageBy(apiKeyId, emails.length);
+      return reply.status(200).send({
+        totalContacts,
+        segmentCount: segments.length,
+        emails,
+        model: 'claude-sonnet-5',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'generation failed';
+      logger.error({ err: msg }, 'Sequence copy generation failed');
+      throw new AppError(503, 'SERVICE_UNAVAILABLE', 'Copy generation failed. Please try again.');
+    }
+  });
 }

@@ -34,6 +34,8 @@ export interface GenerateCopyInput {
   };
   tone?: 'professional' | 'casual' | 'direct' | 'technical';
   segment: CampaignSegment;
+  /** Which touch this is in a multi-step sequence, e.g. "step 1 of 5 — the opening spark" or "step 4 of 5 — proof, after two prior touches with no reply". Drives the SPBC framework (knowledge base §5.2): each touch needs a genuinely different angle, not a rephrase. Omit for a single, one-off campaign email. */
+  stepContext?: string;
 }
 
 export interface GeneratedEmail {
@@ -108,10 +110,14 @@ async function draftEmail(apiKey: string, knowledgeBase: string, input: Generate
 
   const system = `${knowledgeBase}\n\n---\n\nYou are generating copy for a real campaign using the rules above. Follow every rule literally, not as inspiration — the banned-word list, banned-opener list, and structural rules in section 2 are hard constraints, not style suggestions.`;
 
+  const stepCtx = input.stepContext
+    ? `\nSequence position: ${input.stepContext}\nThis is one touch in a multi-step sequence, not a standalone email — follow the SPBC framework (section 5.2) and write an angle genuinely specific to this position, not a generic template that could sit at any step.`
+    : '';
+
   const user = `Campaign offer/context: ${input.about}
 ${senderCtx}
 Requested tone: ${input.tone ?? 'match what the audience and awareness stage in the knowledge base call for'}
-
+${stepCtx}
 Target segment (this is the ONLY audience information you have — use it as the concrete grounding fact per section 4 of the knowledge base, do not invent details beyond what's given):
 ${input.segment.signalSummary}
 
