@@ -8,6 +8,7 @@ import { config } from '../../config.js';
 import { Prisma } from '@prisma/client';
 import { bulkQueue } from '../../lib/queue.js';
 import { uploadToStorage } from '../../lib/supabase.js';
+import { getPlanLimit } from '../../plugins/usageMeter.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -155,7 +156,21 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
         totalResults?: number;
       };
 
-      const totalResults = Math.min(Math.max(body.totalResults ?? 100, 1), 2500);
+      // Every scraped row is auto-verified against the caller's own monthly
+      // quota a few polls later (see the /status handler below) — capping
+      // here too means a search can never scrape more than the customer
+      // could actually afford to verify, instead of silently burning Apify
+      // credits on a batch that's mostly going to get rejected downstream.
+      // requireMonthlyQuota only guards routes that list it as a
+      // preHandler; this one intentionally doesn't (a search itself isn't a
+      // verification), so quota has to be read directly here.
+      const quotaLimit = getPlanLimit(request.apiKey.plan, request.apiKey.monthlyLimit);
+      const quotaRemaining = Math.max(0, quotaLimit - (request.apiKey.currentMonthUsage ?? 0));
+      if (quotaRemaining === 0) {
+        throw Errors.quotaExceeded(request.apiKey.currentMonthUsage ?? 0, quotaLimit, 0);
+      }
+
+      const totalResults = Math.min(Math.max(body.totalResults ?? 100, 1), 2500, quotaRemaining);
 
       // Build Pipeline Labs actor input — only include non-empty fields
       const actorInput: Record<string, unknown> = { totalResults };
@@ -280,9 +295,19 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
           );
           if (dsRes.ok) {
             const rows = await dsRes.json() as Record<string, unknown>[];
-            const emails = rows
+            let emails = rows
               .filter((r) => typeof r.email === 'string' && r.email.trim())
               .map((r) => (r.email as string).trim().toLowerCase());
+
+            // The search itself was capped to quota at start time, but a
+            // search can run for a minute or more — other verification
+            // activity on this key in the meantime could have used up what
+            // was available then. Re-check now, at the point real
+            // verification credits are about to be spent, same as the
+            // standard bulk-jobs route does at its own point of spend.
+            const quotaLimit = getPlanLimit(request.apiKey.plan, request.apiKey.monthlyLimit);
+            const quotaRemaining = Math.max(0, quotaLimit - (request.apiKey.currentMonthUsage ?? 0));
+            if (emails.length > quotaRemaining) emails = emails.slice(0, quotaRemaining);
 
             if (emails.length > 0) {
               const csv = `email\n${emails.join('\n')}\n`;
