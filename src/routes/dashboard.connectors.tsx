@@ -500,10 +500,10 @@ function PaymentConnectorCard({
                 {newAction === "send_template" && (
                   <div className="space-y-1">
                     <Label className="text-xs">Template</Label>
-                    <Select value={newTemplateId} onValueChange={setNewTemplateId}>
+                    <Select value={newTemplateId || "__any__"} onValueChange={(v) => setNewTemplateId(v === "__any__" ? "" : v)}>
                       <SelectTrigger className="h-8 text-xs w-44"><SelectValue placeholder="Any template" /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="" className="text-xs">Any matching template</SelectItem>
+                        <SelectItem value="__any__" className="text-xs">Any matching template</SelectItem>
                         {templates.map((t) => <SelectItem key={t.id} value={t.id} className="text-xs">{t.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
@@ -659,10 +659,10 @@ function ConnectorsPage() {
         ) : sequences.length > 0 && (
           <div className="rounded-lg border border-border bg-card p-4 flex items-center gap-3">
             <label className="text-xs text-muted-foreground shrink-0">Auto-enroll incoming leads into</label>
-            <Select value={sequenceId} onValueChange={setSequenceId}>
+            <Select value={sequenceId || "__none__"} onValueChange={(v) => setSequenceId(v === "__none__" ? "" : v)}>
               <SelectTrigger className="max-w-[260px]"><SelectValue placeholder="No sequence (just create leads)" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="">No sequence (just create leads)</SelectItem>
+                <SelectItem value="__none__">No sequence (just create leads)</SelectItem>
                 {sequences.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
               </SelectContent>
             </Select>
@@ -701,10 +701,10 @@ function ConnectorsPage() {
           {lists.length > 0 && (
             <div className="flex items-center gap-2">
               <label className="text-xs text-muted-foreground shrink-0">Subscribe to list (optional)</label>
-              <Select value={listId} onValueChange={setListId}>
+              <Select value={listId || "__none__"} onValueChange={(v) => setListId(v === "__none__" ? "" : v)}>
                 <SelectTrigger className="max-w-[220px]"><SelectValue placeholder="None" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None</SelectItem>
+                  <SelectItem value="__none__">None</SelectItem>
                   {lists.map((l) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
                 </SelectContent>
               </Select>

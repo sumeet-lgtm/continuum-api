@@ -482,12 +482,12 @@ function ImportPage() {
               {/* Add to list */}
               <div className="space-y-1.5">
                 <Label htmlFor="list-select">Add to list (optional)</Label>
-                <Select value={listId} onValueChange={setListId}>
+                <Select value={listId || "__none__"} onValueChange={(v) => setListId(v === "__none__" ? "" : v)}>
                   <SelectTrigger id="list-select" className="w-72">
                     <SelectValue placeholder="None (contacts only)" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">None (contacts only)</SelectItem>
+                    <SelectItem value="__none__">None (contacts only)</SelectItem>
                     {lists.map((l) => (
                       <SelectItem key={l.id} value={l.id}>
                         {l.name}
