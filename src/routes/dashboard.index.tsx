@@ -236,7 +236,7 @@ function Overview() {
         <PillarCard
           to="/dashboard/verify"
           icon={ShieldCheck}
-          label="Verification"
+          label="Email Verifier"
           main={verifUsed}
           mainSuffix=" verified"
           sub={validPct !== null ? `${validPct}% deliverable` : "No checks yet"}
@@ -254,7 +254,7 @@ function Overview() {
         <PillarCard
           to="/dashboard/campaigns"
           icon={Megaphone}
-          label="Nurture"
+          label="Nurture & Newsletters"
           main={campaignStats.length}
           mainSuffix=" campaigns"
           sub={avgOpenRate !== null ? `${avgOpenRate}% avg open rate` : "No campaigns yet"}
@@ -263,7 +263,7 @@ function Overview() {
         <PillarCard
           to="/dashboard/sequences"
           icon={GitBranch}
-          label="Outbound"
+          label="Cold Email"
           main={totalEnrolled}
           mainSuffix=" prospects"
           sub={avgReplyRate !== null ? `${avgReplyRate}% reply rate` : "No sequences yet"}
@@ -272,7 +272,7 @@ function Overview() {
         <PillarCard
           to="/dashboard/leads"
           icon={Users}
-          label="Finder"
+          label="Lead Finder"
           main={totalLeads}
           mainSuffix=" leads"
           sub="in CRM"
