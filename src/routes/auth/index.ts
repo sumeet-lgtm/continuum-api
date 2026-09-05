@@ -99,23 +99,38 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       const workosUser = authResult.user;
       const workosOrgId = (authResult as unknown as Record<string, unknown>).organizationId as string | undefined;
 
-      // Upsert user by WorkOS ID
-      const user = await prisma.user.upsert({
-        where: { workosId: workosUser.id },
-        create: {
-          email: workosUser.email,
-          workosId: workosUser.id,
-          firstName: workosUser.firstName ?? null,
-          lastName: workosUser.lastName ?? null,
-          orgId: workosOrgId ?? null,
-        },
-        update: {
-          email: workosUser.email,
-          firstName: workosUser.firstName ?? null,
-          lastName: workosUser.lastName ?? null,
-          ...(workosOrgId ? { orgId: workosOrgId } : {}),
-        },
-      });
+      // Find the user by WorkOS ID first (the common case), falling back to
+      // email — WorkOS can hand back a different user id for the same person
+      // across sign-ins (e.g. they used Google last time, Microsoft this
+      // time, and automatic account linking isn't configured on every
+      // connection). Without this fallback, upserting on workosId alone
+      // tries to INSERT a second row with the same email and dies on the
+      // unique constraint instead of just linking the new workosId to the
+      // existing account.
+      const existingUser =
+        (await prisma.user.findUnique({ where: { workosId: workosUser.id } })) ??
+        (await prisma.user.findUnique({ where: { email: workosUser.email } }));
+
+      const user = existingUser
+        ? await prisma.user.update({
+            where: { id: existingUser.id },
+            data: {
+              email: workosUser.email,
+              workosId: workosUser.id,
+              firstName: workosUser.firstName ?? null,
+              lastName: workosUser.lastName ?? null,
+              ...(workosOrgId ? { orgId: workosOrgId } : {}),
+            },
+          })
+        : await prisma.user.create({
+            data: {
+              email: workosUser.email,
+              workosId: workosUser.id,
+              firstName: workosUser.firstName ?? null,
+              lastName: workosUser.lastName ?? null,
+              orgId: workosOrgId ?? null,
+            },
+          });
 
       // Capture org membership if user authenticated via an org SSO
       let orgRole: string | undefined;
