@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { isFreeEmailProvider } from './lookalike.js';
 import { prisma } from '../lib/prisma.js';
+import { redis } from '../lib/redis.js';
 
 const CATCHALL_PROBE_LOCAL = 'cnt-probe-v1-xq7z2k9m';
 const SMTP_PORT = 25;
@@ -66,6 +67,29 @@ export async function smtpProbeWithFallback(
   return last;
 }
 
+// Found live: SMTP_PROBE_URL points at a relay VPS that was down, and every
+// single verification was still paying its full 15s connect-timeout tax
+// (via remoteProbe below) before ever falling through to localProbe or the
+// paid-provider fallback — a "relay down" outage was silently costing
+// 15s on 100% of traffic, not just failing gracefully. This circuit
+// breaker remembers a relay outage for a short window so the 10,000th
+// verification during an outage skips straight past the dead relay
+// instead of re-discovering it's dead one more time.
+const RELAY_DOWN_KEY = 'smtp:relay_down';
+const RELAY_DOWN_TTL_SECONDS = 60;
+
+async function isRelayMarkedDown(): Promise<boolean> {
+  try {
+    return (await redis.get(RELAY_DOWN_KEY)) !== null;
+  } catch {
+    return false; // Redis itself unavailable — don't let that also disable the relay
+  }
+}
+
+function markRelayDown(): void {
+  redis.set(RELAY_DOWN_KEY, '1', { px: RELAY_DOWN_TTL_SECONDS * 1000 }).catch(() => {});
+}
+
 export async function smtpProbe(
   email: string,
   mxHost: string,
@@ -77,9 +101,14 @@ export async function smtpProbe(
   const domain = email.split('@')[1] ?? '';
   if (!domain) return notChecked('Could not extract domain from email');
 
-  const result = config.SMTP_PROBE_URL
+  const useRelay = config.SMTP_PROBE_URL && !(await isRelayMarkedDown());
+  const result = useRelay
     ? await remoteProbe(email, mxHost)
     : await localProbe(email, domain, mxHost);
+
+  if (result.error === 'relay_unreachable') {
+    markRelayDown();
+  }
 
   // Major consumer webmail providers (Gmail chief among them) commonly
   // accept RCPT TO for almost any syntactically valid local-part and only
