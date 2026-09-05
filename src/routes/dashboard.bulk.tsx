@@ -127,14 +127,19 @@ function RiskBreakdown({ results }: { results: BulkRow[] }) {
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Risk Flags</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
           {[
-            { icon: Trash2,      label: "Disposable",   count: disposable,  color: "text-rose-500" },
-            { icon: Building2,   label: "Catch-all",    count: catchAll,    color: "text-amber-500" },
-            { icon: WifiOff,     label: "Role account", count: roleAccount, color: "text-orange-500" },
-            { icon: ShieldAlert, label: "SPF fail",     count: spfFail,     color: "text-violet-500" },
-            { icon: ShieldAlert, label: "DMARC fail",   count: dmarcFail,   color: "text-purple-500" },
-            { icon: XCircle,     label: "Blacklisted",  count: blacklisted, color: "text-red-600" },
-          ].map(({ icon: Icon, label, count: c, color }) => (
-            <div key={label} className="rounded-md border border-border bg-muted/30 px-3 py-2.5 flex flex-col gap-0.5">
+            // Plain-language labels with the technical term as a hover
+            // tooltip, not the headline — "Catch-all" read as unexplained
+            // jargon here even though Single Verify already spells out
+            // exactly this same flag in full ("Unconfirmable — corporate
+            // domain... Person may have left — send at your own risk.").
+            { icon: Trash2,      label: "Temporary email",    count: disposable,  color: "text-rose-500",   title: "Disposable address — likely used once and abandoned" },
+            { icon: Building2,   label: "Can't confirm",      count: catchAll,    color: "text-amber-500",  title: "Catch-all domain — the mail server accepts every address, so we can't confirm this specific mailbox exists" },
+            { icon: WifiOff,     label: "Shared inbox",       count: roleAccount, color: "text-orange-500", title: "Role account (info@, support@, etc.) — often low engagement" },
+            { icon: ShieldAlert, label: "Sender not verified", count: spfFail,     color: "text-violet-500", title: "SPF check failed — the sending domain doesn't authorize this mail server" },
+            { icon: ShieldAlert, label: "No fraud protection", count: dmarcFail,   color: "text-purple-500", title: "DMARC check failed — the domain has no anti-spoofing policy in place" },
+            { icon: XCircle,     label: "On spam blocklists",  count: blacklisted, color: "text-red-600",    title: "This IP or domain is flagged by major email blocklist providers" },
+          ].map(({ icon: Icon, label, count: c, color, title }) => (
+            <div key={label} title={title} className="rounded-md border border-border bg-muted/30 px-3 py-2.5 flex flex-col gap-0.5">
               <div className="flex items-center gap-1.5">
                 <Icon className={`h-3.5 w-3.5 ${c > 0 ? color : "text-muted-foreground"}`} />
                 <span className="text-xs text-muted-foreground">{label}</span>
