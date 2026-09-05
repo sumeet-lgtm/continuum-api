@@ -64,14 +64,34 @@ function DomainsPage() {
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
+    // GET /v1/domains returns { data: Domain[] } — this read r.domains,
+    // which the API has never sent, so the list silently fell back to []
+    // on every load after the initial add. A customer would see their
+    // just-added domain once (from the POST response), then it would
+    // vanish on the next page visit with no error, no indication anything
+    // was wrong — just an empty list where their domain used to be.
     api.withKey
-      .get<{ domains: Domain[] }>("/v1/domains", primaryKey.keyRaw)
-      .then((r) => setDomains(r.domains ?? []))
+      .get<{ data: Domain[] }>("/v1/domains", primaryKey.keyRaw)
+      .then((r) => setDomains(r.data ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); }, [primaryKey]);
+
+  // Light polling while any domain is still pending — DKIM verification is
+  // Amazon SES polling on its own schedule (minutes to hours after the DNS
+  // record is already live), and the backend now rechecks every 15 minutes
+  // on its own (domainVerifyWorker.ts) — but a customer watching this page
+  // shouldn't have to keep clicking Re-verify themselves to see the result
+  // land. Only polls while it matters, and stops as soon as nothing is
+  // pending anymore.
+  useEffect(() => {
+    if (!domains.some((d) => d.status === "pending")) return;
+    const interval = setInterval(load, 30_000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [domains.map((d) => d.status).join(",")]);
 
   const copyDns = async (key: string, value: string) => {
     await navigator.clipboard.writeText(value).catch(() => {});
@@ -271,7 +291,7 @@ function DomainsPage() {
             <Label>Domain name</Label>
             <Input placeholder="mail.yourapp.com" value={domainName} onChange={(e) => setDomainName(e.target.value)} />
           </div>
-          <p className="text-xs text-muted-foreground">We'll generate DKIM keys and return DNS records to add to your registrar. Verification happens automatically once DNS propagates.</p>
+          <p className="text-xs text-muted-foreground">We'll generate DKIM keys and return DNS records to add to your registrar. We recheck automatically every 15 minutes once you've added them — DKIM specifically can take a few minutes to a few hours to clear even after the DNS record is live, since that check runs on Amazon's own schedule, not ours.</p>
           <div className="flex gap-2">
             <Button onClick={add} disabled={saving}>{saving ? "Adding…" : "Add Domain"}</Button>
             <Button variant="outline" onClick={() => setAdding(false)}>Cancel</Button>
