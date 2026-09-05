@@ -391,8 +391,11 @@ function FinderPage() {
     payload.hasEmail = hasEmail;
 
     try {
-      const data = await api.post<{ runId: string }>("/v1/finder/search", payload);
+      const data = await api.post<{ runId: string; totalResultsUsed: number; cappedByQuota: boolean }>("/v1/finder/search", payload);
       setRunId(data.runId);
+      if (data.cappedByQuota) {
+        toast.warning(`Searching for ${data.totalResultsUsed} results instead of ${totalResults} — that's what's left of your monthly verification quota.`);
+      }
     } catch (err: unknown) {
       toast.error((err as { message?: string }).message ?? "Failed to start search.");
       setPhase("idle");
