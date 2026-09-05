@@ -132,7 +132,11 @@ interface Campaign {
 }
 
 interface MailingList { id: string; name: string; }
-interface EmailTemplate { id: string; name: string; subject: string; htmlBody: string; }
+// GET /v1/templates (the list this dropdown is populated from) never
+// returns htmlBody/textBody/preheader at all — only id/name/subject — so
+// they're typed optional here and fetched on demand when a template is
+// actually selected (see the onChange handler below).
+interface EmailTemplate { id: string; name: string; subject: string; htmlBody?: string; textBody?: string; preheader?: string; }
 interface Segment { id: string; name: string; }
 interface SendingDomain { id: string; name: string; status: string; }
 interface CampaignHealth {
@@ -872,9 +876,25 @@ function CampaignsPage() {
               <select
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 defaultValue=""
-                onChange={(e) => {
+                onChange={async (e) => {
                   const t = templates.find((x) => x.id === e.target.value);
-                  if (t) setForm((f) => ({ ...f, subject: t.subject, htmlBody: t.htmlBody }));
+                  if (!t || !primaryKey?.keyRaw) return;
+                  // The list this dropdown is populated from never carries
+                  // htmlBody — fetch the one template's full content on
+                  // selection rather than bloating every list response with
+                  // every template's full HTML.
+                  try {
+                    const full = await api.withKey.get<{ subject: string; htmlBody: string; textBody: string | null; preheader: string | null }>(`/v1/templates/${t.id}`, primaryKey.keyRaw);
+                    setForm((f) => ({
+                      ...f,
+                      subject: full.subject,
+                      htmlBody: full.htmlBody,
+                      textBody: full.textBody ?? f.textBody,
+                      preheader: full.preheader ?? f.preheader,
+                    }));
+                  } catch (err: unknown) {
+                    toast.error((err as Error).message ?? 'Failed to load template');
+                  }
                 }}
               >
                 <option value="">— pick a saved template —</option>
