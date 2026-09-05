@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useAuth, type ContinuumApiKey } from "@/lib/auth-context";
 
 // Compatibility shim — maps new auth shape to old shape that existing pages expect
@@ -37,8 +38,13 @@ function mapKey(k: ContinuumApiKey): ApiKey {
 
 export function useApiKey() {
   const { primaryKey, loading } = useAuth();
+  // mapKey() must stay referentially stable across renders when primaryKey
+  // hasn't changed -- otherwise every effect/useCallback keyed on `apiKey`
+  // (several dashboard pages do this) re-fires every render, in a loop that
+  // never settles since each fetch's state update triggers the next render.
+  const apiKey = useMemo(() => (primaryKey ? mapKey(primaryKey) : null), [primaryKey]);
   return {
-    apiKey: primaryKey ? mapKey(primaryKey) : null,
+    apiKey,
     loading,
     error: null,
     refetch: async () => {},
