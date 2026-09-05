@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Users, Trash2, Leaf, X, ChevronDown, AlertTriangle, CheckCircle2, Clock, Ban, Upload, FileText, ArrowRight } from "lucide-react";
+import { Plus, Users, Trash2, Leaf, X, ChevronDown, AlertTriangle, CheckCircle2, Clock, Ban, Upload, FileText, ArrowRight, ShieldCheck } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/lists")({
   head: () => ({ meta: [{ title: "Mailing Lists — Continuum API" }] }),
@@ -254,6 +254,100 @@ function ListHygieneModal({
   );
 }
 
+interface PreflightReport {
+  total: number;
+  breakdown: { likely_deliverable: number; risky: number; likely_bounce: number; suppressed: number; unknown: number };
+  suppressed_reasons: Record<string, number>;
+  sample_risky: string[];
+}
+
+const PREFLIGHT_META: Record<keyof PreflightReport["breakdown"], { label: string; color: string; icon: React.ReactNode }> = {
+  likely_deliverable: { label: "Likely to deliver", color: "text-[oklch(0.55_0.16_145)]", icon: <CheckCircle2 className="h-4 w-4" /> },
+  risky:               { label: "Risky (can't confirm)", color: "text-[oklch(0.65_0.16_75)]", icon: <AlertTriangle className="h-4 w-4" /> },
+  likely_bounce:       { label: "Likely to bounce", color: "text-[oklch(0.58_0.22_27)]", icon: <Ban className="h-4 w-4" /> },
+  suppressed:          { label: "Already suppressed", color: "text-[oklch(0.58_0.22_27)]", icon: <Ban className="h-4 w-4" /> },
+  unknown:             { label: "Not yet checked", color: "text-muted-foreground", icon: <Clock className="h-4 w-4" /> },
+};
+
+function PreflightModal({ list, apiKey, onClose }: { list: MailingList; apiKey: string; onClose: () => void }) {
+  const [report, setReport] = useState<PreflightReport | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.withKey.post<PreflightReport>("/v1/preflight", { list_id: list.id }, apiKey)
+      .then(setReport)
+      .catch((e: unknown) => toast.error((e as Error).message))
+      .finally(() => setLoading(false));
+    // Runs once per open — this reads existing data, it doesn't spend any
+    // verification credits, but there's still no reason to refire it every
+    // render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [list.id]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="rounded-lg border border-border bg-card w-full max-w-lg shadow-xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <div>
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-muted-foreground" /> Deliverability Check
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">{list.name} · {list.contactCount.toLocaleString()} subscribers</p>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Checking against our verification cache and suppression list…</p>
+          ) : !report ? (
+            <p className="text-sm text-muted-foreground">Couldn't load a report.</p>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Based on what we already know for this list — no new verification credits spent. Addresses we've never checked show as "not yet checked," not guessed at.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                {(Object.keys(PREFLIGHT_META) as Array<keyof PreflightReport["breakdown"]>).map((key) => {
+                  const meta = PREFLIGHT_META[key];
+                  const count = report.breakdown[key];
+                  const pct = report.total > 0 ? Math.round((count / report.total) * 100) : 0;
+                  return (
+                    <div key={key} className="rounded-lg border border-border p-3 space-y-1">
+                      <div className={`flex items-center gap-1.5 text-xs font-medium ${meta.color}`}>{meta.icon} {meta.label}</div>
+                      <div className="text-2xl font-mono font-semibold tabular-nums">{count.toLocaleString()}</div>
+                      <div className="text-[10px] text-muted-foreground">{pct}% of list</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {Object.keys(report.suppressed_reasons).length > 0 && (
+                <div className="text-xs text-muted-foreground">
+                  Suppressed: {Object.entries(report.suppressed_reasons).map(([reason, count]) => `${count} ${reason.replace(/_/g, " ")}`).join(", ")}
+                </div>
+              )}
+
+              {report.sample_risky.length > 0 && (
+                <div className="rounded-md border border-border bg-muted/30 p-3 space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">Flagged addresses (sample)</p>
+                  <div className="text-xs font-mono space-y-0.5 max-h-32 overflow-y-auto">
+                    {report.sample_risky.map((email) => <div key={email}>{email}</div>)}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-border flex items-center justify-end">
+          <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function parseCsvLine(line: string): string[] {
   const result: string[] = [];
   let current = "";
@@ -466,6 +560,7 @@ function ListsPage() {
   const [saving, setSaving] = useState(false);
   const [hygieneList, setHygieneList] = useState<MailingList | null>(null);
   const [importList, setImportList] = useState<MailingList | null>(null);
+  const [preflightList, setPreflightList] = useState<MailingList | null>(null);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -575,6 +670,13 @@ function ListsPage() {
                   >
                     <Leaf className="h-3.5 w-3.5" /> Hygiene
                   </Button>
+                  <Button
+                    variant="ghost" size="sm" className="h-7 text-xs gap-1"
+                    title="Check likely deliverability before sending"
+                    onClick={() => setPreflightList(l)}
+                  >
+                    <ShieldCheck className="h-3.5 w-3.5" /> Deliverability
+                  </Button>
                   <Link to="/dashboard/contacts" search={{ list: l.id }}>
                     <Button variant="outline" size="sm" className="h-7 text-xs">Manage</Button>
                   </Link>
@@ -602,6 +704,14 @@ function ListsPage() {
           apiKey={primaryKey.keyRaw}
           onClose={() => setImportList(null)}
           onDone={() => load()}
+        />
+      )}
+
+      {preflightList && primaryKey?.keyRaw && (
+        <PreflightModal
+          list={preflightList}
+          apiKey={primaryKey.keyRaw}
+          onClose={() => setPreflightList(null)}
         />
       )}
     </div>
