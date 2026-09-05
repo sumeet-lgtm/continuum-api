@@ -177,7 +177,17 @@ function RichEmailEditor({
   // nothing in it is lost even though its individual pieces (a header, a
   // button) aren't separately editable again until rebuilt.
   useEffect(() => {
-    if (skipNextSync.current) { skipNextSync.current = false; return; }
+    if (skipNextSync.current) {
+      skipNextSync.current = false;
+      // An empty initial value means the useState initializer above fell
+      // back to defaultBlocks() -- the visual editor shows that content,
+      // but the parent form's htmlBody is still "". Push it up now, or a
+      // campaign/template never manually touched by the user submits with
+      // an empty body and fails "required fields" validation despite
+      // looking fully filled in.
+      if (!value) onChange(blocksToHtml(blocks));
+      return;
+    }
     if (value !== blocksToHtml(blocks)) setBlocks(htmlAsCustomBlocks(value));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
