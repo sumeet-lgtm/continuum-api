@@ -38,6 +38,7 @@ import { trackRoutes } from './routes/track/index.js';
 import { analyticsRoutes } from './routes/analytics/index.js';
 import { listRoutes } from './routes/lists/index.js';
 import { contactRoutes } from './routes/contacts/index.js';
+import { preflightRoutes } from './routes/preflight/index.js';
 import { segmentRoutes } from './routes/segments/index.js';
 import { campaignRoutes } from './routes/campaigns/index.js';
 import { mailboxRoutes } from './routes/mailboxes/index.js';
@@ -197,6 +198,7 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(analyticsRoutes, { prefix: '/v1' });
   await app.register(listRoutes, { prefix: '/v1' });
   await app.register(contactRoutes, { prefix: '/v1' });
+  await app.register(preflightRoutes, { prefix: '/v1' });
   await app.register(segmentRoutes, { prefix: '/v1' });
   await app.register(campaignRoutes, { prefix: '/v1' });
   await app.register(mailboxRoutes, { prefix: '/v1' });
