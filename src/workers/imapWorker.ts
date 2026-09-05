@@ -246,9 +246,21 @@ async function pollMailboxes(): Promise<void> {
       connection.end();
     } catch (err) {
       logger.error({ err, mailboxId: mailbox.id }, 'IMAP poll failed for mailbox');
+      // lastErrorMsg is the same field the dashboard shows as "mailbox
+      // error" and that warmup's SMTP send failures write to — it's meant
+      // to answer "is this mailbox broken for sending". IMAP poll (reply
+      // detection) is currently broken for every mailbox on every provider
+      // due to a network-level restriction we don't control (see
+      // imapHost.ts), so writing this error here would put a permanent,
+      // uninformative "self-signed certificate" banner on literally every
+      // IMAP-enabled mailbox regardless of whether sending works fine —
+      // exactly the kind of silent-background-failure-turned-confusing-UI
+      // this product is trying not to be. Keep it in our own logs (for
+      // support/debugging) without surfacing it to the customer until the
+      // underlying IMAP restriction is actually fixed.
       await prisma.mailbox.update({
         where: { id: mailbox.id },
-        data: { lastErrorMsg: err instanceof Error ? err.message : 'IMAP error', lastCheckedAt: new Date() },
+        data: { lastCheckedAt: new Date() },
       }).catch(() => {});
     }
   }
