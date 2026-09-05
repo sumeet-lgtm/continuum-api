@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2, Edit2, Sparkles, Linkedin, CheckSquare, Mail, InboxIcon, RotateCcw } from "lucide-react";
+import { Plus, GitBranch, Play, Pause, Users, X, ChevronDown, ChevronRight, Clock, Trash2, Copy, Settings2, FlaskConical, BarChart2, Edit2, Sparkles, Linkedin, CheckSquare, Mail, InboxIcon, RotateCcw, Eye, EyeOff } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/sequences")({
   head: () => ({ meta: [{ title: "Sequences — Continuum API" }] }),
@@ -74,6 +74,7 @@ interface Sequence {
   fromEmail: string;
   status: string;
   trackOpens: boolean;
+  trackClicks: boolean;
   stopOnReply: boolean;
   createdAt: string;
   sendDays?: string[];
@@ -141,6 +142,7 @@ function SequencesPage() {
     name: "", fromName: "", fromEmail: "", mailboxId: "",
     sendDays: DEFAULT_DAYS as string[],
     sendStartHour: "8", sendEndHour: "17",
+    trackOpens: true, trackClicks: true,
   });
   const [saving, setSaving] = useState(false);
   const [enrollTarget, setEnrollTarget] = useState<Sequence | null>(null);
@@ -173,7 +175,7 @@ function SequencesPage() {
 
   // Send window editing
   const [editWindowFor, setEditWindowFor] = useState<string | null>(null); // seqId
-  const [windowForm, setWindowForm] = useState({ sendDays: DEFAULT_DAYS as string[], sendStartHour: "8", sendEndHour: "17" });
+  const [windowForm, setWindowForm] = useState({ sendDays: DEFAULT_DAYS as string[], sendStartHour: "8", sendEndHour: "17", trackOpens: true, trackClicks: true });
   const [windowSaving, setWindowSaving] = useState(false);
 
   // Step editing
@@ -270,15 +272,15 @@ function SequencesPage() {
         from_email: form.fromEmail || selectedMailbox?.username || form.fromEmail,
         ...(form.mailboxId ? { mailbox_id: form.mailboxId } : {}),
         stop_on_reply: true,
-        track_opens: true,
-        track_clicks: true,
+        track_opens: form.trackOpens,
+        track_clicks: form.trackClicks,
         send_days: form.sendDays,
         send_start_hour: parseInt(form.sendStartHour) || 8,
         send_end_hour: parseInt(form.sendEndHour) || 17,
       }, primaryKey.keyRaw);
       toast.success("Sequence created");
       setCreating(false);
-      setForm({ name: "", fromName: "", fromEmail: "", mailboxId: "", sendDays: DEFAULT_DAYS, sendStartHour: "8", sendEndHour: "17" });
+      setForm({ name: "", fromName: "", fromEmail: "", mailboxId: "", sendDays: DEFAULT_DAYS, sendStartHour: "8", sendEndHour: "17", trackOpens: true, trackClicks: true });
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }
@@ -316,6 +318,8 @@ function SequencesPage() {
           send_days: windowForm.sendDays,
           send_start_hour: parseInt(windowForm.sendStartHour) || 8,
           send_end_hour: parseInt(windowForm.sendEndHour) || 17,
+          track_opens: windowForm.trackOpens,
+          track_clicks: windowForm.trackClicks,
         }),
       });
       if (!res.ok) {
@@ -327,9 +331,11 @@ function SequencesPage() {
         sendDays: windowForm.sendDays,
         sendStartHour: parseInt(windowForm.sendStartHour) || 8,
         sendEndHour: parseInt(windowForm.sendEndHour) || 17,
+        trackOpens: windowForm.trackOpens,
+        trackClicks: windowForm.trackClicks,
       } : x));
       setEditWindowFor(null);
-      toast.success("Send window updated");
+      toast.success("Settings updated");
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setWindowSaving(false); }
   };
@@ -781,6 +787,34 @@ function SequencesPage() {
             </div>
           </div>
 
+          {/* Tracking */}
+          <div className="space-y-2 pt-1 border-t border-border">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Tracking</Label>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="accent-foreground h-4 w-4"
+                  checked={form.trackOpens || form.trackClicks}
+                  onChange={(e) => setForm((f) => ({ ...f, trackOpens: e.target.checked, trackClicks: e.target.checked }))}
+                />
+                <span className="text-sm">Enable tracking</span>
+              </label>
+            </div>
+            {(form.trackOpens || form.trackClicks) && (
+              <div className="flex items-center gap-6 pl-1">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" className="accent-foreground h-4 w-4" checked={form.trackOpens} onChange={(e) => setForm((f) => ({ ...f, trackOpens: e.target.checked }))} />
+                  <span className="text-xs text-muted-foreground">Opens</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" className="accent-foreground h-4 w-4" checked={form.trackClicks} onChange={(e) => setForm((f) => ({ ...f, trackClicks: e.target.checked }))} />
+                  <span className="text-xs text-muted-foreground">Clicks</span>
+                </label>
+              </div>
+            )}
+          </div>
+
           <div className="flex gap-2">
             <Button onClick={create} disabled={saving}>{saving ? "Creating…" : "Create Sequence"}</Button>
             <Button variant="outline" onClick={() => setCreating(false)}>Cancel</Button>
@@ -1142,9 +1176,24 @@ function SequencesPage() {
                     <>
                       {/* Send window row */}
                       <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Clock className="h-3.5 w-3.5 shrink-0" />
-                          <span>{formatWindow(seq)}</span>
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-2">
+                            <Clock className="h-3.5 w-3.5 shrink-0" />
+                            {formatWindow(seq)}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            {(seq.trackOpens || seq.trackClicks) ? (
+                              <>
+                                <Eye className="h-3.5 w-3.5 shrink-0" />
+                                {seq.trackOpens && seq.trackClicks ? "Opens + clicks tracked" : seq.trackOpens ? "Opens tracked" : "Clicks tracked"}
+                              </>
+                            ) : (
+                              <>
+                                <EyeOff className="h-3.5 w-3.5 shrink-0" />
+                                Tracking off
+                              </>
+                            )}
+                          </span>
                         </div>
                         {editWindowFor === seq.id ? null : (
                           <Button
@@ -1156,11 +1205,13 @@ function SequencesPage() {
                                 sendDays: seq.sendDays ?? DEFAULT_DAYS,
                                 sendStartHour: String(seq.sendStartHour ?? 8),
                                 sendEndHour: String(seq.sendEndHour ?? 17),
+                                trackOpens: seq.trackOpens ?? true,
+                                trackClicks: seq.trackClicks ?? true,
                               });
                               setEditWindowFor(seq.id);
                             }}
                           >
-                            <Settings2 className="h-3 w-3" /> Edit window
+                            <Settings2 className="h-3 w-3" /> Edit settings
                           </Button>
                         )}
                       </div>
@@ -1200,6 +1251,34 @@ function SequencesPage() {
                             />
                             <span className="text-xs text-muted-foreground">UTC</span>
                           </div>
+
+                          <div className="pt-2 border-t border-border space-y-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Tracking</p>
+                              <label className="flex items-center gap-2 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  className="accent-foreground h-4 w-4"
+                                  checked={windowForm.trackOpens || windowForm.trackClicks}
+                                  onChange={(e) => setWindowForm((f) => ({ ...f, trackOpens: e.target.checked, trackClicks: e.target.checked }))}
+                                />
+                                <span className="text-sm">Enable tracking</span>
+                              </label>
+                            </div>
+                            {(windowForm.trackOpens || windowForm.trackClicks) && (
+                              <div className="flex items-center gap-6 pl-1">
+                                <label className="flex items-center gap-2 cursor-pointer select-none">
+                                  <input type="checkbox" className="accent-foreground h-4 w-4" checked={windowForm.trackOpens} onChange={(e) => setWindowForm((f) => ({ ...f, trackOpens: e.target.checked }))} />
+                                  <span className="text-xs text-muted-foreground">Opens</span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer select-none">
+                                  <input type="checkbox" className="accent-foreground h-4 w-4" checked={windowForm.trackClicks} onChange={(e) => setWindowForm((f) => ({ ...f, trackClicks: e.target.checked }))} />
+                                  <span className="text-xs text-muted-foreground">Clicks</span>
+                                </label>
+                              </div>
+                            )}
+                          </div>
+
                           <div className="flex gap-2">
                             <Button size="sm" onClick={() => saveWindow(seq.id)} disabled={windowSaving}>{windowSaving ? "Saving…" : "Save"}</Button>
                             <Button size="sm" variant="outline" onClick={() => setEditWindowFor(null)}>Cancel</Button>
