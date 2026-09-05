@@ -47,7 +47,7 @@
   --font-mono:
     "Space Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
-  --font-display: "Fraunces", Georgia, serif;
+  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
   --color-display: var(--display);
 }
 

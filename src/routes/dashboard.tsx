@@ -223,7 +223,7 @@ const NAV: NavItem[] = [
   // Pillar 1: Verification — competes with MillionVerifier
   {
     to: "/dashboard/verify",
-    label: "Verification",
+    label: "Email Verifier",
     icon: ShieldCheck,
     children: [
       { to: "/dashboard/verify", label: "Single Verify", icon: ShieldCheck, exact: true },
@@ -252,7 +252,7 @@ const NAV: NavItem[] = [
   // Pillar 3: Nurture — competes with Sendy
   {
     to: "/dashboard/campaigns",
-    label: "Nurture",
+    label: "Nurture & Newsletters",
     icon: Megaphone,
     children: [
       { to: "/dashboard/campaigns", label: "Campaigns", icon: Megaphone, exact: true },
@@ -268,7 +268,7 @@ const NAV: NavItem[] = [
   // Pillar 4: Outbound — competes with Smartlead / Outreach
   {
     to: "/dashboard/sequences",
-    label: "Outbound",
+    label: "Cold Email",
     icon: GitBranch,
     children: [
       { to: "/dashboard/sequences", label: "Sequences", icon: GitBranch, exact: true },
@@ -283,7 +283,7 @@ const NAV: NavItem[] = [
   // Pillar 5: Finder — competes with Apollo
   {
     to: "/dashboard/finder",
-    label: "Finder",
+    label: "Lead Finder",
     icon: Search,
     children: [
       { to: "/dashboard/finder", label: "Find People", icon: Search, exact: true },

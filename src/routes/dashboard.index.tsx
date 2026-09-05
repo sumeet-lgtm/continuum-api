@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Area, AreaChart } from "recharts";
-import { Sparkles, KeyRound, Mail, Activity, CheckCircle2, Circle, ArrowRight, Send, GitBranch, ShieldAlert, Eye, MousePointer, AlertCircle, XCircle, Radio, ShieldCheck, Megaphone, Search, Users } from "lucide-react";
+import { Sparkles, KeyRound, CheckCircle2, Circle, ArrowRight, Send, GitBranch, ShieldAlert, Eye, MousePointer, AlertCircle, XCircle, Radio, ShieldCheck, Megaphone, Search, Users } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -222,11 +222,11 @@ function Overview() {
             <h2 className="text-sm font-semibold">Get started</h2>
           </div>
           <ol className="space-y-2">
-            <Step done={true} icon={KeyRound} title="API key ready" desc="Your key is active." to="/dashboard/api-keys" cta="View key" />
-            <Step done={verifUsed > 0} icon={Mail} title="Verify an email" desc="Run your first verification." to="/dashboard/verify" cta="Try Verify" />
-            <Step done={!!(usage && usage.monitors.active > 0)} icon={Activity} title="Set up monitoring" desc="Watch addresses on a schedule." to="/dashboard/monitoring" cta="Add monitor" />
-            <Step done={sendUsed > 0} icon={Send} title="Send a transactional email" desc="Use the sending API." to="/dashboard/transactional" cta="Send Email" />
-            <Step done={sequencesDone} icon={GitBranch} title="Create a sequence" desc="Build multi-step cold outreach." to="/dashboard/sequences" cta="New Sequence" />
+            <Step done={verifUsed > 0} icon={ShieldCheck} title="Verify an email" desc="Catch a bad address before you send." to="/dashboard/verify" cta="Verify" />
+            <Step done={sendUsed > 0} icon={Send} title="Send a transactional email" desc="Deliver your first message." to="/dashboard/transactional" cta="Send" />
+            <Step done={campaignStats.length > 0} icon={Megaphone} title="Launch a newsletter" desc="Reach your list with a campaign." to="/dashboard/campaigns" cta="Create campaign" />
+            <Step done={sequencesDone} icon={GitBranch} title="Build a cold email sequence" desc="Automate multi-step outreach." to="/dashboard/sequences" cta="New sequence" />
+            <Step done={totalLeads > 0} icon={Search} title="Find your first leads" desc="Search prospects and enroll them." to="/dashboard/finder" cta="Find people" />
           </ol>
         </div>
       )}
