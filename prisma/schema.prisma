@@ -535,7 +535,7 @@ model SendMessage {
   verificationId String?
   domainId       String?
   templateId      String?
-  sequenceStepId  String?                // set for sequence sends — used in funnel analytics
+  sequenceStepId  String?   @map("sequence_step_id") // set for sequence sends — used in funnel analytics
   tags            Json?
   trackingToken   String?    @unique
   idempotencyKey  String?    @unique
@@ -621,10 +621,10 @@ enum SuppressionReason {
 model SoftBounceTrack {
   id            String   @id @default(cuid())
   email         String   @unique
-  apiKeyId      String?
-  bounceCount   Int      @default(1)
-  lastBounceAt  DateTime @default(now())
-  createdAt     DateTime @default(now())
+  apiKeyId      String?  @map("api_key_id")
+  bounceCount   Int      @default(1) @map("bounce_count")
+  lastBounceAt  DateTime @default(now()) @map("last_bounce_at")
+  createdAt     DateTime @default(now()) @map("created_at")
 
   @@index([email])
   @@map("soft_bounce_tracks")
@@ -805,7 +805,8 @@ model Campaign {
   htmlBody       String
   textBody       String?
   preheader      String?
-  status         String    @default("draft") // draft|scheduled|sending|sent|failed|cancelled
+  status         String    @default("draft") // draft|scheduled|sending|sent|failed|cancelled|paused_bounce|paused_quota
+  errorMessage   String?                       // set when status=failed — why the send worker gave up
   listIds        String[]  @default([])
   segmentIds     String[]  @default([])
   excludeListIds String[]  @default([])
@@ -820,12 +821,12 @@ model Campaign {
   clickCount     Int       @default(0)
   bounceCount    Int       @default(0)
   complaintCount Int       @default(0)
-  subjectB       String?                       // A/B test: variant B subject line
-  openCountB     Int       @default(0)         // A/B test: opens from B variant
-  clickCountB    Int       @default(0)         // A/B test: clicks from B variant
-  excludedEmails String[]  @default([])        // retarget: emails to skip (openers of source campaign)
-  retargetOfId   String?                       // retarget: source campaign ID
-  sendRatePerHour Int?                          // drip: max emails/hr; null = unlimited
+  subjectB       String?   @map("subject_b")   // A/B test: variant B subject line
+  openCountB     Int       @default(0) @map("open_count_b")  // A/B test: opens from B variant
+  clickCountB    Int       @default(0) @map("click_count_b") // A/B test: clicks from B variant
+  excludedEmails String[]  @default([]) @map("excluded_emails")  // retarget: emails to skip (openers of source campaign)
+  retargetOfId   String?   @map("retarget_of_id")                // retarget: source campaign ID
+  sendRatePerHour Int?     @map("send_rate_per_hour")             // drip: max emails/hr; null = unlimited
   sendDays       String[]  @default(["monday","tuesday","wednesday","thursday","friday"])
   sendStartHour  Int       @default(8)
   sendEndHour    Int       @default(17)

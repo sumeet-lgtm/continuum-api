@@ -123,6 +123,46 @@ describe('processCampaign — bounce tracking', () => {
     expect(mockSendSes).not.toHaveBeenCalled();
     expect(mockSendMessageCreate).not.toHaveBeenCalled();
   });
+
+  // Regression guard for a real bug found via live testing: every `break` in
+  // the send loop (cancelled mid-send, bounce auto-pause, quota auto-pause)
+  // only exited the loop — execution then fell into an unconditional
+  // "mark sent + fire campaign.sent" block right after, silently overwriting
+  // whatever status the break had just set. Bounce auto-pause and mid-send
+  // cancellation had therefore never actually stuck in production.
+  it('auto-pauses on high bounce rate mid-send and does not get overwritten back to sent', async () => {
+    // First findUnique call is the top-of-function full-record read; the
+    // second is the per-chunk status/bounceCount/sentCount re-check inside
+    // the loop — must trip sentCount >= 50 and bouncePct > 5% to pause.
+    mockCampaignFind
+      .mockResolvedValueOnce(makeCampaign() as never)
+      .mockResolvedValueOnce({ status: 'sending', bounceCount: 10, sentCount: 60 } as never);
+
+    await processCampaign({ data: { campaignId: 'camp-001', apiKeyId: 'key-001' } } as never);
+
+    expect(mockSendSes).not.toHaveBeenCalled();
+    const lastCall = mockCampaignUpdate.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'paused_bounce' }) }),
+    );
+  });
+
+  it('stops mid-send when cancelled and does not get overwritten back to sent', async () => {
+    mockCampaignFind
+      .mockResolvedValueOnce(makeCampaign() as never)
+      .mockResolvedValueOnce({ status: 'cancelled', bounceCount: 0, sentCount: 0 } as never);
+
+    await processCampaign({ data: { campaignId: 'camp-001', apiKeyId: 'key-001' } } as never);
+
+    expect(mockSendSes).not.toHaveBeenCalled();
+    // No pause-status update happens for cancellation (the status is already
+    // 'cancelled' from whoever cancelled it) — the fix must mean no update
+    // call ever sets it back to 'sent'.
+    const sentCalls = mockCampaignUpdate.mock.calls.filter(
+      (call) => (call[0] as { data?: { status?: string } })?.data?.status === 'sent',
+    );
+    expect(sentCalls).toHaveLength(0);
+  });
 });
 
 describe('processCampaign — monthly send quota', () => {
@@ -138,6 +178,15 @@ describe('processCampaign — monthly send quota', () => {
 
     expect(mockSendSes).not.toHaveBeenCalled();
     expect(mockCampaignUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'paused_quota' }) }),
+    );
+    // Regression guard: the loop's `break` used to only exit the loop, and
+    // execution fell through into an unconditional "mark sent" update right
+    // after — so a campaign could hit paused_quota and then get silently
+    // flipped back to 'sent' a moment later, in the same run. Assert the
+    // *last* update call is the pause, not a later 'sent' overwrite.
+    const lastCall = mockCampaignUpdate.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
       expect.objectContaining({ data: expect.objectContaining({ status: 'paused_quota' }) }),
     );
   });

@@ -50,11 +50,15 @@ if (process.env['NODE_ENV'] !== 'test') {
   installCrashReporting('worker-bulk');
 }
 
-// DeBounce rate-limits concurrent traffic (429s above ~4-5 in flight). Keep
-// concurrency low so we rarely trip the limit; callMillionVerifier retries the
-// occasional 429 that slips through. Higher values traded throughput for a
-// ~50% "unknown" rate under load — not worth it.
-const EMAIL_CONCURRENCY      = 4;
+// This used to be capped at 4 solely because DeBounce rate-limits concurrent
+// traffic (429s above ~4-5 in flight) — but that constraint only applies to
+// the minority of emails that actually fall through to a paid provider. It
+// was throttling every email in the job, including the free own-probe path
+// that never calls DeBounce at all, which is why a 2,000-email list took
+// ~40 minutes (0.8/sec) in production. The paid-provider rate limit is now
+// enforced at its actual call site (paidProviderLimiter in smtpCache.ts,
+// shared process-wide), so this can run at real concurrency.
+const EMAIL_CONCURRENCY      = 20;
 const PROGRESS_FLUSH_INTERVAL = 25;  // flush every N processed emails
 
 // ─── Main job processor ───────────────────────────────────────────────────────

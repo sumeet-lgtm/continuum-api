@@ -36,7 +36,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   if (!isSesConfigured()) {
     await prisma.campaign.update({
       where: { id: campaignId },
-      data: { status: 'failed', errorMessage: 'Email sending is not configured. Contact support.' } as Record<string, unknown>,
+      data: { status: 'failed', errorMessage: 'Email sending is not configured. Contact support.' },
     });
     logger.error({ campaignId }, 'Campaign aborted — SES credentials not configured');
     return;
@@ -139,12 +139,20 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   const fromAddress = `${campaign.fromName} <${campaign.fromEmail}>`;
   const CHUNK_SIZE = 50;
   let sentCount = 0;
+  // Every `break` below only exits the loop — without this flag, execution
+  // falls straight into the unconditional "mark sent + fire campaign.sent"
+  // block after the loop, silently overwriting whatever status a break just
+  // set (cancelled, paused_bounce, paused_quota) back to 'sent' a moment
+  // later. That's why cancelling a campaign or tripping the bounce-rate
+  // auto-pause never actually stuck in practice.
+  let stoppedEarly = false;
 
   for (let i = 0; i < validRecipients.length; i += CHUNK_SIZE) {
     // Check if campaign was cancelled mid-flight or needs auto-pause for high bounce rate
     const current = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { status: true, bounceCount: true, sentCount: true } });
     if (current?.status === 'cancelled') {
       logger.info({ campaignId }, 'Campaign cancelled mid-send');
+      stoppedEarly = true;
       break;
     }
     // Auto-pause if bounce rate exceeds 5% and at least 50 sent — protects SES account health
@@ -159,6 +167,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
           eventId: buildEventId('campaign.paused_bounce', campaignId),
           payload: { event: 'campaign.paused_bounce', campaign_id: campaignId, bounce_pct: liveBouncePct, apiVersion: '2' as const },
         }).catch(() => {});
+        stoppedEarly = true;
         break;
       }
     }
@@ -178,7 +187,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     const sendLimit = getSendLimit(apiKeyRow?.plan ?? null, apiKeyRow?.monthlySendLimit);
     const sendRemaining = Math.max(0, sendLimit - (apiKeyRow?.currentMonthSendUsage ?? 0));
     if (sendRemaining <= 0) {
-      await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'paused_quota' } as Record<string, unknown> });
+      await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'paused_quota' } });
       logger.warn({ campaignId, apiKeyId }, 'Campaign auto-paused: monthly send quota exhausted');
       void dispatchWebhook({
         apiKeyId,
@@ -186,6 +195,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
         eventId: buildEventId('campaign.paused_quota', campaignId),
         payload: { event: 'campaign.paused_quota', campaign_id: campaignId, apiVersion: '2' as const },
       }).catch(() => {});
+      stoppedEarly = true;
       break;
     }
 
@@ -323,6 +333,11 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
         }
       }
     }
+  }
+
+  if (stoppedEarly) {
+    logger.info({ campaignId, sentCount, total: validRecipients.length }, 'Campaign send stopped early (cancelled/paused) — leaving status as set above');
+    return;
   }
 
   const finalCampaign = await prisma.campaign.update({

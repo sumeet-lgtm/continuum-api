@@ -14,6 +14,7 @@ import { prisma } from '../lib/prisma.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { isFreeEmailProvider } from './lookalike.js';
+import { paidProviderLimiter } from '../lib/concurrencyLimiter.js';
 
 export interface SmtpCacheResult {
   checked:     boolean;
@@ -75,15 +76,21 @@ export async function smtpVerifyWithCache(email: string): Promise<SmtpCacheResul
   // unreachable, rate-limited past retries, or genuinely "unknown") —
   // one provider's outage or low balance no longer takes the whole
   // SMTP-check layer down with it.
-  let result: SmtpCacheResult;
-  if (config.ZEROBOUNCE_API_KEY) {
-    result = await callZeroBounce(email);
-    if (!result.checked) {
-      result = await callMillionVerifier(email);
+  //
+  // Gated behind the shared paidProviderLimiter (max 4 concurrent,
+  // process-wide) so that bulk jobs can run their own free SMTP probes at
+  // much higher concurrency without also blowing through DeBounce's rate
+  // limit — only the emails that actually reach this paid fallback queue
+  // behind the tight budget; everyone else's own-probe result isn't
+  // throttled by a limit that exists for a vendor they never call.
+  let result: SmtpCacheResult = await paidProviderLimiter(async () => {
+    if (config.ZEROBOUNCE_API_KEY) {
+      const zb = await callZeroBounce(email);
+      if (zb.checked) return zb;
+      return callMillionVerifier(email);
     }
-  } else {
-    result = await callMillionVerifier(email);
-  }
+    return callMillionVerifier(email);
+  });
 
   // 3. Store in cache
   if (result.checked) {
