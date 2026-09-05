@@ -22,7 +22,8 @@ export type WebhookEventV2 =
   // Campaign events
   | 'campaign.sent'
   | 'campaign.failed'
-  | 'campaign.paused_bounce';
+  | 'campaign.paused_bounce'
+  | 'campaign.paused_quota';
 
 // Legacy aliases (Phase 1-4 code paths still emit these)
 export type WebhookEventLegacy =
@@ -46,6 +47,7 @@ export const ALL_WEBHOOK_EVENTS: WebhookEvent[] = [
   'campaign.sent',
   'campaign.failed',
   'campaign.paused_bounce',
+  'campaign.paused_quota',
   // Legacy aliases
   'verification_complete',
   'bulk_job_complete',
@@ -79,6 +81,7 @@ export type WebhookEventPayload =
   | CampaignSentPayload
   | CampaignFailedPayload
   | CampaignPausedBouncePayload
+  | CampaignPausedQuotaPayload
   // Legacy aliases
   | VerificationCompletePayload
   | BulkJobCompletePayload
@@ -295,6 +298,13 @@ export interface CampaignPausedBouncePayload {
   event:       'campaign.paused_bounce';
   campaign_id: string;
   bounce_pct:  number;
+  apiVersion:  '2';
+}
+
+/** campaign.paused_quota */
+export interface CampaignPausedQuotaPayload {
+  event:       'campaign.paused_quota';
+  campaign_id: string;
   apiVersion:  '2';
 }
 

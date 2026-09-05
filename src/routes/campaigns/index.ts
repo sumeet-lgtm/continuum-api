@@ -172,7 +172,11 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   // POST /v1/campaigns/:id/resume
-  // Allows manually resuming a campaign that was auto-paused due to high bounce rate.
+  // Allows manually resuming a campaign that was auto-paused — either for a
+  // high bounce rate, or because it hit the key's monthly send quota (the
+  // quota case only actually has anywhere to resume to once the customer's
+  // usage resets or their plan changes; re-queuing it before that just re-pauses
+  // it on the very next chunk, which is harmless, not an infinite-loop risk).
   // Requires the user to explicitly confirm intent — this re-queues the campaign
   // worker to continue sending to remaining pending recipients.
   fastify.post('/campaigns/:id/resume', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
@@ -180,7 +184,9 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
     if (!campaign) throw Errors.notFound('Campaign not found.');
-    if (campaign.status !== 'paused_bounce') throw Errors.forbidden('Only paused_bounce campaigns can be resumed via this endpoint.');
+    if (!['paused_bounce', 'paused_quota'].includes(campaign.status)) {
+      throw Errors.forbidden('Only a paused campaign can be resumed via this endpoint.');
+    }
 
     // Count how many recipients are still pending (not yet sent)
     const pendingCount = await prisma.campaignRecipient.count({ where: { campaignId: id, status: 'pending' } });
@@ -204,7 +210,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
     if (!campaign) throw Errors.notFound('Campaign not found.');
     if (!campaign.subjectB) throw Errors.forbidden('This campaign has no A/B test configured.');
-    if (!['sending', 'paused_bounce'].includes(campaign.status)) {
+    if (!['sending', 'paused_bounce', 'paused_quota'].includes(campaign.status)) {
       throw Errors.forbidden('Winner can only be picked for campaigns that are currently sending or paused.');
     }
 

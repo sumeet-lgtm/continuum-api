@@ -7,6 +7,7 @@ import { generateOpenToken, generateClickToken, injectTracking } from '../lib/tr
 import { processTemplate } from '../lib/spintax.js';
 import { logger } from '../lib/logger.js';
 import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
+import { getSendLimit, incrementSendUsageBy } from '../plugins/usageMeter.js';
 
 interface CampaignJobData {
   campaignId: string;
@@ -162,7 +163,33 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
       }
     }
 
-    let chunk = validRecipients.slice(i, i + CHUNK_SIZE);
+    // Every other send surface (/v1/send, batch send, sequence steps) is
+    // gated on the key's monthly send quota — campaigns were the one path
+    // that could blow straight through it, since sends here never went
+    // through requireMonthlySendQuota (that's an HTTP preHandler; this is a
+    // background worker with no request/reply to hang it on) or incremented
+    // usage at all. Re-read fresh each chunk, same reasoning as the
+    // suppression re-check below: a campaign can run for minutes, long
+    // enough for other sending activity on this key to change what's left.
+    const apiKeyRow = await prisma.apiKey.findUnique({
+      where: { id: apiKeyId },
+      select: { plan: true, monthlySendLimit: true, currentMonthSendUsage: true },
+    });
+    const sendLimit = getSendLimit(apiKeyRow?.plan ?? null, apiKeyRow?.monthlySendLimit);
+    const sendRemaining = Math.max(0, sendLimit - (apiKeyRow?.currentMonthSendUsage ?? 0));
+    if (sendRemaining <= 0) {
+      await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'paused_quota' } as Record<string, unknown> });
+      logger.warn({ campaignId, apiKeyId }, 'Campaign auto-paused: monthly send quota exhausted');
+      void dispatchWebhook({
+        apiKeyId,
+        event: 'campaign.paused_quota',
+        eventId: buildEventId('campaign.paused_quota', campaignId),
+        payload: { event: 'campaign.paused_quota', campaign_id: campaignId, apiVersion: '2' as const },
+      }).catch(() => {});
+      break;
+    }
+
+    let chunk = validRecipients.slice(i, i + CHUNK_SIZE).slice(0, sendRemaining);
 
     // Re-check suppression per chunk, not just once at campaign start — a
     // large list can take minutes to send, and someone who unsubscribes or
@@ -185,6 +212,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
       }
     }
 
+    const sentBeforeChunk = sentCount;
     await Promise.allSettled(chunk.map(async recipient => {
       try {
         const recipientVariant = recipientVariants.get(recipient.email) ?? 'a';
@@ -267,6 +295,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
 
     // Update progress
     await prisma.campaign.update({ where: { id: campaignId }, data: { sentCount } });
+    void incrementSendUsageBy(apiKeyId, sentCount - sentBeforeChunk);
 
     // Inter-chunk delay: honour drip rate if set, else 100ms to stay under SES burst limit.
     // sendRatePerHour = 300 → max 300 emails/hr → 50-email chunk every 600s.
