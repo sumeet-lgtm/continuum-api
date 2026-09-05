@@ -3,8 +3,16 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // DATABASE_URL is the transaction-mode PgBouncer pooler (required — the
+  // 15-connection session-mode pooler was getting exhausted across 6+
+  // services and causing real send failures). But `prisma migrate deploy`
+  // (web's start command) uses advisory locks and prepared statements that
+  // transaction-mode pooling breaks ("prepared statement s0 does not
+  // exist"), so migrations need a real, unpooled/session connection —
+  // DIRECT_URL supplies that, used only at migrate-deploy time.
+  directUrl = env("DIRECT_URL")
 }
 
 // ─── Users (WorkOS SSO) ──────────────────────────────────────────────────────
