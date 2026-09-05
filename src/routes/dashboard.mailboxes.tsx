@@ -112,7 +112,12 @@ function MailboxesPage() {
     if (!primaryKey?.keyRaw) return;
     setSaving(true);
     try {
-      await api.withKey.post("/v1/mailboxes", {
+      // Same class of bug test() below already had to fix once: a 201
+      // response here doesn't mean the SMTP credentials actually worked —
+      // the route creates the mailbox row either way and reports the real
+      // outcome via status/lastErrorMsg in the body. This was showing
+      // "Mailbox connected" on a flat-out bad-password rejection.
+      const result = await api.withKey.post<{ status: string; lastErrorMsg?: string | null }>("/v1/mailboxes", {
         type: form.type,
         host: form.host || undefined,
         port: form.port ? parseInt(form.port) : undefined,
@@ -120,7 +125,11 @@ function MailboxesPage() {
         password: form.password || undefined,
         daily_limit: parseInt(form.dailyLimit),
       }, primaryKey.keyRaw);
-      toast.success("Mailbox connected");
+      if (result.status === "error") {
+        toast.error(result.lastErrorMsg ?? "Mailbox added, but the connection test failed — check the credentials.");
+      } else {
+        toast.success("Mailbox connected");
+      }
       setConnectMode(null);
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
