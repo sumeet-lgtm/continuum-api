@@ -18,7 +18,7 @@ import { verifyEmail } from '../../engine/index.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
 import { config } from '../../config.js';
-import { getFinderLimit } from '../../plugins/usageMeter.js';
+import { getFinderLimit, getPlanLimit, getSendLimit } from '../../plugins/usageMeter.js';
 
 const SERVER_INFO = {
   name: 'continuum-api',
@@ -482,14 +482,23 @@ async function callTool(
     }
 
     case 'get_account_usage': {
+      // apiKey.monthlyLimit/monthlySendLimit are raw DB columns that default
+      // to Free-tier values and are only a fallback for an unrecognized
+      // plan — real enforcement (requireMonthlyQuota/requireMonthlySendQuota)
+      // computes the actual ceiling via getPlanLimit/getSendLimit, which
+      // this tool was NOT doing, so any paid-plan key reported its Free
+      // limit here regardless of its real plan.
       return {
         content: text({
           verifications: {
             used: apiKey.currentMonthUsage,
-            limit: apiKey.monthlyLimit,
+            limit: getPlanLimit(apiKey.plan, apiKey.monthlyLimit),
             extra_credits: apiKey.extraVerificationCredits ?? 0,
           },
-          sends: { used: apiKey.currentMonthSendUsage, limit: apiKey.monthlySendLimit },
+          sends: {
+            used: apiKey.currentMonthSendUsage,
+            limit: getSendLimit(apiKey.plan, apiKey.monthlySendLimit),
+          },
           finder: {
             used: apiKey.currentMonthFinderUsage ?? 0,
             limit: getFinderLimit(apiKey.plan),
