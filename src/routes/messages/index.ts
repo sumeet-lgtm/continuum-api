@@ -147,8 +147,8 @@ export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
         prisma.sendMessage.count({ where: { ...baseWhere, status: 'delivered' } as never }),
         prisma.sendMessage.count({ where: { ...baseWhere, status: 'bounced' } as never }),
         prisma.sendMessage.count({ where: { ...baseWhere, status: 'complained' } as never }),
-        prisma.trackingEvent.count({ where: { type: 'open', sendMessage: { apiKeyId } } }),
-        prisma.trackingEvent.count({ where: { type: 'click', sendMessage: { apiKeyId } } }),
+        prisma.trackingEvent.count({ where: { type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } } }),
+        prisma.trackingEvent.count({ where: { type: 'click', isLikelyBot: false, sendMessage: { apiKeyId } } }),
       ]);
 
       return reply.status(200).send({

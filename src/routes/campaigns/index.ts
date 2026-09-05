@@ -415,9 +415,13 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
       select: { email: true },
     });
 
-    // Collect emails that had at least one open event on this campaign
+    // Collect emails that had at least one genuinely-human open event on
+    // this campaign. isLikelyBot:false matters a lot here specifically —
+    // without it, an MPP-prefetched "open" would wrongly exclude a
+    // recipient who never actually saw the email from the retarget send,
+    // which is the exact opposite of what retargeting is for.
     const openers = await prisma.trackingEvent.findMany({
-      where: { campaignId: id, type: 'open' },
+      where: { campaignId: id, type: 'open', isLikelyBot: false },
       select: { email: true },
       distinct: ['email'],
     });

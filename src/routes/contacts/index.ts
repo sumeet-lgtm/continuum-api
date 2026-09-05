@@ -274,14 +274,19 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
     if (!contact) throw Errors.notFound('Contact not found.');
 
+    // isLikelyBot:false throughout — see engine/botDetection.ts. Without
+    // it, Apple MPP alone inflates every MPP-enabled contact's engagement
+    // score and recency, which is exactly backwards from what this
+    // endpoint exists to tell a customer (who is actually worth
+    // prioritizing outreach to).
     const [sendCount, opens, clicks, bounces, complaints, lastEvent] = await Promise.all([
       prisma.sendMessage.count({ where: { apiKeyId, to: email } }),
-      prisma.trackingEvent.count({ where: { email, type: 'open', sendMessage: { apiKeyId } } }),
-      prisma.trackingEvent.count({ where: { email, type: 'click', sendMessage: { apiKeyId } } }),
+      prisma.trackingEvent.count({ where: { email, type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } } }),
+      prisma.trackingEvent.count({ where: { email, type: 'click', isLikelyBot: false, sendMessage: { apiKeyId } } }),
       prisma.sendMessage.count({ where: { apiKeyId, to: email, status: 'bounced' } }),
       prisma.sendMessage.count({ where: { apiKeyId, to: email, status: 'complained' } }),
       prisma.trackingEvent.findFirst({
-        where: { email, sendMessage: { apiKeyId } },
+        where: { email, isLikelyBot: false, sendMessage: { apiKeyId } },
         orderBy: { occurredAt: 'desc' },
         select: { occurredAt: true },
       }),
@@ -346,8 +351,11 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
         take: limit,
         select: { id: true, subject: true, status: true, createdAt: true, sentAt: true, templateId: true },
       }),
+      // isLikelyBot:false — this timeline is presented to the customer as
+      // "email_opened"/"email_clicked" (real engagement), which a bot
+      // prefetch or security-gateway scan is not.
       prisma.trackingEvent.findMany({
-        where: { email, sendMessage: { apiKeyId } },
+        where: { email, isLikelyBot: false, sendMessage: { apiKeyId } },
         orderBy: { occurredAt: 'desc' },
         take: limit,
         select: { id: true, type: true, linkUrl: true, occurredAt: true, sendMessageId: true },
@@ -401,8 +409,11 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
     if (!contact) throw Errors.notFound('Contact not found.');
 
+    // isLikelyBot:false — a bot/scanner prefetch's timing has nothing to
+    // do with when this contact actually reads email, and would corrupt
+    // the recommended send window otherwise.
     const opens = await prisma.trackingEvent.findMany({
-      where: { email, type: 'open', sendMessage: { apiKeyId } },
+      where: { email, type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } },
       select: { occurredAt: true },
       orderBy: { occurredAt: 'desc' },
       take: 200,

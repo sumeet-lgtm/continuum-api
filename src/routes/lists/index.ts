@@ -112,10 +112,14 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     const activeThreshold = new Date(Date.now() - inactiveDays * 86400000);
     const atRiskThreshold = new Date(Date.now() - inactiveDays * 2 * 86400000);
 
-    // Most recent open/click per email (in this key's sends only)
+    // Most recent open/click per email (in this key's sends only).
+    // isLikelyBot:false — without it, Apple MPP alone would mark every
+    // MPP-enabled contact "active" forever regardless of real engagement,
+    // defeating the entire point of this report (finding who to actually
+    // clean off the list).
     const recentEvents = await prisma.trackingEvent.groupBy({
       by:       ['email'],
-      where:    { email: { in: emails }, type: { in: ['open', 'click'] } },
+      where:    { email: { in: emails }, type: { in: ['open', 'click'] }, isLikelyBot: false },
       _max:     { occurredAt: true },
     });
 
@@ -167,9 +171,13 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     const activeThreshold = new Date(Date.now() - inactiveDays * 86400000);
     const atRiskThreshold = new Date(Date.now() - inactiveDays * 2 * 86400000);
 
+    // isLikelyBot:false — same reasoning as the hygiene report above. This
+    // endpoint actually suppresses contacts; letting a bot-inflated "open"
+    // mask real disengagement would mean it never suppresses anyone it
+    // should.
     const recentEvents = await prisma.trackingEvent.groupBy({
       by:    ['email'],
-      where: { email: { in: emails }, type: { in: ['open', 'click'] } },
+      where: { email: { in: emails }, type: { in: ['open', 'click'] }, isLikelyBot: false },
       _max:  { occurredAt: true },
     });
     const lastEngagement = new Map(recentEvents.map((e) => [e.email, e._max.occurredAt]));

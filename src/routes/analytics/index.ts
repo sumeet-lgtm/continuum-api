@@ -426,10 +426,14 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const lookbackDays = Math.min(180, Math.max(7, parseInt(q.days ?? '90', 10)));
       const since = new Date(Date.now() - lookbackDays * 86_400_000);
 
-      // Pull all opens for sends from this key in the lookback window
+      // Pull all opens for sends from this key in the lookback window.
+      // isLikelyBot:false — a bot/scanner prefetch's timing has nothing to
+      // do with when real recipients read email, and would corrupt this
+      // recommendation otherwise.
       const opens = await prisma.trackingEvent.findMany({
         where: {
           type: 'open',
+          isLikelyBot: false,
           occurredAt: { gte: since },
           sendMessage: { apiKeyId },
         },
@@ -542,10 +546,20 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
         msgsByStep.get(m.sequenceStepId)!.push(m.id);
       }
 
-      // Aggregate events for all messages at once then bucket by step
+      // Aggregate events for all messages at once then bucket by step.
+      // isLikelyBot:false for open/click (unsubscribe has no bot analogue,
+      // so it's deliberately excluded from the filter below via a separate
+      // OR branch) — otherwise MPP/scanner noise makes every step look
+      // like it's performing, hiding which ones are actually working.
       const allMsgIds = stepSendIds.map(m => m.id);
       const events = allMsgIds.length > 0 ? await prisma.trackingEvent.findMany({
-        where: { sendMessageId: { in: allMsgIds }, type: { in: ['open', 'click', 'unsubscribe'] } },
+        where: {
+          sendMessageId: { in: allMsgIds },
+          OR: [
+            { type: { in: ['open', 'click'] }, isLikelyBot: false },
+            { type: 'unsubscribe' },
+          ],
+        },
         select: { sendMessageId: true, type: true },
       }) : [];
 
@@ -626,9 +640,14 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       // Pull delivery status + recipient address, then get tracking events for those messages
       const messages = await prisma.sendMessage.findMany({ where, select: { id: true, to: true, status: true } });
       const msgIds = messages.map((m) => m.id);
+      // isLikelyBot:false matters more here than almost anywhere else in
+      // this file — iCloud is exactly the provider Apple Mail Privacy
+      // Protection prefetches for, so an unfiltered query would show
+      // iCloud's open rate as artificially, misleadingly close to 100%
+      // next to every other provider's real number.
       const trackingEvents = msgIds.length > 0
         ? await prisma.trackingEvent.findMany({
-            where: { sendMessageId: { in: msgIds }, type: { in: ['open', 'click'] } },
+            where: { sendMessageId: { in: msgIds }, type: { in: ['open', 'click'] }, isLikelyBot: false },
             select: { sendMessageId: true, type: true },
           })
         : [];
