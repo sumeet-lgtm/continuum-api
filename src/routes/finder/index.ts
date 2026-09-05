@@ -27,11 +27,16 @@ function getSearchActorId(): string {
 
 // Compute a "likely to respond" signal from Pipeline Labs fields.
 // High = likely responds to cold email; Low = hard to reach / unverified.
-function computeResponseSignal(row: Record<string, unknown>): 'high' | 'medium' | 'low' {
+export function computeResponseSignal(row: Record<string, unknown>): 'high' | 'medium' | 'low' {
   let score = 0;
-  const emailStatus = typeof row.emailStatus === 'string' ? row.emailStatus.toLowerCase() : '';
-  if (emailStatus === 'verified' || emailStatus === 'valid') score += 2;
-  else if (emailStatus === 'catch_all') score += 1;
+  // Normalized so "catch-all"/"catch_all"/"catchAll" all match the same way —
+  // confirmed live against production that the actor actually returns
+  // "deliverable" (not "verified"/"valid" as this previously checked for),
+  // which meant every real lead's emailStatus silently contributed zero to
+  // its score regardless of how confident the actor itself was.
+  const emailStatus = typeof row.emailStatus === 'string' ? row.emailStatus.toLowerCase().replace(/[-_]/g, '') : '';
+  if (['verified', 'valid', 'deliverable'].includes(emailStatus)) score += 2;
+  else if (emailStatus === 'catchall') score += 1;
 
   const seniority = typeof row.seniority === 'string' ? row.seniority.toLowerCase() : '';
   if (['manager', 'director', 'senior', 'owner', 'partner'].includes(seniority)) score += 2;
