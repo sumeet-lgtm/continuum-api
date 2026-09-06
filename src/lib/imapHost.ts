@@ -82,7 +82,14 @@ export async function testImapConnection(creds: {
         host: deriveImapHost(creds.host),
         port: IMAP_PORT,
         tls: true,
-        tlsOptions: { rejectUnauthorized: true, checkServerIdentity: loggingCheckServerIdentity },
+        // See the matching note in imapWorker.ts -- servername needs to be
+        // explicit here, node-imap's pre-existing-socket tls.connect()
+        // path doesn't reliably default it from `host`.
+        tlsOptions: {
+          rejectUnauthorized: true,
+          servername: deriveImapHost(creds.host),
+          checkServerIdentity: loggingCheckServerIdentity,
+        },
         authTimeout: 10000,
         ...imapConfig,
       } as import('imap').Config,

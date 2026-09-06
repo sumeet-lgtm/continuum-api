@@ -114,7 +114,21 @@ async function pollMailboxes(): Promise<void> {
           host: deriveImapHost(mailbox.host ?? 'imap.gmail.com'),
           port: IMAP_PORT,
           tls: true,
-          tlsOptions: { rejectUnauthorized: true, checkServerIdentity: loggingCheckServerIdentity },
+          // node-imap wraps a not-yet-connected net.Socket in tls.connect(),
+          // then connects that socket separately -- servername isn't
+          // reliably defaulted from `host` in that pre-existing-socket
+          // path the way a from-scratch tls.connect(host, port) defaults
+          // it. Without it, SNI can go out empty/wrong, and Gmail's TLS
+          // frontend serves a fallback cert for unrecognized SNI that
+          // fails as "self-signed" -- confirmed by an isolated tls.connect
+          // to the same host/port with servername set succeeding
+          // (Google Trust Services WR2, authorized: true) in the same
+          // process where this real connection was failing.
+          tlsOptions: {
+            rejectUnauthorized: true,
+            servername: deriveImapHost(mailbox.host ?? 'imap.gmail.com'),
+            checkServerIdentity: loggingCheckServerIdentity,
+          },
           authTimeout: 10000,
           ...authConfig,
         } as import('imap').Config,

@@ -7,35 +7,6 @@ import { startSalesforceSyncWorker, scheduleSalesforceSyncTicks } from './worker
 import { startDomainVerifyWorker, scheduleDomainVerifyTicks } from './workers/domainVerifyWorker.js';
 import { sequenceQueue, warmupQueue, imapQueue, salesforceSyncQueue, domainVerifyQueue } from './lib/queue.js';
 import { isSalesforceOAuthConfigured } from './lib/oauth/salesforce.js';
-import * as tls from 'node:tls';
-
-// TEMPORARY diagnostic, remove after reading the result once (user-approved
-// 2026-09-06): imapWorker's real IMAP connections fail with
-// DEPTH_ZERO_SELF_SIGNED_CERT and checkServerIdentity never even fires,
-// meaning Node's TLS engine rejects the chain before that hook runs -- so
-// there's no way to see which cert was actually offered from inside the
-// real auth path. This is a bare TLS handshake to a public IMAP endpoint
-// with no mailbox credentials involved at all (never authenticates, just
-// connects and logs what cert comes back), specifically so it's safe to
-// run with validation off for this one isolated diagnostic connection
-// without touching the real credentialed IMAP path's security at all.
-(function diagnoseImapTls() {
-  const socket = tls.connect({ host: 'imap.gmail.com', port: 993, servername: 'imap.gmail.com', rejectUnauthorized: false }, () => {
-    const cert = socket.getPeerCertificate();
-    console.log('[imap-tls-diag]', JSON.stringify({
-      authorized: socket.authorized,
-      authorizationError: socket.authorizationError,
-      subject: cert?.subject,
-      issuer: cert?.issuer,
-      valid_from: cert?.valid_from,
-      valid_to: cert?.valid_to,
-      fingerprint: cert?.fingerprint,
-    }));
-    socket.end();
-  });
-  socket.on('error', (e) => console.log('[imap-tls-diag] error', e.message));
-  socket.setTimeout(10000, () => { console.log('[imap-tls-diag] timeout'); socket.destroy(); });
-})();
 
 const closable: Array<{ close(): Promise<void> }> = [];
 
