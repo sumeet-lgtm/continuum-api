@@ -46,6 +46,7 @@ import {
   Upload,
   CheckSquare,
   Cloud,
+  LifeBuoy,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
@@ -302,6 +303,7 @@ const NAV: NavItem[] = [
   { to: "/dashboard/billing", label: "Billing", icon: CreditCard },
   { to: "/dashboard/team", label: "Team", icon: Users },
   { to: "/dashboard/settings", label: "Settings", icon: Settings },
+  { to: "/dashboard/support", label: "Support", icon: LifeBuoy },
 ];
 
 const DEFAULT_OPEN = new Set([
