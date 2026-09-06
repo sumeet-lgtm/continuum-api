@@ -1,3 +1,5 @@
+import * as tls from 'node:tls';
+
 /**
  * Mailboxes store one host/port pair, entered once by the user for SMTP
  * (the dashboard form's own placeholder is "smtp.gmail.com") — but IMAP
@@ -14,6 +16,15 @@
  * falls through unchanged for the single-host providers (Zoho, cPanel-style
  * hosting) where SMTP and IMAP already share one hostname.
  */
+// Diagnostic-only: logs the TLS cert actually presented on connect, then
+// delegates to Node's own default identity check -- see the matching note
+// in imapWorker.ts. Kept here too so the dashboard's "Test connection"
+// button surfaces the same information as the background poller.
+function loggingCheckServerIdentity(hostname: string, cert: import('node:tls').PeerCertificate): Error | undefined {
+  console.info('[imap-tls]', JSON.stringify({ hostname, issuer: cert.issuer, subject: cert.subject }));
+  return tls.checkServerIdentity(hostname, cert);
+}
+
 export function deriveImapHost(smtpHost: string): string {
   if (smtpHost.toLowerCase().startsWith('smtp.')) {
     return 'imap.' + smtpHost.slice(5);
@@ -71,7 +82,7 @@ export async function testImapConnection(creds: {
         host: deriveImapHost(creds.host),
         port: IMAP_PORT,
         tls: true,
-        tlsOptions: { rejectUnauthorized: true },
+        tlsOptions: { rejectUnauthorized: true, checkServerIdentity: loggingCheckServerIdentity },
         authTimeout: 10000,
         ...imapConfig,
       } as import('imap').Config,

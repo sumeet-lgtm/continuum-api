@@ -1,9 +1,24 @@
 import { Worker, type Job } from 'bullmq';
+import * as tls from 'node:tls';
 import { QUEUE_IMAP, redisConnection } from '../lib/queue.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { config } from '../config.js';
 import { deriveImapHost, IMAP_PORT } from '../lib/imapHost.js';
+
+// Diagnostic-only: node-imap's own connect error swallows which cert was
+// actually presented, so a self-signed-cert failure gives no way to tell
+// "target server changed its cert" apart from "something on the network
+// path is intercepting this connection and presenting its own cert" (e.g.
+// endpoint security software doing TLS inspection, or a platform egress
+// proxy). Logging the offered cert's issuer/subject on every connect costs
+// nothing and turns that into a one-line answer next time this fails.
+// checkServerIdentity's return value is unchanged (delegates to Node's own
+// default check) -- this only observes, it does not loosen validation.
+function loggingCheckServerIdentity(hostname: string, cert: import('node:tls').PeerCertificate): Error | undefined {
+  logger.info({ hostname, issuer: cert.issuer, subject: cert.subject }, 'IMAP TLS peer certificate');
+  return tls.checkServerIdentity(hostname, cert);
+}
 
 interface ImapTickPayload {
   tick: true;
@@ -99,7 +114,7 @@ async function pollMailboxes(): Promise<void> {
           host: deriveImapHost(mailbox.host ?? 'imap.gmail.com'),
           port: IMAP_PORT,
           tls: true,
-          tlsOptions: { rejectUnauthorized: true },
+          tlsOptions: { rejectUnauthorized: true, checkServerIdentity: loggingCheckServerIdentity },
           authTimeout: 10000,
           ...authConfig,
         } as import('imap').Config,
