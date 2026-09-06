@@ -147,16 +147,26 @@ async function pollMailboxes(): Promise<void> {
 
         const imap2 = await import('imap').catch(() => null);
         if (!imap2) continue;
-        const parsed = imap2.default?.parseHeader?.(header.body as string) ?? {};
+        // `as string` here was a compile-time-only assertion -- node-imap
+        // actually hands back a Buffer for this fetch at runtime, which has
+        // no .split(), so parseHeader (which does `str.split(RE_CRLF)`)
+        // threw on every single message. This never surfaced before now
+        // because the TLS handshake above was failing first on every poll.
+        const headerBody = Buffer.isBuffer(header.body) ? header.body.toString('utf8') : String(header.body ?? '');
+        const parsed = imap2.default?.parseHeader?.(headerBody) ?? {};
 
         const inReplyTo = (parsed['in-reply-to']?.[0] ?? '').replace(/[<>]/g, '');
         const messageId = (parsed['message-id']?.[0] ?? '').replace(/[<>]/g, '');
         const fromEmail = (parsed['from']?.[0] ?? '').match(/<(.+?)>|(.+)/)?.[1] ?? '';
         const subject = parsed['subject']?.[0] ?? '';
 
-        // Extract body snippet for AI classification
+        // Extract body snippet for AI classification. Same Buffer-vs-string
+        // gap as the header parse above -- this silently produced an empty
+        // snippet (rather than crashing) on every real message, since the
+        // check just skipped a non-string body instead of converting it.
         const textPart = msg.parts.find((p: { which: string }) => p.which === 'TEXT');
-        const bodySnippet = typeof textPart?.body === 'string' ? textPart.body.slice(0, 500) : '';
+        const textBody = Buffer.isBuffer(textPart?.body) ? textPart.body.toString('utf8') : (typeof textPart?.body === 'string' ? textPart.body : '');
+        const bodySnippet = textBody.slice(0, 500);
 
         let enrollmentId: string | null = null;
         if (inReplyTo || fromEmail) {
