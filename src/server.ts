@@ -25,6 +25,7 @@ import { bulkJobRoutes } from './routes/bulk-jobs/index.js';
 import { billingRoutes } from './routes/billing/index.js';
 import { sendRoute } from './routes/send/index.js';
 import { sendEventsRoute } from './routes/send/events.js';
+import { smtp2goEventsRoute } from './routes/send/smtp2goEvents.js';
 import { batchSendRoute } from './routes/send/batch.js';
 import { suppressionRoutes } from './routes/suppressions/index.js';
 import { messagesRoutes } from './routes/messages/index.js';
@@ -189,6 +190,7 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(billingRoutes, { prefix: '/v1' });
   await app.register(sendRoute, { prefix: '/v1' });
   await app.register(sendEventsRoute, { prefix: '/v1' });
+  await app.register(smtp2goEventsRoute, { prefix: '/v1' });
   await app.register(batchSendRoute, { prefix: '/v1' });
   await app.register(suppressionRoutes, { prefix: '/v1' });
   await app.register(messagesRoutes, { prefix: '/v1' });

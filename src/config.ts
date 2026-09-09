@@ -74,6 +74,13 @@ const baseEnvSchema = z.object({
   SES_FROM_DOMAIN: z.string().default('relay.continuumapi.com'),
   SES_SNS_TOPIC_ARN: z.string().optional(),
 
+  // Send (SMTP2GO) — fallback transactional/campaign transport, wired up
+  // pending AWS SES production access. Off when unset, same shape as SES
+  // above. SMTP2GO has no HMAC-signed webhook (unlike SNS), so a random
+  // path-segment token stands in as the shared secret for /send/smtp2go-events/:token.
+  SMTP2GO_API_KEY: z.string().optional(),
+  SMTP2GO_WEBHOOK_TOKEN: z.string().optional(),
+
   // Rate limiting
   DEFAULT_RATE_LIMIT_RPM: z.coerce.number().int().min(1).max(100000).default(1000),
 

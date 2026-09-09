@@ -569,6 +569,7 @@ model SendMessage {
   bcc            String[]   @default([])
   subject        String
   sesMessageId   String?    @unique
+  smtp2goMessageId String?  @unique
   status         SendStatus @default(queued)
   errorMessage   String?
   verificationId String?
@@ -590,6 +591,7 @@ model SendMessage {
   @@index([apiKeyId])
   @@index([apiKeyId, createdAt])
   @@index([sesMessageId])
+  @@index([smtp2goMessageId])
   @@index([sequenceStepId])
   @@map("send_messages")
 }
