@@ -14,8 +14,12 @@ dist-scripts/
 .env.*.local
 
 
-# Logs
-logs/
+# Logs — root-anchored: an unanchored "logs/" here previously matched
+# src/routes/logs/ too, which `railway up`'s local-upload path filters by
+# (unlike a normal git-push deploy, which checks out the tracked tree and
+# ignores .gitignore entirely) — silently dropped the whole route directory
+# from the build. Caught via a failed CLI deploy, Sep 2026.
+/logs/
 *.log
 npm-debug.log*
 
