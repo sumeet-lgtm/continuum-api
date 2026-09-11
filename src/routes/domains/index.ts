@@ -12,6 +12,7 @@ import { checkDomainBlacklists } from '../../engine/deliverability.js';
 import { config } from '../../config.js';
 import { verifyDomain } from '../../lib/domainVerify.js';
 import { logger } from '../../lib/logger.js';
+import { addSmtp2goSenderDomain, isSmtp2goConfigured } from '../../lib/smtp2go.js';
 
 let _sesClient: SESv2Client | null = null;
 function getSesClient(region: string): SESv2Client {
@@ -92,6 +93,26 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
         }
       }
 
+      // Also register with the fallback send provider — without this, a
+      // send that falls back to it (SES down/sandboxed) fails for this
+      // domain even though the primary provider considers it verified,
+      // since the fallback has never heard of it. Best-effort and
+      // non-blocking, same as the SES registration above: DNS records are
+      // still useful to hand back even if this call fails, and the
+      // customer isn't blocked on a provider they don't know exists.
+      let secondaryRecords: { dkim: { name: string; type: 'CNAME'; value: string }; return_path: { name: string; type: 'CNAME'; value: string } } | null = null;
+      if (isSmtp2goConfigured()) {
+        try {
+          const secondary = await addSmtp2goSenderDomain(name);
+          secondaryRecords = {
+            dkim: { name: secondary.dkimRecord.host, type: 'CNAME', value: secondary.dkimRecord.value },
+            return_path: { name: secondary.returnPathRecord.host, type: 'CNAME', value: secondary.returnPathRecord.value },
+          };
+        } catch (err) {
+          logger.warn({ err, domainId: domain.id, domain: name }, 'Fallback provider domain registration failed at domain-add time (non-fatal)');
+        }
+      }
+
       void logAudit(null, 'sending_domain.added', { id: apiKeyId, email: 'api', ip: (request.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ?? request.ip }, [{ type: 'domain', id: domain.id, name: domain.name }], apiKeyId);
 
       return reply.status(201).send({
@@ -118,6 +139,14 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
             type: 'TXT',
             value: 'v=DMARC1; p=quarantine; rua=mailto:dmarc@continuumapi.com',
           },
+          // Redundancy records for the fallback send path — optional, only
+          // present when the fallback provider is configured and accepted
+          // the domain. Deliverability is unaffected if these are skipped;
+          // they only matter if the primary provider is ever unavailable.
+          ...(secondaryRecords ? {
+            dkim_secondary: secondaryRecords.dkim,
+            return_path_secondary: secondaryRecords.return_path,
+          } : {}),
         },
       });
     },
