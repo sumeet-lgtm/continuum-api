@@ -33,6 +33,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
           createdAt: true, lastUsedAt: true, allowedIps: true, rateLimit: true,
           currentMonthUsage: true, monthlyLimit: true, currentMonthSendUsage: true,
           usageAlertEnabled: true, expiresAt: true, monthlySendLimit: true,
+          allowSendFallback: true,
         },
       });
 
@@ -267,6 +268,33 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       await prisma.apiKey.update({ where: { id }, data: { usageAlertEnabled: body.enabled } });
 
       return reply.status(200).send({ id, usageAlertEnabled: body.enabled });
+    },
+  );
+
+  // PATCH /v1/api-keys/:id/send-fallback — toggle whether a send falls back
+  // to the backup provider on primary-provider failure, or fails outright.
+  fastify.patch(
+    '/api-keys/:id/send-fallback',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const parentKey = request.apiKey;
+      const body = request.body as { enabled?: unknown };
+
+      if (typeof body?.enabled !== 'boolean') {
+        throw Errors.validationFailed([{ field: 'enabled', message: 'Must be a boolean' }]);
+      }
+
+      const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
+      const target = await prisma.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } });
+      if (!target) throw Errors.notFound('API key not found.');
+      if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
+        throw Errors.forbidden('Not authorized to manage this key.');
+      }
+
+      await prisma.apiKey.update({ where: { id }, data: { allowSendFallback: body.enabled } });
+
+      return reply.status(200).send({ id, allowSendFallback: body.enabled });
     },
   );
 

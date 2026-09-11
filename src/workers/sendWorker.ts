@@ -74,6 +74,12 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
   const unsubToken = generateUnsubToken(data.to, data.apiKeyId);
   const listUnsubscribeHeader = `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`;
 
+  const apiKeyRecord = await prisma.apiKey.findUnique({
+    where: { id: data.apiKeyId },
+    select: { allowSendFallback: true },
+  });
+  const allowFallback = apiKeyRecord?.allowSendFallback ?? true;
+
   const sendResult = await sendViaTransportWithFallback({
     to: data.to,
     from: data.from,
@@ -86,7 +92,7 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
     ...(data.attachments && data.attachments.length ? { attachments: data.attachments } : {}),
     ...(data.headers && Object.keys(data.headers).length ? { headers: data.headers } : {}),
     listUnsubscribeHeader,
-  }, { sendMessageId: data.sendMessageId, apiKeyId: data.apiKeyId });
+  }, { allowFallback, logCtx: { sendMessageId: data.sendMessageId, apiKeyId: data.apiKeyId } });
 
   const sesMessageId = sendResult.ok ? sendResult.sesMessageId : null;
   const smtp2goMessageId = sendResult.ok ? sendResult.smtp2goMessageId : null;

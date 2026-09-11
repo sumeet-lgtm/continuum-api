@@ -35,6 +35,7 @@ interface ApiKeyRecord {
   allowedIps: string[];
   usageAlertEnabled: boolean;
   usageAlertSentAt: Date | null;
+  allowSendFallback: boolean;
   extraVerificationCredits: number;
   extraSendCredits: number;
   expiresAt: Date | null;

@@ -284,7 +284,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         ...(attachments && attachments.length ? { attachments } : {}),
         ...(headers && Object.keys(headers).length ? { headers } : {}),
         listUnsubscribeHeader,
-      }, { to, apiKeyId });
+      }, { allowFallback: request.apiKey.allowSendFallback, logCtx: { to, apiKeyId } });
 
       const sesMessageId = sendResult.ok ? sendResult.sesMessageId : null;
       const smtp2goMessageId = sendResult.ok ? sendResult.smtp2goMessageId : null;

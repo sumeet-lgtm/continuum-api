@@ -45,6 +45,14 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
   if (!campaign || campaign.status === 'cancelled') return;
 
+  // Fetched once per campaign, not per recipient — a campaign can enroll
+  // thousands of recipients, and this preference never changes mid-run.
+  const apiKeyRecord = await prisma.apiKey.findUnique({
+    where: { id: apiKeyId },
+    select: { allowSendFallback: true },
+  });
+  const allowFallback = apiKeyRecord?.allowSendFallback ?? true;
+
   // Retarget campaigns carry a pre-computed list of emails to exclude
   // (openers from the source campaign). This avoids suppressing them globally.
   const retargetExcludeSet = new Set<string>(
@@ -265,7 +273,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
           ...(textBody ? { textBody } : {}),
           ...(campaign.replyTo ? { replyTo: campaign.replyTo } : {}),
           listUnsubscribeHeader: `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`,
-        }, { campaignId, email: recipient.email });
+        }, { allowFallback, logCtx: { campaignId, email: recipient.email } });
 
         if (!sendResult.ok) throw new Error(sendResult.errorMessage);
         const { sesMessageId, smtp2goMessageId } = sendResult;

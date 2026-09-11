@@ -27,10 +27,23 @@ export function isSendTransportConfigured(): boolean {
   return isSesConfigured() || isSmtp2goConfigured();
 }
 
+export interface SendTransportOptions {
+  /**
+   * Per-customer opt-out (ApiKey.allowSendFallback) — defaults true so
+   * existing behavior is unchanged unless a caller explicitly passes false.
+   * When false, a customer would rather a send fail outright than go
+   * through the backup provider, so SMTP2GO is never attempted regardless
+   * of whether SES fails.
+   */
+  allowFallback?: boolean;
+  logCtx?: Record<string, unknown>;
+}
+
 export async function sendViaTransportWithFallback(
   input: SendTransportInput,
-  logCtx: Record<string, unknown> = {},
+  options: SendTransportOptions = {},
 ): Promise<SendTransportResult> {
+  const { allowFallback = true, logCtx = {} } = options;
   let sesError: unknown = null;
 
   if (isSesConfigured()) {
@@ -39,11 +52,15 @@ export async function sendViaTransportWithFallback(
       return { ok: true, transport: 'ses', sesMessageId: result.sesMessageId, smtp2goMessageId: null };
     } catch (err) {
       sesError = err;
-      logger.warn({ ...logCtx, err }, 'SES send failed — trying SMTP2GO fallback');
+      if (allowFallback) {
+        logger.warn({ ...logCtx, err }, 'SES send failed — trying SMTP2GO fallback');
+      } else {
+        logger.warn({ ...logCtx, err }, 'SES send failed — fallback disabled for this account, not retrying');
+      }
     }
   }
 
-  if (isSmtp2goConfigured()) {
+  if (allowFallback && isSmtp2goConfigured()) {
     try {
       const result = await sendViaSmtp2go(input);
       return { ok: true, transport: 'smtp2go', sesMessageId: null, smtp2goMessageId: result.smtp2goMessageId };
@@ -57,8 +74,9 @@ export async function sendViaTransportWithFallback(
     }
   }
 
-  // No SMTP2GO configured to fall back to — surface the original SES error
-  // (or "not configured" if SES was never set up either).
+  // Either no SMTP2GO configured to fall back to, or the customer opted out
+  // of fallback entirely — surface the original SES error (or "not
+  // configured" if SES was never set up either).
   const errorMessage = sesError instanceof SesNotConfiguredError
     ? sesError.message
     : (sesError instanceof Error ? sesError.message : 'No send transport configured (set AWS_* or SMTP2GO_API_KEY)');
