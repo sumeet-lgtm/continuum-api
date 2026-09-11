@@ -154,29 +154,63 @@ export async function createSmtp2goSubaccount(input: CreateSubaccountInput): Pro
 
 // ─── Sender domain + DKIM ──────────────────────────────────────────────────────
 
-export interface AddSenderDomainResult {
-  domainId: string;
-  dkimRecord: { host: string; value: string; type: string } | null;
-  spfRecord: { host: string; value: string; type: string } | null;
+// Response shape confirmed against a real /domain/add and /domain/view call
+// (not the docs alone — the docs' example response was verified accurate
+// against live output before this shipped). SMTP2GO has no domain_id or
+// separate SPF record the way the first draft assumed: dkim/rpath
+// verification live directly on the domain object, and there's no distinct
+// SPF token to publish — SMTP2GO's SPF alignment rides on the rpath
+// (return-path) CNAME instead.
+interface Smtp2goDomainRecord {
+  fulldomain: string;
+  dkim_selector: string;
+  dkim_value: string;
+  dkim_verified: boolean;
+  rpath_selector: string;
+  rpath_value: string;
+  rpath_verified: boolean;
 }
 
-export async function addSmtp2goSenderDomain(domain: string): Promise<AddSenderDomainResult> {
-  // Response shape confirmed against the live add-sender-domain reference;
-  // exact key names re-verified once real credentials exist to test against —
-  // flagged in the PR/commit rather than guessed silently.
-  const result = await smtp2goFetch<{
-    domain_id: string;
-    dkim_token?: { hostname: string; value: string; type: string };
-    spf_token?: { hostname: string; value: string; type: string };
-  }>('/sender/domain/add', { domain });
+export interface SenderDomainResult {
+  fulldomain: string;
+  dkimVerified: boolean;
+  returnPathVerified: boolean;
+  dkimRecord: { host: string; value: string; type: 'CNAME' };
+  returnPathRecord: { host: string; value: string; type: 'CNAME' };
+}
 
+// The `host` fields below (`<selector>._domainkey.<domain>` etc.) follow the
+// industry-standard DKIM/CNAME convention most ESPs use, but are NOT
+// confirmed against SMTP2GO's own dashboard instructions — continuumapi.com
+// was already verified (presumably set up through their UI directly) before
+// this code ever ran, so this exact construction has never been exercised
+// against a real "add a brand-new domain" flow. Verify against the
+// dashboard's own displayed DNS instructions before trusting this for a
+// second domain.
+function mapDomainRecord(d: Smtp2goDomainRecord): SenderDomainResult {
   return {
-    domainId: result.domain_id,
-    dkimRecord: result.dkim_token
-      ? { host: result.dkim_token.hostname, value: result.dkim_token.value, type: result.dkim_token.type }
-      : null,
-    spfRecord: result.spf_token
-      ? { host: result.spf_token.hostname, value: result.spf_token.value, type: result.spf_token.type }
-      : null,
+    fulldomain: d.fulldomain,
+    dkimVerified: d.dkim_verified,
+    returnPathVerified: d.rpath_verified,
+    dkimRecord: { host: `${d.dkim_selector}._domainkey.${d.fulldomain}`, value: d.dkim_value, type: 'CNAME' },
+    returnPathRecord: { host: `${d.rpath_selector}.${d.fulldomain}`, value: d.rpath_value, type: 'CNAME' },
   };
+}
+
+export async function addSmtp2goSenderDomain(domain: string): Promise<SenderDomainResult> {
+  const result = await smtp2goFetch<{ domains: Array<{ domain: Smtp2goDomainRecord }> }>(
+    '/domain/add', { domain },
+  );
+  const record = result.domains?.[0]?.domain;
+  if (!record) throw new Error('SMTP2GO accepted the domain add but returned no domain record.');
+  return mapDomainRecord(record);
+}
+
+/** Poll this after addSmtp2goSenderDomain until dkimVerified/returnPathVerified are both true. */
+export async function getSmtp2goDomainStatus(domain: string): Promise<SenderDomainResult | null> {
+  const result = await smtp2goFetch<{ domains: Array<{ domain: Smtp2goDomainRecord }> }>(
+    '/domain/view', {},
+  );
+  const record = result.domains?.find((d) => d.domain.fulldomain === domain)?.domain;
+  return record ? mapDomainRecord(record) : null;
 }
