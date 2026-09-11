@@ -142,8 +142,13 @@ function LeadsPage() {
   const load = () => {
     if (!primaryKey?.keyRaw) return;
     api.withKey
-      .get<{ leads: Lead[]; total: number }>("/v1/leads?page=1&limit=50", primaryKey.keyRaw)
-      .then((r) => { setLeads(r.leads ?? []); setTotal(r.total ?? 0); })
+      // API returns { data, total, page, limit } — this previously read
+      // r.leads, a key that has never existed on the response. total (a
+      // real top-level field) rendered correctly while the list itself
+      // silently stayed empty on every load: a customer would see "1 lead"
+      // as the count with zero rows showing underneath.
+      .get<{ data: Lead[]; total: number }>("/v1/leads?page=1&limit=50", primaryKey.keyRaw)
+      .then((r) => { setLeads(r.data ?? []); setTotal(r.total ?? 0); })
       .catch(() => {})
       .finally(() => setLoading(false));
   };
