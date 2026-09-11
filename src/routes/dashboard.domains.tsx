@@ -30,7 +30,21 @@ interface DnsRecords {
   spf: DnsRecord;
   return_path: DnsRecord;
   dmarc: DnsRecord;
+  // Only present when a backup send provider accepted the domain at add
+  // time — not shown as a distinct branded step, just redundancy records
+  // alongside the primary ones.
+  dkim_secondary?: DnsRecord;
+  return_path_secondary?: DnsRecord;
 }
+
+const DNS_RECORD_LABELS: Partial<Record<keyof DnsRecords, string>> = {
+  dkim: "DKIM",
+  spf: "SPF",
+  return_path: "Return Path",
+  dmarc: "DMARC",
+  dkim_secondary: "DKIM (backup)",
+  return_path_secondary: "Return Path (backup)",
+};
 
 interface HealthData {
   spf: { valid: boolean; record: string | null };
@@ -260,7 +274,7 @@ function DomainsPage() {
             {(Object.entries(newDnsRecords) as [keyof DnsRecords, DnsRecord][]).map(([key, rec]) => (
               <div key={key} className="rounded-md border border-border bg-card p-3 space-y-1">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{key.replace("_", " ")}</span>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{DNS_RECORD_LABELS[key] ?? key.replace(/_/g, " ")}</span>
                   <span className="text-xs bg-muted rounded px-1.5 py-0.5 font-mono">{rec.type}</span>
                 </div>
                 <div className="grid grid-cols-[auto,1fr,auto] gap-2 items-center">
@@ -291,7 +305,7 @@ function DomainsPage() {
             <Label>Domain name</Label>
             <Input placeholder="mail.yourapp.com" value={domainName} onChange={(e) => setDomainName(e.target.value)} />
           </div>
-          <p className="text-xs text-muted-foreground">We'll generate DKIM keys and return DNS records to add to your registrar. We recheck automatically every 15 minutes once you've added them — DKIM specifically can take a few minutes to a few hours to clear even after the DNS record is live, since that check runs on Amazon's own schedule, not ours.</p>
+          <p className="text-xs text-muted-foreground">We'll generate DKIM keys and return DNS records to add to your registrar. We recheck automatically every 15 minutes once you've added them — DKIM specifically can take a few minutes to a few hours to clear even after the DNS record is live, since that verification runs on our upstream provider's own schedule, not ours.</p>
           <div className="flex gap-2">
             <Button onClick={add} disabled={saving}>{saving ? "Adding…" : "Add Domain"}</Button>
             <Button variant="outline" onClick={() => setAdding(false)}>Cancel</Button>

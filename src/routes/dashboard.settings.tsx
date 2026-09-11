@@ -68,6 +68,10 @@ function SettingsPage() {
   const [togglingAlert, setTogglingAlert] = useState(false);
   const [notifLoaded, setNotifLoaded] = useState(false);
 
+  // Sending
+  const [allowFallback, setAllowFallback] = useState(true);
+  const [togglingFallback, setTogglingFallback] = useState(false);
+
   // Developer defaults (localStorage)
   const [defaultFrom, setDefaultFrom] = useState(() => LS("cnt_default_from", ""));
   const [timezone, setTimezone] = useState(() => LS("cnt_default_tz", "UTC"));
@@ -81,7 +85,7 @@ function SettingsPage() {
     if (profile) setFullName(profile.fullName ?? "");
   }, [profile]);
 
-  // Load usageAlertEnabled for primary key
+  // Load usageAlertEnabled + allowSendFallback for primary key
   useEffect(() => {
     if (!primaryKey?.keyRaw) return;
     fetch("https://api.continuumapi.com/v1/api-keys", {
@@ -89,9 +93,12 @@ function SettingsPage() {
     })
       .then((r) => r.json())
       .then((data: unknown) => {
-        const keys = (data as { data?: Array<{ id: string; usageAlertEnabled?: boolean }> }).data ?? [];
+        const keys = (data as { data?: Array<{ id: string; usageAlertEnabled?: boolean; allowSendFallback?: boolean }> }).data ?? [];
         const mine = keys.find((k) => k.id === primaryKey.id);
-        if (mine) setUsageAlerts(mine.usageAlertEnabled !== false);
+        if (mine) {
+          setUsageAlerts(mine.usageAlertEnabled !== false);
+          setAllowFallback(mine.allowSendFallback !== false);
+        }
       })
       .catch(() => {})
       .finally(() => setNotifLoaded(true));
@@ -131,6 +138,26 @@ function SettingsPage() {
       toast.error("Failed to update notification setting");
     } finally {
       setTogglingAlert(false);
+    }
+  };
+
+  const toggleFallback = async (next: boolean) => {
+    if (!primaryKey?.keyRaw || !primaryKey?.id || togglingFallback) return;
+    setTogglingFallback(true);
+    const prev = allowFallback;
+    setAllowFallback(next);
+    try {
+      await fetch(`https://api.continuumapi.com/v1/api-keys/${primaryKey.id}/send-fallback`, {
+        method: "PATCH",
+        headers: { "X-API-Key": primaryKey.keyRaw, "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      toast.success(next ? "Backup delivery enabled" : "Backup delivery disabled — sends will fail rather than reroute");
+    } catch {
+      setAllowFallback(prev);
+      toast.error("Failed to update sending setting");
+    } finally {
+      setTogglingFallback(false);
     }
   };
 
@@ -227,6 +254,18 @@ function SettingsPage() {
             onChange={() => toast.info("Weekly digests are coming soon.")}
             disabled={true}
             badge="coming soon"
+          />
+        </div>
+      </Section>
+
+      <Section title="Sending">
+        <div className="space-y-5">
+          <NotifRow
+            title="Backup delivery on failure"
+            desc="If your primary sending path is temporarily unavailable, automatically reroute through a backup provider instead of failing the send. Turn this off if a send should fail outright rather than go out through any alternate route."
+            enabled={allowFallback}
+            onChange={toggleFallback}
+            disabled={togglingFallback || !notifLoaded || !primaryKey}
           />
         </div>
       </Section>
