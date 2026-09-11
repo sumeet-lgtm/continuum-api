@@ -4,7 +4,7 @@ import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { requireMonthlySendQuota, incrementSendUsageBy } from '../../plugins/usageMeter.js';
 import { verifyEmail } from '../../engine/index.js';
-import { sendViaSes, isSesConfigured, SesNotConfiguredError } from '../../lib/ses.js';
+import { sendViaTransportWithFallback, isSendTransportConfigured } from '../../lib/sendTransport.js';
 import { prisma } from '../../lib/prisma.js';
 import { config } from '../../config.js';
 import { dispatchWebhook, buildEventId } from '../../lib/webhooks.js';
@@ -185,7 +185,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         const delayMs = scheduledDate.getTime() - Date.now();
         if (delayMs < 0) throw Errors.validationFailed([{ field: 'scheduled_at', message: 'scheduled_at must be in the future.' }]);
 
-        if (!isSesConfigured()) throw Errors.serviceUnavailable('Send (SES not configured)');
+        if (!isSendTransportConfigured()) throw Errors.serviceUnavailable('Send (no transport configured)');
 
         const record = await prisma.sendMessage.create({
           data: {
@@ -230,7 +230,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       }
 
       // ── Inject tracking ────────────────────────────────────────────────────────
-      if (!isSesConfigured()) throw Errors.serviceUnavailable('Send (SES not configured)');
+      if (!isSendTransportConfigured()) throw Errors.serviceUnavailable('Send (no transport configured)');
 
       const from = resolvedFrom;
       const trackOpens = requestTrackOpens ?? sendingDomain?.trackOpens ?? true;
@@ -273,53 +273,42 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         }
       }
 
-      // ── SES send ────────────────────────────────────────────────────────────────
-      let sesMessageId: string | null = null;
-      let status: 'sent' | 'failed' = 'sent';
-      let errorMessage: string | null = null;
-      let isClientFault = false;
+      // ── Send (SES, falling back to SMTP2GO on failure) ────────────────────────────
+      const sendResult = await sendViaTransportWithFallback({
+        to, from, subject,
+        ...(cc && cc.length ? { cc } : {}),
+        ...(bcc && bcc.length ? { bcc } : {}),
+        ...(reply_to ? { replyTo: reply_to } : {}),
+        ...(htmlBody !== undefined ? { htmlBody } : {}),
+        ...(textBody ? { textBody } : {}),
+        ...(attachments && attachments.length ? { attachments } : {}),
+        ...(headers && Object.keys(headers).length ? { headers } : {}),
+        listUnsubscribeHeader,
+      }, { to, apiKeyId });
 
-      try {
-        const result = await sendViaSes({
-          to, from, subject,
-          ...(cc && cc.length ? { cc } : {}),
-          ...(bcc && bcc.length ? { bcc } : {}),
-          ...(reply_to ? { replyTo: reply_to } : {}),
-          ...(htmlBody !== undefined ? { htmlBody } : {}),
-          ...(textBody ? { textBody } : {}),
-          ...(attachments && attachments.length ? { attachments } : {}),
-          ...(headers && Object.keys(headers).length ? { headers } : {}),
-          listUnsubscribeHeader,
-        });
-        sesMessageId = result.sesMessageId;
-      } catch (err) {
-        status = 'failed';
-        errorMessage = err instanceof SesNotConfiguredError
-          ? err.message
-          : (err instanceof Error ? err.message : 'Unknown SES error');
-        // The AWS SDK already tells us whether a failure is the caller's
-        // fault (e.g. MessageRejected: sending identity not verified —
-        // exactly what hitting this with an unverified domain looks like)
-        // vs. a genuine upstream/transient issue, via $fault — this was
-        // being thrown away and every failure answered with a flat 502,
-        // which reads as "Continuum is down" for what's actually "you
-        // haven't verified your sending domain yet."
-        isClientFault = (err as { $fault?: string } | null)?.$fault === 'client';
-        logger.error({ err, to, apiKeyId }, 'SES send failed');
-      }
+      const sesMessageId = sendResult.ok ? sendResult.sesMessageId : null;
+      const smtp2goMessageId = sendResult.ok ? sendResult.smtp2goMessageId : null;
+      const status: 'sent' | 'failed' = sendResult.ok ? 'sent' : 'failed';
+      // $fault distinguishes the caller's own fault (e.g. an unverified
+      // sending domain) from a genuine upstream/transient issue — see the
+      // matching note in sendTransport.ts. Kept as a flat 502-vs-400 signal
+      // here so a client-side misconfiguration doesn't read as "Continuum is
+      // down."
+      const errorMessage = sendResult.ok ? null : sendResult.errorMessage;
+      const isClientFault = sendResult.ok ? false : sendResult.isClientFault;
 
-      // ── Update DB record with SES result ────────────────────────────────────────
+      // ── Update DB record with send result ─────────────────────────────────────────
       try {
         await prisma.sendMessage.update({
           where: { id: record.id },
           data: {
-            sesMessageId, status, errorMessage,
+            sesMessageId, smtp2goMessageId, status, errorMessage,
             sentAt: status === 'sent' ? new Date() : null,
             trackingToken: (trackOpens || trackClicks) ? record.id : null,
           },
         });
       } catch (err) {
-        logger.error({ err, to, apiKeyId, sesMessageId, status }, 'Failed to update SendMessage after SES send');
+        logger.error({ err, to, apiKeyId, sesMessageId, smtp2goMessageId, status }, 'Failed to update SendMessage after send');
       }
 
       if (status === 'sent') {
@@ -329,7 +318,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       // ── Webhooks ───────────────────────────────────────────────────────────────
       if (status === 'sent') {
         const payload: EmailSentPayload = {
-          event: 'email.sent', id: record.id, to, subject, sesMessageId, apiKeyId,
+          event: 'email.sent', id: record.id, to, subject, sesMessageId, smtp2goMessageId, apiKeyId,
           sentAt: new Date().toISOString(), apiVersion: '2',
         };
         void dispatchWebhook({ apiKeyId, event: 'email.sent', eventId: buildEventId('email.sent', record.id), payload });
@@ -341,9 +330,9 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       }
 
       if (status === 'failed') {
-        return reply.status(isClientFault ? 400 : 502).send({ id: record.id, status, sesMessageId, errorMessage });
+        return reply.status(isClientFault ? 400 : 502).send({ id: record.id, status, sesMessageId, smtp2goMessageId, errorMessage });
       }
-      return reply.status(200).send({ id: record.id, sesMessageId, status });
+      return reply.status(200).send({ id: record.id, sesMessageId, smtp2goMessageId, status });
     },
   );
 

@@ -30,7 +30,8 @@
 import { Worker, type Job } from 'bullmq';
 import { redisConnection, QUEUE_SEND } from '../lib/queue.js';
 import { prisma } from '../lib/prisma.js';
-import { sendViaSes, isSesConfigured, SesNotConfiguredError } from '../lib/ses.js';
+import { sendViaTransportWithFallback, isSendTransportConfigured } from '../lib/sendTransport.js';
+import { SesNotConfiguredError } from '../lib/ses.js';
 import { incrementSendUsageBy } from '../plugins/usageMeter.js';
 import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
 import { generateUnsubToken } from '../lib/unsubscribe.js';
@@ -61,49 +62,42 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
     return;
   }
 
-  if (!isSesConfigured()) {
+  if (!isSendTransportConfigured()) {
     await prisma.sendMessage.update({
       where: { id: data.sendMessageId },
       data: { status: 'failed', errorMessage: new SesNotConfiguredError().message },
     });
-    log.error('SES not configured — cannot send');
+    log.error('No send transport configured — cannot send');
     return;
   }
 
   const unsubToken = generateUnsubToken(data.to, data.apiKeyId);
   const listUnsubscribeHeader = `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`;
 
-  let sesMessageId: string | null = null;
-  let status: 'sent' | 'failed' = 'sent';
-  let errorMessage: string | null = null;
+  const sendResult = await sendViaTransportWithFallback({
+    to: data.to,
+    from: data.from,
+    subject: data.subject,
+    ...(data.cc && data.cc.length ? { cc: data.cc } : {}),
+    ...(data.bcc && data.bcc.length ? { bcc: data.bcc } : {}),
+    ...(data.replyTo ? { replyTo: data.replyTo } : {}),
+    ...(data.htmlBody !== undefined ? { htmlBody: data.htmlBody } : {}),
+    ...(data.textBody ? { textBody: data.textBody } : {}),
+    ...(data.attachments && data.attachments.length ? { attachments: data.attachments } : {}),
+    ...(data.headers && Object.keys(data.headers).length ? { headers: data.headers } : {}),
+    listUnsubscribeHeader,
+  }, { sendMessageId: data.sendMessageId, apiKeyId: data.apiKeyId });
 
-  try {
-    const result = await sendViaSes({
-      to: data.to,
-      from: data.from,
-      subject: data.subject,
-      ...(data.cc && data.cc.length ? { cc: data.cc } : {}),
-      ...(data.bcc && data.bcc.length ? { bcc: data.bcc } : {}),
-      ...(data.replyTo ? { replyTo: data.replyTo } : {}),
-      ...(data.htmlBody !== undefined ? { htmlBody: data.htmlBody } : {}),
-      ...(data.textBody ? { textBody: data.textBody } : {}),
-      ...(data.attachments && data.attachments.length ? { attachments: data.attachments } : {}),
-      ...(data.headers && Object.keys(data.headers).length ? { headers: data.headers } : {}),
-      listUnsubscribeHeader,
-    });
-    sesMessageId = result.sesMessageId;
-  } catch (err) {
-    status = 'failed';
-    errorMessage = err instanceof SesNotConfiguredError
-      ? err.message
-      : (err instanceof Error ? err.message : 'Unknown SES error');
-    log.error({ err }, 'Scheduled SES send failed');
-  }
+  const sesMessageId = sendResult.ok ? sendResult.sesMessageId : null;
+  const smtp2goMessageId = sendResult.ok ? sendResult.smtp2goMessageId : null;
+  const status: 'sent' | 'failed' = sendResult.ok ? 'sent' : 'failed';
+  const errorMessage = sendResult.ok ? null : sendResult.errorMessage;
+  if (!sendResult.ok) log.error({ errorMessage }, 'Scheduled send failed on every configured transport');
 
   await prisma.sendMessage.update({
     where: { id: data.sendMessageId },
     data: {
-      sesMessageId, status, errorMessage,
+      sesMessageId, smtp2goMessageId, status, errorMessage,
       sentAt: status === 'sent' ? new Date() : null,
     },
   });
@@ -112,7 +106,7 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
     void incrementSendUsageBy(data.apiKeyId, 1);
     const payload: EmailSentPayload = {
       event: 'email.sent', id: data.sendMessageId, to: data.to, subject: data.subject,
-      sesMessageId, apiKeyId: data.apiKeyId, sentAt: new Date().toISOString(), apiVersion: '2',
+      sesMessageId, smtp2goMessageId, apiKeyId: data.apiKeyId, sentAt: new Date().toISOString(), apiVersion: '2',
     };
     void dispatchWebhook({
       apiKeyId: data.apiKeyId, event: 'email.sent',
@@ -129,7 +123,7 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
     });
   }
 
-  log.info({ status, sesMessageId }, 'Scheduled send processed');
+  log.info({ status, sesMessageId, smtp2goMessageId }, 'Scheduled send processed');
 }
 
 export function startSendWorker(): void {

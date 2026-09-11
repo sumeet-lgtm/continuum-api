@@ -1,7 +1,7 @@
 import { Worker, type Job } from 'bullmq';
 import { QUEUE_CAMPAIGN, redisConnection } from '../lib/queue.js';
 import { prisma } from '../lib/prisma.js';
-import { sendViaSes, isSesConfigured } from '../lib/ses.js';
+import { sendViaTransportWithFallback, isSendTransportConfigured } from '../lib/sendTransport.js';
 import { generateUnsubToken, generateUnsubHtml } from '../lib/unsubscribe.js';
 import { generateOpenToken, generateClickToken, injectTracking } from '../lib/tracking.js';
 import { processTemplate } from '../lib/spintax.js';
@@ -33,12 +33,12 @@ function isInSendWindow(campaign: { sendDays: string[]; sendStartHour: number; s
 export async function processCampaign(job: Job<CampaignJobData>): Promise<void> {
   const { campaignId, apiKeyId } = job.data;
 
-  if (!isSesConfigured()) {
+  if (!isSendTransportConfigured()) {
     await prisma.campaign.update({
       where: { id: campaignId },
       data: { status: 'failed', errorMessage: 'Email sending is not configured. Contact support.' },
     });
-    logger.error({ campaignId }, 'Campaign aborted — SES credentials not configured');
+    logger.error({ campaignId }, 'Campaign aborted — no send transport configured');
     return;
   }
 
@@ -259,22 +259,30 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
           );
         }
 
-        const { sesMessageId } = await sendViaSes({
+        const sendResult = await sendViaTransportWithFallback({
           to: recipient.email, from: fromAddress, subject,
           htmlBody,
           ...(textBody ? { textBody } : {}),
           ...(campaign.replyTo ? { replyTo: campaign.replyTo } : {}),
           listUnsubscribeHeader: `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`,
-        });
+        }, { campaignId, email: recipient.email });
+
+        if (!sendResult.ok) throw new Error(sendResult.errorMessage);
+        const { sesMessageId, smtp2goMessageId } = sendResult;
 
         await prisma.campaignRecipient.updateMany({
           where: { campaignId, email: recipient.email },
+          // campaign_recipients has no smtp2goMessageId column — sesMessageId
+          // stays null on an SMTP2GO-fallback send here (informational field
+          // only). Real bounce/complaint correlation runs through the
+          // SendMessage row below, which does carry both ids.
           data: { status: 'sent', sesMessageId, sentAt: new Date(), variant: recipientVariant },
         });
 
-        // Also register this send as a SendMessage row — the SES bounce/
-        // complaint webhook (POST /v1/send/events) only knows how to match
-        // an incoming SNS notification back to a SendMessage.sesMessageId.
+        // Also register this send as a SendMessage row — the bounce/
+        // complaint webhooks (POST /v1/send/events for SES, POST
+        // /v1/send/smtp2go-events/:token for SMTP2GO) only know how to match
+        // an incoming notification back to a SendMessage row by message id.
         // Without this, campaign bounces had nowhere to land: no automatic
         // suppression, no closed-loop verification correction, nothing —
         // the recipient stayed fully sendable in every future campaign and
@@ -282,7 +290,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
         await prisma.sendMessage.create({
           data: {
             apiKeyId, to: recipient.email, from: fromAddress, subject,
-            sesMessageId, status: 'sent', sentAt: new Date(),
+            sesMessageId, smtp2goMessageId, status: 'sent', sentAt: new Date(),
             // Store the tracking token so the open/click pixel can find this
             // row — the SendMessage id is a cuid and the tracking token uses
             // campaignId_email, so without this the campaign open/click

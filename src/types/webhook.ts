@@ -150,6 +150,10 @@ export interface EmailSentPayload {
   to:           string;
   subject:      string;
   sesMessageId: string | null;
+  // Set instead of sesMessageId when the send fell back to SMTP2GO (SES
+  // unconfigured or failed) — see lib/sendTransport.ts. Additive field,
+  // existing integrations reading only sesMessageId are unaffected.
+  smtp2goMessageId?: string | null;
   apiKeyId:     string;
   sentAt:       string;
   apiVersion:   '2';
