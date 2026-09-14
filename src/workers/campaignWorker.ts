@@ -114,7 +114,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     for (const seg of segments) {
       if (!seg.listId) continue;
       const segMemberships = await prisma.contactListMembership.findMany({
-        where: { listId: seg.listId, status: 'subscribed' },
+        where: { listId: seg.listId, status: 'subscribed', contact: { apiKeyId } },
         include: { contact: { select: { email: true, firstName: true, lastName: true, customFields: true } } },
       });
       const rules = seg.filterRules as Array<{ field: string; operator: string; value: string }>;
@@ -137,6 +137,34 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   const validRecipients = recipients.filter(r =>
     !suppressedSet.has(r.email) && !retargetExcludeSet.has(r.email)
   );
+
+  // Circuit breaker — independent of every resolution path above (list,
+  // segment, retarget-exclude), verify every resolved recipient is
+  // actually a Contact this account owns before anything sends. This is
+  // deliberately redundant with the apiKeyId scoping already applied
+  // upstream: it exists so that a FUTURE bug in how recipients get
+  // resolved (a new query, a missed join, a refactor) fails the send
+  // loudly instead of silently reaching contacts outside this account,
+  // the way the 2026-09-14 incident did.
+  if (validRecipients.length > 0) {
+    const ownedCount = await prisma.contact.count({
+      where: { apiKeyId, email: { in: validRecipients.map(r => r.email) } },
+    });
+    if (ownedCount !== validRecipients.length) {
+      await prisma.campaign.update({
+        where: { id: campaignId },
+        data: {
+          status: 'failed',
+          errorMessage: `Recipient isolation check failed: resolved ${validRecipients.length} recipients but only ${ownedCount} are owned by this account. Send aborted before anything went out.`,
+        },
+      });
+      logger.error(
+        { campaignId, apiKeyId, resolved: validRecipients.length, owned: ownedCount },
+        'CRITICAL: campaign recipient isolation check failed — send aborted',
+      );
+      return;
+    }
+  }
 
   // Assign A/B variants before creating recipient rows (50/50 random split)
   const isABTest = !!campaign.subjectB;

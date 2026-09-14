@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — the isolation check below diffs against the base branch
 
       - uses: actions/setup-node@v4
         with:
@@ -31,6 +33,23 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      # Blocking: catches the exact bug class behind the 2026-09-14 incident
+      # (a campaign send resolved recipients with zero apiKeyId scoping and
+      # blasted 300+ contacts outside the sending account). Runs in ratchet
+      # mode — only flags NEW/changed query lines in this diff, not the
+      # ~99 pre-existing candidates found when the check was introduced,
+      # most unverified and likely legitimate. Going forward, no query
+      # missing tenant scoping (or an explicit "// tenant-sweep:" exemption)
+      # can be merged again.
+      - name: Tenant isolation check (blocking)
+        run: |
+          git fetch origin main
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            node scripts/check-tenant-isolation.mjs --diff --base=origin/main
+          else
+            node scripts/check-tenant-isolation.mjs --diff --base=${{ github.event.before }}
+          fi
 
       # Blocking: specifically the two rules that would have caught the
       # missing-await bug in c251d18 before it ever reached production.

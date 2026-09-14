@@ -12,6 +12,8 @@
     "start": "node run-migration.mjs && node dist/server.js",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
+    "check:isolation": "node scripts/check-tenant-isolation.mjs",
+    "check:isolation:diff": "node scripts/check-tenant-isolation.mjs --diff",
     "format": "prettier --write \"src/**/*.ts\" \"scripts/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "db:migrate": "prisma migrate dev",
