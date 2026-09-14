@@ -113,7 +113,16 @@ export async function sendViaSmtp2go(input: SendViaSmtp2goInput): Promise<SendVi
     } : {}),
   });
 
-  if (!result?.email_id) throw new Error('SMTP2GO accepted the send but returned no email_id.');
+  if (!result?.email_id) {
+    // No email_id means nothing was actually queued — most often a genuine
+    // per-recipient rejection (result.failures), not a transport error. Surface
+    // the real reason instead of the old generic message, which gave no signal
+    // on what to actually fix (traced back to the 2026-09-11 SES-outage incident,
+    // where this masked whether SMTP2GO was rejecting real recipients under
+    // sudden full failover load or something else entirely).
+    const detail = result?.failures?.length ? result.failures.join('; ') : 'no failure detail returned';
+    throw new Error(`SMTP2GO rejected the send: ${detail}`);
+  }
   return { smtp2goMessageId: result.email_id };
 }
 
