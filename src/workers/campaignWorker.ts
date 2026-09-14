@@ -66,11 +66,30 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   const segmentIds = campaign.segmentIds as string[];
   const excludeListIds = campaign.excludeListIds as string[];
 
-  // Get all subscribed contacts from lists
+  // A campaign must target an explicit list or segment — there is no safe
+  // "everyone" default. An empty listIds used to fall through to a where
+  // clause with NO filter at all (2026-09-14 incident: sent to 300
+  // contacts that were never scoped to this account, since
+  // ContactListMembership carries no apiKeyId of its own and the query
+  // below wasn't joining through contact.apiKeyId either). Fail loudly
+  // instead of resolving to an unbounded audience.
+  if (listIds.length === 0 && segmentIds.length === 0) {
+    await prisma.campaign.update({
+      where: { id: campaignId },
+      data: { status: 'failed', errorMessage: 'No list_ids or segment_ids specified — refusing to send to an unbounded audience.' },
+    });
+    logger.error({ campaignId, apiKeyId }, 'Campaign aborted — no list_ids/segment_ids specified');
+    return;
+  }
+
+  // Get all subscribed contacts from lists — always scoped to this
+  // account's own contacts (contact.apiKeyId), even if a listId somehow
+  // didn't belong to them, as defense in depth against cross-tenant leakage.
   const memberships = await prisma.contactListMembership.findMany({
     where: {
-      ...(listIds.length > 0 ? { listId: { in: listIds } } : {}),
+      listId: { in: listIds },
       status: 'subscribed',
+      contact: { apiKeyId },
       ...(excludeListIds.length > 0 ? { NOT: { listId: { in: excludeListIds } } } : {}),
     },
     include: { contact: { select: { email: true, firstName: true, lastName: true, customFields: true } } },

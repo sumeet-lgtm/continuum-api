@@ -170,8 +170,13 @@ async function pollMailboxes(): Promise<void> {
 
         let enrollmentId: string | null = null;
         if (inReplyTo || fromEmail) {
+          // Scoped to THIS mailbox — without mailboxId, a reply to one
+          // tenant's cold outreach could match another tenant's active
+          // enrollment for the same address (e.g. two accounts both
+          // emailing the same person), silently pausing the wrong
+          // sequence and misattributing the reply.
           const enrollment = await prisma.sequenceEnrollment.findFirst({
-            where: { email: fromEmail.toLowerCase(), status: 'active' },
+            where: { email: fromEmail.toLowerCase(), status: 'active', mailboxId: mailbox.id },
             select: { id: true, sequenceId: true, status: true, variables: true },
           });
 

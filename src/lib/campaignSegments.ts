@@ -76,7 +76,7 @@ export async function deriveListSegments(
   maxSegments = 3,
 ): Promise<{ totalContacts: number; segments: CampaignSegment[] }> {
   const memberships = await prisma.contactListMembership.findMany({
-    where: { listId: { in: listIds }, status: 'subscribed' },
+    where: { listId: { in: listIds }, status: 'subscribed', list: { apiKeyId } },
     include: { contact: { select: { email: true, firstName: true, customFields: true } } },
   });
 
