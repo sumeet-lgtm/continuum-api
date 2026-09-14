@@ -66,10 +66,16 @@ export async function sendViaTransportWithFallback(
       return { ok: true, transport: 'smtp2go', sesMessageId: null, smtp2goMessageId: result.smtp2goMessageId };
     } catch (err) {
       logger.error({ ...logCtx, err, sesError }, 'SMTP2GO fallback send also failed');
+      // Same client-fault check as the SES-only path below — dropped here
+      // before, so a client-caused rejection (e.g. an unverified sending
+      // domain, which BOTH transports correctly refuse) misclassified as a
+      // server fault and returned a bare 502 instead of a 400 explaining
+      // what to actually fix.
+      const isClientFault = (sesError as { $fault?: string } | null)?.$fault === 'client';
       return {
         ok: false,
         errorMessage: err instanceof Error ? err.message : 'Unknown SMTP2GO error',
-        isClientFault: false,
+        isClientFault,
       };
     }
   }
