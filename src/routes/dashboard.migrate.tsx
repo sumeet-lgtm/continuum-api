@@ -8,6 +8,7 @@ import { Logo } from "@/components/Logo";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { parseCsv } from "@/lib/csv";
 import {
   ArrowRightLeft,
   Upload,
@@ -120,44 +121,6 @@ function MonoIcon({ label }: { label: string }) {
   );
 }
 
-// ── CSV parser ───────────────────────────────────────────────────────────────
-
-function parseCSV(raw: string): { headers: string[]; rows: Record<string, string>[] } {
-  const lines = raw.split(/\r?\n/);
-  const nonEmpty = lines.filter((l) => l.trim());
-  if (nonEmpty.length < 2) return { headers: [], rows: [] };
-
-  const parseRow = (line: string): string[] => {
-    const cells: string[] = [];
-    let cur = "";
-    let inQuote = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
-        else inQuote = !inQuote;
-      } else if (ch === "," && !inQuote) {
-        cells.push(cur.trim());
-        cur = "";
-      } else {
-        cur += ch;
-      }
-    }
-    cells.push(cur.trim());
-    return cells;
-  };
-
-  const headers = parseRow(nonEmpty[0]!);
-  const rows = nonEmpty.slice(1).map((line) => {
-    const vals = parseRow(line);
-    const row: Record<string, string> = {};
-    headers.forEach((h, i) => { row[h] = vals[i] ?? ""; });
-    return row;
-  }).filter((r) => Object.values(r).some((v) => v));
-
-  return { headers, rows };
-}
-
 // ── Column auto-mapper ───────────────────────────────────────────────────────
 
 function bestMatch(candidates: string[], headers: string[]): string {
@@ -211,7 +174,9 @@ function MigratePage() {
   };
 
   const handleCSVParsed = (raw: string) => {
-    const { headers, rows } = parseCSV(raw);
+    const parsed = parseCsv(raw);
+    const headers = parsed.headers;
+    const rows = parsed.rows.filter((r) => Object.values(r).some((v) => v));
     if (!headers.length) { toast.error("Could not parse CSV — make sure it has headers"); return; }
     setCsvHeaders(headers);
     setCsvRows(rows);

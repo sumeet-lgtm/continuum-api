@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
+import { parseCsv } from "@/lib/csv";
 import { Send, CheckCircle2, XCircle, Layers, Upload, Table2 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/batch-send")({
@@ -15,32 +16,6 @@ export const Route = createFileRoute("/dashboard/batch-send")({
 
 interface Recipient { email: string; vars: Record<string, string>; }
 interface BatchResult { id: string; status: string; error?: string; to: string; }
-
-function parseCsv(text: string): { headers: string[]; rows: Record<string, string>[] } {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (lines.length === 0) return { headers: [], rows: [] };
-  const splitLine = (line: string) => {
-    const cols: string[] = [];
-    let cur = "";
-    let quoted = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') { quoted = !quoted; continue; }
-      if (ch === "," && !quoted) { cols.push(cur); cur = ""; continue; }
-      cur += ch;
-    }
-    cols.push(cur);
-    return cols.map((c) => c.trim());
-  };
-  const headers = splitLine(lines[0]!);
-  const rows = lines.slice(1).map((l) => {
-    const vals = splitLine(l);
-    const row: Record<string, string> = {};
-    headers.forEach((h, i) => { row[h] = vals[i] ?? ""; });
-    return row;
-  });
-  return { headers, rows };
-}
 
 function applyVars(text: string, vars: Record<string, string>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? `{{${key}}}`);

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
+import { parseCsv } from "@/lib/csv";
 import { Plus, Users, Upload, X, FileText, Loader2, Search, Sparkles, GitBranch, CheckSquare, Square, Wand2, ArrowRight } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/leads")({
@@ -24,39 +25,6 @@ interface Lead {
   status: string;
   tags: string[];
   createdAt: string;
-}
-
-// Parse a CSV string → array of row objects using first row as headers.
-// Handles RFC-4180 quoted fields (commas + newlines inside quotes).
-function parseCSV(text: string): Record<string, string>[] {
-  function splitLine(line: string): string[] {
-    const fields: string[] = [];
-    let cur = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
-        else { inQuotes = !inQuotes; }
-      } else if (ch === "," && !inQuotes) {
-        fields.push(cur.trim());
-        cur = "";
-      } else {
-        cur += ch;
-      }
-    }
-    fields.push(cur.trim());
-    return fields;
-  }
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  if (lines.length < 2) return [];
-  const headers = splitLine(lines[0]).map((h) => h.toLowerCase());
-  return lines.slice(1).map((line) => {
-    const values = splitLine(line);
-    const row: Record<string, string> = {};
-    headers.forEach((h, i) => { row[h] = values[i] ?? ""; });
-    return row;
-  }).filter((r) => r.email);
 }
 
 // Map CSV row to lead shape the API expects
@@ -181,8 +149,8 @@ function LeadsPage() {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
-      const rows = parseCSV(text);
-      setImportPreview(rows);
+      const { rows } = parseCsv(text, { lowercaseHeaders: true });
+      setImportPreview(rows.filter((r) => r.email));
     };
     reader.readAsText(file);
     e.target.value = "";

@@ -21,49 +21,18 @@ import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import { API_BASE } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
+import { parseCsv } from "@/lib/csv";
 
 export const Route = createFileRoute("/dashboard/import")({
   head: () => ({ meta: [{ title: "Import CSV — Continuum" }] }),
   component: ImportPage,
 });
 
-// ── CSV parser ────────────────────────────────────────────────────────────────
-
-function parseLine(line: string): string[] {
-  const result: string[] = [];
-  let current = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (ch === "," && !inQuotes) {
-      result.push(current.trim());
-      current = "";
-    } else {
-      current += ch;
-    }
-  }
-  result.push(current.trim());
-  return result;
-}
-
-function parseCSV(
-  text: string,
-  maxRows = 200,
-): { headers: string[]; rows: string[][] } {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
-  if (lines.length === 0) return { headers: [], rows: [] };
-  const headers = parseLine(lines[0]).map((h) => h.replace(/^"|"$/g, "").trim());
-  const rows = lines
-    .slice(1, maxRows + 1)
-    .map((l) => parseLine(l).map((c) => c.replace(/^"|"$/g, "").trim()));
-  return { headers, rows };
+// This page's preview table wants rows as string[][] (parallel to headers),
+// not keyed objects — reshape parseCsv's output for that shape.
+function parseCsvPreview(text: string, maxRows = 200): { headers: string[]; rows: string[][] } {
+  const { headers, rows } = parseCsv(text, { maxRows });
+  return { headers, rows: rows.map((row) => headers.map((h) => row[h] ?? "")) };
 }
 
 // ── Auto-detect column mapping ────────────────────────────────────────────────
@@ -183,7 +152,7 @@ function ImportPage() {
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result as string;
-      const { headers: h, rows: r } = parseCSV(text, 200);
+      const { headers: h, rows: r } = parseCsvPreview(text, 200);
       if (h.length === 0) {
         setParseError("Could not detect any columns in this file.");
         return;

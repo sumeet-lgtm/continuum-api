@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusBadge } from "@/components/StatusBadge";
+import { parseCsv } from "@/lib/csv";
 import { Plus, Users, Trash2, Search, Upload, FileText, Loader2, X, Download, ChevronRight, Pencil, Save, Clock, Mail, MousePointer, Eye, AlertCircle, List, LogOut, Activity } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/contacts")({
@@ -29,18 +30,6 @@ interface Contact {
 }
 
 interface MailingList { id: string; name: string; }
-
-function parseCSV(text: string): Record<string, string>[] {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, "").toLowerCase());
-  return lines.slice(1).map((line) => {
-    const values = line.split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
-    const row: Record<string, string> = {};
-    headers.forEach((h, i) => { row[h] = values[i] ?? ""; });
-    return row;
-  }).filter((r) => r.email);
-}
 
 function ContactsPage() {
   const { primaryKey } = useAuth();
@@ -158,7 +147,7 @@ function ContactsPage() {
     setImportFile(file.name);
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const rows = parseCSV(ev.target?.result as string);
+      const rows = parseCsv(ev.target?.result as string, { lowercaseHeaders: true }).rows.filter((r) => r.email);
       setImportPreview(rows);
     };
     reader.readAsText(file);

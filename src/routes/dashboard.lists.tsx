@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Plus, Users, Trash2, Leaf, X, ChevronDown, AlertTriangle, CheckCircle2, Clock, Ban, Upload, FileText, ArrowRight, ShieldCheck } from "lucide-react";
+import { parseCsv } from "@/lib/csv";
 
 export const Route = createFileRoute("/dashboard/lists")({
   head: () => ({ meta: [{ title: "Mailing Lists — Continuum" }] }),
@@ -348,35 +349,8 @@ function PreflightModal({ list, apiKey, onClose }: { list: MailingList; apiKey: 
   );
 }
 
-function parseCsvLine(line: string): string[] {
-  const result: string[] = [];
-  let current = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (line[i + 1] === '"') { current += '"'; i++; }
-        else inQuotes = false;
-      } else { current += ch; }
-    } else {
-      if (ch === '"') { inQuotes = true; }
-      else if (ch === ',') { result.push(current); current = ""; }
-      else { current += ch; }
-    }
-  }
-  result.push(current);
-  return result;
-}
-
 function parseCsvToRows(text: string): Array<Record<string, string>> {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  if (lines.length < 2) return [];
-  const headers = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
-  return lines.slice(1).map((line) => {
-    const vals = parseCsvLine(line);
-    return Object.fromEntries(headers.map((h, i) => [h, (vals[i] ?? "").trim()]));
-  });
+  return parseCsv(text, { lowercaseHeaders: true }).rows;
 }
 
 function detectEmailCol(headers: string[]): string | null {
