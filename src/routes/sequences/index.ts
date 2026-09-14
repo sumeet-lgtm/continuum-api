@@ -260,10 +260,24 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
 
     let enrolled = 0;
     const conflicts: Array<{ email: string; conflictSequenceId: string; conflictSequenceName: string }> = [];
+    // Real bug, found and fixed 2026-09-14: an unenroll (DELETE
+    // /contacts/:email) soft-flags the row as 'unsubscribed' rather than
+    // deleting it, since 'unsubscribed' carries real compliance meaning
+    // and re-subscribing someone on a plain re-POST would be worse than
+    // this endpoint silently no-op'ing. But it WAS silently no-op'ing —
+    // `enrolled: 0` with an empty conflicts array gave the caller no way
+    // to tell "already active" apart from "explicitly unsubscribed" apart
+    // from "sequence completed, most a customer would expect to just work
+    // again." Surfacing the skip reason lets the dashboard show something
+    // honest instead of a bare, unexplained zero.
+    const skipped: Array<{ email: string; reason: string }> = [];
 
     for (const email of emails) {
       const existing = await prisma.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: id, email } } });
-      if (existing) continue;
+      if (existing) {
+        skipped.push({ email, reason: existing.status === 'unsubscribed' ? 'previously_unsubscribed' : `already_${existing.status}` });
+        continue;
+      }
 
       // Cross-sequence exclusivity: one active sequence per lead
       if (!body.force_move) {
@@ -294,7 +308,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       enrolled++;
     }
 
-    return reply.status(200).send({ enrolled, total: emails.length, conflicts });
+    return reply.status(200).send({ enrolled, total: emails.length, conflicts, skipped });
   });
 
   // GET /v1/sequences/:id/contacts — enrollment status

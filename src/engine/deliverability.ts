@@ -219,25 +219,23 @@ export async function checkDomainBlacklists(domain: string): Promise<DomainBlack
   const ipListings: Array<{ blacklist: string; ip: string }> = [];
   const domainListings: string[] = [];
 
-  let ips: string[] = [];
-  try {
-    ips = await dns.resolve4(domain);
-  } catch { /* no A record */ }
+  // Real bug, found and fixed 2026-09-14 during a live launch-readiness
+  // audit: this used to resolve `domain`'s own A record and IP-blacklist
+  // *that* — which is the customer's website hosting IP, not anything
+  // Continuum ever sends mail from. Email here goes out through SES/
+  // SMTP2GO's own shared, dynamically-managed IP pools, which have no
+  // fixed relationship to a customer's DNS A record at all, so that
+  // check was testing a value with zero bearing on deliverability and
+  // could show "blacklisted" for a domain whose actual sending
+  // reputation was fine (or vice versa). `ips`/`ipListings` are kept in
+  // the response shape for API compatibility but intentionally left
+  // empty — there's no meaningful customer-domain "sending IP" to check
+  // under this shared-ESP architecture. The domain-based checks below
+  // (is the domain NAME itself referenced as a spam source) remain
+  // valid and unaffected by this.
+  const ips: string[] = [];
 
   const checks: Array<Promise<void>> = [];
-
-  // IP-based checks
-  for (const ip of ips) {
-    for (const bl of IP_BLACKLISTS) {
-      checks.push((async () => {
-        try {
-          const reversed = ip.split('.').reverse().join('.');
-          await dns.resolve4(`${reversed}.${bl.suffix}`);
-          ipListings.push({ blacklist: bl.name, ip });
-        } catch { /* not listed */ }
-      })());
-    }
-  }
 
   // Domain-based checks
   for (const bl of DOMAIN_BLACKLISTS) {
