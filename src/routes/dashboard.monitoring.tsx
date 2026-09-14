@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Plus } from "lucide-react";
 import { API_BASE } from "@/lib/supabase";
 import { useApiKey } from "@/lib/use-api-key";
@@ -78,14 +79,24 @@ function MonitoringPage() {
 
   const addMonitor = async () => {
     if (!apiKey?.keyRaw || !email) return;
-    await fetch(`${API_BASE}/v1/monitoring`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey.keyRaw}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ email, intervalHours: interval }),
-    });
+    try {
+      const res = await fetch(`${API_BASE}/v1/monitoring`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey.keyRaw}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email, intervalHours: interval }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null) as { message?: string } | null;
+        toast.error(data?.message ?? "Couldn't add monitor");
+        return;
+      }
+    } catch {
+      toast.error("Couldn't add monitor — check your connection");
+      return;
+    }
     setEmail("");
     setInterval(24);
     setOpen(false);
@@ -94,24 +105,42 @@ function MonitoringPage() {
 
   const togglePause = async (m: Monitor) => {
     if (!apiKey?.keyRaw) return;
-    await fetch(`${API_BASE}/v1/monitoring/${m.id}`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${apiKey.keyRaw}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ isPaused: !m.isPaused }),
-    });
+    try {
+      const res = await fetch(`${API_BASE}/v1/monitoring/${m.id}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${apiKey.keyRaw}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ isPaused: !m.isPaused }),
+      });
+      if (!res.ok) {
+        toast.error("Couldn't update monitor");
+        return;
+      }
+    } catch {
+      toast.error("Couldn't update monitor — check your connection");
+      return;
+    }
     await load();
   };
 
   const removeMonitor = async (m: Monitor) => {
     if (!apiKey?.keyRaw) return;
     if (!confirm(`Stop monitoring ${m.email}?`)) return;
-    await fetch(`${API_BASE}/v1/monitoring/${m.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${apiKey.keyRaw}` },
-    });
+    try {
+      const res = await fetch(`${API_BASE}/v1/monitoring/${m.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${apiKey.keyRaw}` },
+      });
+      if (!res.ok) {
+        toast.error("Couldn't remove monitor");
+        return;
+      }
+    } catch {
+      toast.error("Couldn't remove monitor — check your connection");
+      return;
+    }
     if (active?.id === m.id) setActive(null);
     await load();
   };
@@ -119,12 +148,13 @@ function MonitoringPage() {
   const recheck = async (m: Monitor) => {
     if (!apiKey?.keyRaw) return;
     try {
-      await fetch(`${API_BASE}/v1/monitoring/${m.id}/recheck`, {
+      const res = await fetch(`${API_BASE}/v1/monitoring/${m.id}/recheck`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${apiKey.keyRaw}`, "x-api-key": apiKey.keyRaw },
+        headers: { Authorization: `Bearer ${apiKey.keyRaw}` },
       });
+      if (!res.ok) toast.error("Recheck failed");
     } catch {
-      // ignore network — UI still refreshes
+      toast.error("Recheck failed — check your connection");
     }
     await load();
   };

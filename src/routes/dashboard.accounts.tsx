@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/accounts")({
-  head: () => ({ meta: [{ title: "Accounts — Continuum" }] }),
+  head: () => ({ meta: [{ title: "Target Accounts — Continuum" }] }),
   component: AccountsPage,
 });
 
@@ -116,7 +116,7 @@ function AccountsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3">
         <header>
-          <h1 className="text-2xl font-display font-medium tracking-tight">Accounts</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Target Accounts</h1>
           <p className="text-sm text-muted-foreground">Companies and organizations your leads belong to.</p>
         </header>
         <div className="flex items-center gap-2">

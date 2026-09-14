@@ -273,9 +273,8 @@ const NAV: NavItem[] = [
     children: [
       { to: "/dashboard/sequences", label: "Sequences", icon: GitBranch, exact: true },
       { to: "/dashboard/tasks", label: "Tasks", icon: CheckSquare },
-      { to: "/dashboard/accounts", label: "Accounts", icon: Building2 },
+      { to: "/dashboard/accounts", label: "Target Accounts", icon: Building2 },
       { to: "/dashboard/inbox", label: "Unified Inbox", icon: Inbox },
-      { to: "/dashboard/salesforce", label: "Salesforce", icon: Cloud },
     ],
   },
 
@@ -287,6 +286,7 @@ const NAV: NavItem[] = [
     children: [
       { to: "/dashboard/finder", label: "Find People", icon: Search, exact: true },
       { to: "/dashboard/leads", label: "Lead CRM", icon: Users },
+      { to: "/dashboard/salesforce", label: "Salesforce", icon: Cloud },
     ],
   },
 

@@ -171,8 +171,6 @@ function VerifyPage() {
     void loadVerifs(verifPage, verifStatus, verifQ);
   }, [apiKey, verifPage, verifStatus, verifQ, loadVerifs]);
 
-  // Note: full key not available client-side after creation. We send the prefix —
-  // adjust if your gateway expects the full key. UX still demonstrates the flow.
   const onVerify = async () => {
     if (!email || !apiKey?.keyRaw) return;
     setLoading(true);
@@ -184,7 +182,6 @@ function VerifyPage() {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey.keyRaw}`,
-          "x-api-key": apiKey.keyRaw,
         },
         body: JSON.stringify({ email }),
       });

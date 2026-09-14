@@ -330,7 +330,7 @@ function BulkPage() {
       do {
         const res = await fetch(
           `${API_BASE}/v1/bulk-jobs/${active.id}/results?limit=${limit}&page=${page}`,
-          { headers: { Authorization: `Bearer ${apiKey.keyRaw}` } },
+          { headers: { "X-API-Key": apiKey.keyRaw } },
         );
         if (!res.ok) {
           toast.error(`Download failed (${res.status})`);

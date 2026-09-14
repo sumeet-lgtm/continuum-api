@@ -10,7 +10,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Plus, Zap, ChevronDown, ChevronRight, Clock, Trash2, Play, Pause, Users, X } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/automations")({
-  head: () => ({ meta: [{ title: "Autoresponders — Continuum" }] }),
+  head: () => ({ meta: [{ title: "Automations — Continuum" }] }),
   component: AutomationsPage,
 });
 
@@ -247,7 +247,7 @@ function AutomationsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <header>
-          <h1 className="text-2xl font-display font-medium tracking-tight">Autoresponders</h1>
+          <h1 className="text-2xl font-display font-medium tracking-tight">Automations</h1>
           <p className="text-sm text-muted-foreground">
             Trigger-based email sequences — send a welcome series, onboarding drip, or any workflow when an event fires.
           </p>
