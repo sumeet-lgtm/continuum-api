@@ -244,7 +244,6 @@ const NAV: NavItem[] = [
       { to: "/dashboard/messages", label: "Message History", icon: Mail },
       { to: "/dashboard/schedule", label: "Schedule", icon: CalendarDays },
       { to: "/dashboard/templates", label: "Templates", icon: FileText },
-      { to: "/dashboard/domains", label: "Sending Domains", icon: ServerCog },
       { to: "/dashboard/deliverability", label: "Deliverability", icon: TrendingUp },
       { to: "/dashboard/suppressions", label: "Suppressions", icon: ShieldOff },
     ],
@@ -275,7 +274,6 @@ const NAV: NavItem[] = [
       { to: "/dashboard/sequences", label: "Sequences", icon: GitBranch, exact: true },
       { to: "/dashboard/tasks", label: "Tasks", icon: CheckSquare },
       { to: "/dashboard/accounts", label: "Accounts", icon: Building2 },
-      { to: "/dashboard/mailboxes", label: "Mailboxes", icon: Mail },
       { to: "/dashboard/inbox", label: "Unified Inbox", icon: Inbox },
       { to: "/dashboard/salesforce", label: "Salesforce", icon: Cloud },
     ],
@@ -294,15 +292,27 @@ const NAV: NavItem[] = [
 
   { to: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/dashboard/brand-kit", label: "Brand Kit", icon: Palette },
-  { to: "/dashboard/connectors", label: "Connectors", icon: Plug },
-  { to: "/dashboard/webhooks", label: "Webhooks", icon: Webhook },
-  { to: "/dashboard/api-keys", label: "API Keys", icon: KeyRound },
-  { to: "/dashboard/logs", label: "API Logs", icon: Terminal },
-  { to: "/dashboard/organization", label: "Organization", icon: Building2 },
-  { to: "/dashboard/usage", label: "Usage & Limits", icon: Zap },
-  { to: "/dashboard/billing", label: "Billing", icon: CreditCard },
-  { to: "/dashboard/team", label: "Team", icon: Users },
-  { to: "/dashboard/settings", label: "Settings", icon: Settings },
+
+  // Everything account/setup-related, one group instead of 9 loose top-level
+  // rows — these are visited far less often than the 5 product pillars above.
+  {
+    to: "/dashboard/settings",
+    label: "Settings",
+    icon: Settings,
+    children: [
+      { to: "/dashboard/settings", label: "General", icon: Settings, exact: true },
+      { to: "/dashboard/domains", label: "Sending Domains", icon: ServerCog },
+      { to: "/dashboard/mailboxes", label: "Mailboxes", icon: Mail },
+      { to: "/dashboard/organization", label: "Organization", icon: Building2 },
+      { to: "/dashboard/team", label: "Team", icon: Users },
+      { to: "/dashboard/billing", label: "Billing", icon: CreditCard },
+      { to: "/dashboard/usage", label: "Usage & Limits", icon: Zap },
+      { to: "/dashboard/api-keys", label: "API Keys", icon: KeyRound },
+      { to: "/dashboard/logs", label: "API Logs", icon: Terminal },
+      { to: "/dashboard/webhooks", label: "Webhooks", icon: Webhook },
+      { to: "/dashboard/connectors", label: "Connectors", icon: Plug },
+    ],
+  },
   { to: "/dashboard/support", label: "Support", icon: LifeBuoy },
 ];
 
