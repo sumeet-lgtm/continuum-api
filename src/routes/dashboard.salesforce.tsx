@@ -4,8 +4,16 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Cloud, CheckCircle2, XCircle, RefreshCw, Unplug, AlertTriangle } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Cloud, CheckCircle2, XCircle, RefreshCw, Unplug, AlertTriangle, Plus, X } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard/salesforce")({
   head: () => ({ meta: [{ title: "Salesforce — Continuum" }] }),
@@ -40,6 +48,45 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   connect_failed: "Couldn't finish connecting to Salesforce. Try again.",
 };
 
+type BuiltinSource = "firstName" | "lastName" | "company" | "title" | "tags";
+const BUILTIN_SOURCES: { value: BuiltinSource; label: string }[] = [
+  { value: "firstName", label: "First Name" },
+  { value: "lastName", label: "Last Name" },
+  { value: "company", label: "Company" },
+  { value: "title", label: "Title" },
+  { value: "tags", label: "Tags" },
+];
+
+interface FieldMapping { source: string; target: string }
+
+// One editable row — mirrors a FieldMapping, but keeps "which of our fields"
+// and "which custom variable key" as separate UI state so a custom-variable
+// row can have its key edited without re-parsing the "customVars.<key>"
+// string on every keystroke.
+interface MappingRow {
+  kind: BuiltinSource | "customVar";
+  customVarKey: string;
+  target: string;
+}
+
+function rowToMapping(row: MappingRow): FieldMapping | null {
+  const target = row.target.trim();
+  if (!target) return null;
+  if (row.kind === "customVar") {
+    const key = row.customVarKey.trim();
+    if (!key) return null;
+    return { source: `customVars.${key}`, target };
+  }
+  return { source: row.kind, target };
+}
+
+function mappingToRow(m: FieldMapping): MappingRow {
+  if (m.source.startsWith("customVars.")) {
+    return { kind: "customVar", customVarKey: m.source.slice("customVars.".length), target: m.target };
+  }
+  return { kind: m.source as BuiltinSource, customVarKey: "", target: m.target };
+}
+
 function SalesforcePage() {
   const { primaryKey } = useAuth();
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
@@ -47,6 +94,8 @@ function SalesforcePage() {
   const [connecting, setConnecting] = useState(false);
   const [testing, setTesting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [mappingRows, setMappingRows] = useState<MappingRow[]>([]);
+  const [savingMappings, setSavingMappings] = useState(false);
 
   const load = () => {
     if (!primaryKey?.keyRaw) return;
@@ -57,7 +106,38 @@ function SalesforcePage() {
       .finally(() => setLoading(false));
   };
 
+  const loadMappings = () => {
+    if (!primaryKey?.keyRaw) return;
+    api.withKey
+      .get<{ field_mappings: FieldMapping[] }>("/v1/connectors/salesforce/field-mapping", primaryKey.keyRaw)
+      .then((res) => setMappingRows(res.field_mappings.map(mappingToRow)))
+      .catch(() => {});
+  };
+
   useEffect(() => { load(); }, [primaryKey]);
+  useEffect(() => {
+    if (status?.connected) loadMappings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status?.connected]);
+
+  const addMappingRow = () => setMappingRows((rows) => [...rows, { kind: "title", customVarKey: "", target: "" }]);
+  const removeMappingRow = (i: number) => setMappingRows((rows) => rows.filter((_, idx) => idx !== i));
+  const updateMappingRow = (i: number, patch: Partial<MappingRow>) =>
+    setMappingRows((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+
+  const saveMappings = async () => {
+    if (!primaryKey?.keyRaw) return;
+    const mappings = mappingRows.map(rowToMapping).filter((m): m is FieldMapping => m !== null);
+    setSavingMappings(true);
+    try {
+      await api.withKey.put("/v1/connectors/salesforce/field-mapping", { field_mappings: mappings }, primaryKey.keyRaw);
+      toast.success("Field mapping saved.");
+    } catch {
+      toast.error("Couldn't save field mapping.");
+    } finally {
+      setSavingMappings(false);
+    }
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -205,6 +285,69 @@ function SalesforcePage() {
           <div className="rounded-lg border border-border bg-muted/20 p-4 text-xs text-muted-foreground space-y-1">
             <p className="font-medium text-foreground">What syncs, and when</p>
             <p>Runs hourly. New and updated leads push out as Salesforce Leads (matched by email — never duplicated). Replies log as completed Tasks on the matching record. If a rep marks a lead Unqualified, Disqualified, or Converted in Salesforce, the matching Continuum sequence pauses automatically.</p>
+          </div>
+
+          <div className="rounded-lg border border-border bg-card p-6 space-y-4">
+            <div>
+              <p className="text-sm font-medium">Field mapping</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Your org's Lead layout won't always match our standard fields exactly. Map any of ours to whatever
+                field actually holds that data on your side — including a custom field (these usually end in{" "}
+                <code className="font-mono text-[11px]">__c</code>).
+              </p>
+            </div>
+
+            {mappingRows.length > 0 && (
+              <div className="space-y-2">
+                {mappingRows.map((row, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <Select value={row.kind} onValueChange={(v) => updateMappingRow(i, { kind: v as MappingRow["kind"] })}>
+                      <SelectTrigger className="w-40 shrink-0">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {BUILTIN_SOURCES.map((s) => (
+                          <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                        ))}
+                        <SelectItem value="customVar">Custom variable…</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    {row.kind === "customVar" && (
+                      <Input
+                        placeholder="variable key"
+                        value={row.customVarKey}
+                        onChange={(e) => updateMappingRow(i, { customVarKey: e.target.value })}
+                        className="w-36 shrink-0 font-mono text-xs"
+                      />
+                    )}
+
+                    <span className="text-xs text-muted-foreground shrink-0">→</span>
+
+                    <Input
+                      placeholder="Salesforce field API name, e.g. Job_Title__c"
+                      value={row.target}
+                      onChange={(e) => updateMappingRow(i, { target: e.target.value })}
+                      className="flex-1 font-mono text-xs"
+                    />
+
+                    <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => removeMappingRow(i)}>
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 pt-2 border-t border-border">
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={addMappingRow}>
+                <Plus className="h-3.5 w-3.5" />
+                Add mapping
+              </Button>
+              <Button size="sm" className="ml-auto" onClick={saveMappings} disabled={savingMappings}>
+                {savingMappings ? "Saving…" : "Save mapping"}
+              </Button>
+            </div>
           </div>
         </div>
       )}
