@@ -1334,6 +1334,14 @@ model SalesforceConnection {
   orgId           String?
   connectedEmail  String?   // the Salesforce user who authorized the connection
   syncEnabled     Boolean   @default(true)
+  // Per-org custom field mapping — an org's Lead layout rarely matches our
+  // 5 hardcoded standard fields exactly (a renamed Title field, a custom
+  // Lead_Source_Detail__c picklist, etc). Array of {source, target}: source
+  // is one of our own field names ("firstName"|"lastName"|"company"|"title"
+  // |"tags") or "customVars.<key>"; target is the literal Salesforce field
+  // API name to push it into, overriding that field's default target when
+  // present. Null/empty = old hardcoded-fields behavior, unchanged.
+  fieldMappings   Json?     @map("field_mappings")
   lastPushedAt    DateTime?
   lastPulledAt    DateTime?
   lastErrorMsg    String?

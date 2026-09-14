@@ -68,12 +68,85 @@ export async function findLeadByEmail(instanceUrl: string, accessToken: string, 
 
 export interface SfLeadFields {
   Email: string;
-  FirstName?: string;
+  FirstName?: string | undefined;
   LastName: string; // required by Salesforce on Lead — falls back to "(Unknown)" if we have nothing
   Company: string;   // also required — falls back to the email's domain
-  Title?: string;
-  LeadSource?: string;
-  Description?: string;
+  Title?: string | undefined;
+  LeadSource?: string | undefined;
+  Description?: string | undefined;
+  // Per-connection custom field mappings (SalesforceConnection.fieldMappings)
+  // can target any other field on the org's Lead layout — most commonly a
+  // custom field, which Salesforce always suffixes with "__c" by convention.
+  [customField: string]: string | undefined;
+}
+
+export interface SalesforceFieldMapping {
+  /** One of our own field names, or "customVars.<key>" for a value stored in Lead.customVars. */
+  source: "firstName" | "lastName" | "company" | "title" | "tags" | `customVars.${string}`;
+  /** The literal Salesforce field API name to push it into — almost always a custom field, which Salesforce always suffixes "__c". */
+  target: string;
+}
+
+// Which standard field a built-in source writes to by default, so a mapping
+// can be recognized as "override the default target" vs. "an additional
+// custom field to also populate".
+const DEFAULT_TARGET: Partial<Record<SalesforceFieldMapping["source"], keyof SfLeadFields>> = {
+  firstName: "FirstName",
+  lastName: "LastName",
+  company: "Company",
+  title: "Title",
+};
+
+// LastName and Company are mandatory on a Salesforce Lead regardless of any
+// mapping (Salesforce itself rejects a create/update without them), so a
+// mapping for those two always adds the custom field alongside the standard
+// one rather than replacing it. FirstName/Title/tags/customVars are
+// optional, so mapping those fully redirects to the custom target instead.
+const ALWAYS_KEEP_DEFAULT = new Set<SalesforceFieldMapping["source"]>(["lastName", "company"]);
+
+/**
+ * Applies a connection's custom field mappings on top of the standard
+ * fields already built from a lead. Called right before create/updateLead.
+ * No mappings configured -> baseFields comes back unchanged (the old,
+ * hardcoded-fields behavior).
+ */
+export function applyFieldMappings(
+  baseFields: SfLeadFields,
+  lead: { firstName?: string | null; lastName?: string | null; company?: string | null; title?: string | null; tags?: string[] | null; customVars?: Record<string, unknown> | null },
+  mappings: SalesforceFieldMapping[] | null | undefined,
+): SfLeadFields {
+  if (!mappings?.length) return baseFields;
+  const fields: SfLeadFields = { ...baseFields };
+
+  for (const { source, target } of mappings) {
+    if (!source || !target) continue;
+
+    let value: string | undefined;
+    if (source === "tags") {
+      value = lead.tags?.length ? lead.tags.join(";") : undefined;
+    } else if (source.startsWith("customVars.")) {
+      const key = source.slice("customVars.".length);
+      const raw = lead.customVars?.[key];
+      value = raw === undefined || raw === null ? undefined : String(raw);
+    } else if (source === "firstName") {
+      value = lead.firstName ?? undefined;
+    } else if (source === "lastName") {
+      value = lead.lastName ?? undefined;
+    } else if (source === "company") {
+      value = lead.company ?? undefined;
+    } else {
+      value = lead.title ?? undefined;
+    }
+    if (value === undefined) continue;
+
+    const defaultTarget = DEFAULT_TARGET[source];
+    if (defaultTarget && defaultTarget !== target && !ALWAYS_KEEP_DEFAULT.has(source)) {
+      delete fields[defaultTarget];
+    }
+    fields[target] = value;
+  }
+
+  return fields;
 }
 
 export async function createLead(instanceUrl: string, accessToken: string, fields: SfLeadFields): Promise<string> {

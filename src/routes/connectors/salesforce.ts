@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { Prisma } from '@prisma/client';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
@@ -7,8 +8,29 @@ import { encryptValue, decryptValue } from '../../lib/crypto.js';
 import { config } from '../../config.js';
 import { signOAuthState, verifyOAuthState } from '../../lib/oauth/state.js';
 import { isSalesforceOAuthConfigured, getSalesforceAuthUrl, exchangeSalesforceCode, getSalesforceAccessToken } from '../../lib/oauth/salesforce.js';
-import { testConnection } from '../../lib/salesforceApi.js';
+import { testConnection, type SalesforceFieldMapping } from '../../lib/salesforceApi.js';
 import { logger } from '../../lib/logger.js';
+
+const VALID_BUILTIN_SOURCES = new Set(['firstName', 'lastName', 'company', 'title', 'tags']);
+
+function validateFieldMappings(input: unknown): SalesforceFieldMapping[] {
+  if (!Array.isArray(input)) throw Errors.validationFailed({ field_mappings: 'Must be an array' });
+  return input.map((entry, i) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw Errors.validationFailed({ field_mappings: `Entry ${i} must be an object` });
+    }
+    const { source, target } = entry as { source?: unknown; target?: unknown };
+    if (typeof source !== 'string' || typeof target !== 'string' || !source.trim() || !target.trim()) {
+      throw Errors.validationFailed({ field_mappings: `Entry ${i} needs a non-empty "source" and "target"` });
+    }
+    if (!VALID_BUILTIN_SOURCES.has(source) && !source.startsWith('customVars.')) {
+      throw Errors.validationFailed({
+        field_mappings: `Entry ${i}: "source" must be one of firstName/lastName/company/title/tags, or "customVars.<key>"`,
+      });
+    }
+    return { source, target: target.trim() } as SalesforceFieldMapping;
+  });
+}
 
 function getSecret(): string {
   return config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
@@ -62,12 +84,42 @@ export async function salesforceConnectorRoutes(fastify: FastifyInstance): Promi
   fastify.get('/connectors/salesforce', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const conn = await prisma.salesforceConnection.findUnique({
       where: { apiKeyId: request.apiKey.id },
-      select: { instanceUrl: true, orgId: true, connectedEmail: true, syncEnabled: true, lastPushedAt: true, lastPulledAt: true, lastErrorMsg: true, createdAt: true },
+      select: { instanceUrl: true, orgId: true, connectedEmail: true, syncEnabled: true, fieldMappings: true, lastPushedAt: true, lastPulledAt: true, lastErrorMsg: true, createdAt: true },
     });
     if (!conn) return reply.status(200).send({ connected: false });
 
     const syncedCount = await prisma.salesforceLeadSync.count({ where: { apiKeyId: request.apiKey.id } });
     return reply.status(200).send({ connected: true, ...conn, syncedLeadCount: syncedCount });
+  });
+
+  // GET /v1/connectors/salesforce/field-mapping — current custom field mappings
+  fastify.get('/connectors/salesforce/field-mapping', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const conn = await prisma.salesforceConnection.findUnique({
+      where: { apiKeyId: request.apiKey.id },
+      select: { fieldMappings: true },
+    });
+    if (!conn) throw Errors.notFound('Salesforce connection');
+    return reply.status(200).send({ field_mappings: conn.fieldMappings ?? [] });
+  });
+
+  // PUT /v1/connectors/salesforce/field-mapping — replace the mapping list.
+  // Each entry: { source: "firstName"|"lastName"|"company"|"title"|"tags"|
+  // "customVars.<key>", target: "<Salesforce field API name>" }. A mapped
+  // built-in overrides its default standard field UNLESS it's LastName or
+  // Company (Salesforce requires both on every Lead, so those get the
+  // custom field in addition, never instead) — see applyFieldMappings.
+  fastify.put('/connectors/salesforce/field-mapping', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as { field_mappings?: unknown };
+    const mappings = validateFieldMappings(body.field_mappings ?? []);
+
+    const conn = await prisma.salesforceConnection.findUnique({ where: { apiKeyId: request.apiKey.id } });
+    if (!conn) throw Errors.notFound('Salesforce connection');
+
+    await prisma.salesforceConnection.update({
+      where: { apiKeyId: request.apiKey.id },
+      data: { fieldMappings: mappings as unknown as Prisma.InputJsonValue },
+    });
+    return reply.status(200).send({ field_mappings: mappings });
   });
 
   // PATCH /v1/connectors/salesforce — toggle sync on/off without disconnecting

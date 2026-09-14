@@ -5,7 +5,7 @@ import { decryptValue } from '../lib/crypto.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { getSalesforceAccessToken } from '../lib/oauth/salesforce.js';
-import { findLeadByEmail, createLead, updateLead, logActivity, queryLeadsById, SalesforceApiError } from '../lib/salesforceApi.js';
+import { findLeadByEmail, createLead, updateLead, logActivity, queryLeadsById, SalesforceApiError, applyFieldMappings, type SalesforceFieldMapping } from '../lib/salesforceApi.js';
 
 interface SalesforceSyncTickPayload {
   tick: true;
@@ -29,6 +29,7 @@ async function pushLeadsForConnection(
   apiKeyId: string,
   instanceUrl: string,
   accessToken: string,
+  fieldMappings: SalesforceFieldMapping[] | null,
 ): Promise<{ pushed: number; errors: number }> {
   const existingSyncs = await prisma.salesforceLeadSync.findMany({ where: { apiKeyId } });
   const syncedByEmail = new Map(existingSyncs.map((s) => [s.leadEmail, s]));
@@ -58,7 +59,7 @@ async function pushLeadsForConnection(
     if (existingSync && lead.updatedAt <= existingSync.lastPushedAt) continue;
 
     try {
-      const fields = {
+      const baseFields = {
         Email: lead.email,
         FirstName: lead.firstName ?? undefined,
         LastName: lead.lastName?.trim() || '(Unknown)',
@@ -66,6 +67,14 @@ async function pushLeadsForConnection(
         Title: lead.title ?? undefined,
         LeadSource: 'Continuum',
       };
+      const fields = applyFieldMappings(baseFields, {
+        firstName: lead.firstName,
+        lastName: lead.lastName,
+        company: lead.company,
+        title: lead.title,
+        tags: lead.tags,
+        customVars: lead.customVars as Record<string, unknown> | null,
+      }, fieldMappings);
 
       let salesforceId = existingSync?.salesforceId ?? null;
       if (salesforceId) {
@@ -191,7 +200,8 @@ export async function processSalesforceSyncTick(): Promise<void> {
       const refreshToken = decryptValue(conn.refreshTokenEnc, getSecret());
       const accessToken = await getSalesforceAccessToken(refreshToken);
 
-      const { pushed, errors } = await pushLeadsForConnection(conn.apiKeyId, conn.instanceUrl, accessToken);
+      const fieldMappings = (conn.fieldMappings as SalesforceFieldMapping[] | null) ?? null;
+      const { pushed, errors } = await pushLeadsForConnection(conn.apiKeyId, conn.instanceUrl, accessToken, fieldMappings);
       const logged = await pushRepliesForConnection(conn.apiKeyId, conn.instanceUrl, accessToken, conn.lastPushedAt);
       const pulled = await pullStatusForConnection(conn.apiKeyId, conn.instanceUrl, accessToken);
 
