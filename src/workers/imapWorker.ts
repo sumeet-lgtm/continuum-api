@@ -1,5 +1,6 @@
 import { Worker, type Job } from 'bullmq';
 import * as tls from 'node:tls';
+import { simpleParser } from 'mailparser';
 import { QUEUE_IMAP, redisConnection } from '../lib/queue.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
@@ -140,37 +141,41 @@ async function pollMailboxes(): Promise<void> {
 
       await connection.openBox('INBOX');
       const since = new Date(Date.now() - 15 * 60 * 1000);
+      // Fetch the whole raw RFC822 source ('' body spec) and hand it to
+      // mailparser instead of hand-parsing IMAP header fields + a raw TEXT
+      // body ourselves. The previous approach had two confirmed bugs found
+      // via a real live test (2026-09-14): (1) the From-address regex had
+      // two alternatives (bracketed vs bare email) but always read capture
+      // group 1, so a bare "From: user@domain" header with no display name
+      // — a real, common shape — produced an empty fromEmail, silently
+      // breaking every reply-to-enrollment match; (2) the 'TEXT' IMAP body
+      // spec returns the full raw MIME body for a multipart message
+      // (boundaries, Content-Type headers and all), not an extracted
+      // plain-text part, so bodySnippet (and therefore AI classification)
+      // was fed raw MIME boilerplate instead of the actual reply text.
+      // mailparser is already a dependency and already used the same way
+      // in smtp-relay.ts — reusing that established, correct pattern here.
       const messages = await connection.search(['UNSEEN', ['SINCE', since.toUTCString()]], {
-        bodies: ['HEADER.FIELDS (FROM SUBJECT IN-REPLY-TO MESSAGE-ID)', 'TEXT'],
+        bodies: [''],
         markSeen: false,
       });
 
       for (const msg of messages) {
-        const header = msg.parts.find((p: { which: string }) => p.which.includes('HEADER'));
-        if (!header) continue;
+        const rawPart = msg.parts.find((p: { which: string }) => p.which === '');
+        if (!rawPart) continue;
+        const raw = Buffer.isBuffer(rawPart.body) ? rawPart.body : Buffer.from(String(rawPart.body ?? ''), 'utf8');
+        if (raw.length === 0) continue;
 
-        const imap2 = await import('imap').catch(() => null);
-        if (!imap2) continue;
-        // `as string` here was a compile-time-only assertion -- node-imap
-        // actually hands back a Buffer for this fetch at runtime, which has
-        // no .split(), so parseHeader (which does `str.split(RE_CRLF)`)
-        // threw on every single message. This never surfaced before now
-        // because the TLS handshake above was failing first on every poll.
-        const headerBody = Buffer.isBuffer(header.body) ? header.body.toString('utf8') : String(header.body ?? '');
-        const parsed = imap2.default?.parseHeader?.(headerBody) ?? {};
+        const parsedMail = await simpleParser(raw);
 
-        const inReplyTo = (parsed['in-reply-to']?.[0] ?? '').replace(/[<>]/g, '');
-        const messageId = (parsed['message-id']?.[0] ?? '').replace(/[<>]/g, '');
-        const fromEmail = (parsed['from']?.[0] ?? '').match(/<(.+?)>|(.+)/)?.[1] ?? '';
-        const subject = parsed['subject']?.[0] ?? '';
-
-        // Extract body snippet for AI classification. Same Buffer-vs-string
-        // gap as the header parse above -- this silently produced an empty
-        // snippet (rather than crashing) on every real message, since the
-        // check just skipped a non-string body instead of converting it.
-        const textPart = msg.parts.find((p: { which: string }) => p.which === 'TEXT');
-        const textBody = Buffer.isBuffer(textPart?.body) ? textPart.body.toString('utf8') : (typeof textPart?.body === 'string' ? textPart.body : '');
-        const bodySnippet = textBody.slice(0, 500);
+        const inReplyTo = (parsedMail.inReplyTo ?? '').replace(/[<>]/g, '');
+        const messageId = (parsedMail.messageId ?? '').replace(/[<>]/g, '');
+        const fromEmail = parsedMail.from?.value?.[0]?.address ?? '';
+        const subject = parsedMail.subject ?? '';
+        // mailparser types .html as `string | false` (false when absent) —
+        // `||`, not `??`, so that falsy-false correctly falls through to
+        // the next candidate instead of stringifying to "false".
+        const bodySnippet = (parsedMail.text || parsedMail.html || '').toString().slice(0, 500);
 
         let enrollmentId: string | null = null;
         if (inReplyTo || fromEmail) {
