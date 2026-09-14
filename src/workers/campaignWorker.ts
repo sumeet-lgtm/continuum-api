@@ -128,7 +128,9 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     }
   }
 
-  // Remove suppressed emails
+  // Remove suppressed emails — Suppression is a platform-wide, deliberately
+  // unscoped list (see schema.prisma); every tenant's sends must skip it.
+  // tenant-sweep: see comment above
   const suppressions = await prisma.suppression.findMany({
     where: { email: { in: recipients.map(r => r.email) } },
     select: { email: true },
@@ -263,6 +265,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     // later chunk just because they weren't suppressed yet when this
     // campaign began.
     if (i > 0) {
+      // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
       const freshlySuppressed = await prisma.suppression.findMany({
         where: { email: { in: chunk.map(r => r.email) } },
         select: { email: true },

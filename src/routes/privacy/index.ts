@@ -31,6 +31,7 @@ export async function privacyRoutes(fastify: FastifyInstance): Promise<void> {
           prisma.sendMessage.count({
             where: { apiKeyId, to: { equals: lc, mode: 'insensitive' } },
           }),
+          // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
           prisma.suppression.findFirst({
             where: { email: { equals: lc, mode: 'insensitive' } },
             select: { reason: true, createdAt: true },
@@ -122,6 +123,7 @@ export async function privacyRoutes(fastify: FastifyInstance): Promise<void> {
       ]);
 
       // 4. Add to suppression list (prevent future sends — use 'manual' as the closest reason)
+      // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
       const existing = await prisma.suppression.findFirst({ where: { email } });
       if (!existing) {
         await prisma.suppression.create({

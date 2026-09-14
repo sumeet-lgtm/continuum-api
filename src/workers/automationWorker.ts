@@ -14,6 +14,10 @@ export async function runAutomationWorker(): Promise<void> {
 
   const now = new Date();
 
+  // Scans due enrollments across every tenant; each row carries its own
+  // automation.apiKeyId, used below (SendMessage.apiKeyId) to scope every
+  // downstream write to that row's own tenant.
+  // tenant-sweep: see comment above
   const enrollments = await prisma.automationEnrollment.findMany({
     where: {
       status: 'active',

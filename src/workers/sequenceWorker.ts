@@ -87,7 +87,10 @@ export async function processSequenceTick(): Promise<void> {
   const now = new Date();
   logger.info({ now: now.toISOString() }, 'Sequence tick starting');
 
-  // Find all enrollments due for their next send
+  // Every tenant's enrollments due for their next send; every downstream
+  // read/write below is scoped via this row's own enrollment.sequence.apiKeyId
+  // (see the lead/mailbox/sendMessage lookups further down in this function).
+  // tenant-sweep: see comment above
   const dueEnrollments = await prisma.sequenceEnrollment.findMany({
     where: {
       status: 'active',
@@ -111,6 +114,7 @@ export async function processSequenceTick(): Promise<void> {
   // cold-outreach steps just because this worker never checked. Batched once
   // per tick rather than per-enrollment, same pattern as the campaign worker.
   const dueEmails = [...new Set(dueEnrollments.map(e => e.email))];
+  // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
   const suppressions = dueEmails.length > 0
     ? await prisma.suppression.findMany({ where: { email: { in: dueEmails } }, select: { email: true, reason: true } })
     : [];

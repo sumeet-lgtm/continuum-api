@@ -193,6 +193,10 @@ async function pullStatusForConnection(apiKeyId: string, instanceUrl: string, ac
 }
 
 export async function processSalesforceSyncTick(): Promise<void> {
+  // Every tenant with an active Salesforce connection; each row's own
+  // conn.apiKeyId is threaded through push/pull below, scoping every
+  // downstream read/write to that row's tenant.
+  // tenant-sweep: see comment above
   const connections = await prisma.salesforceConnection.findMany({ where: { syncEnabled: true } });
 
   for (const conn of connections) {

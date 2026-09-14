@@ -31,6 +31,17 @@ export async function segmentRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const { name, list_id, filter_rules } = parsed.data;
 
+    // A segment's listId was accepted straight from the request body with
+    // no ownership check — a customer could point a segment at another
+    // tenant's mailing list id, and every downstream contactListMembership
+    // lookup below (scoped only by listId, not by apiKeyId) would then
+    // return that other tenant's contacts. Validate ownership up front so
+    // segment.listId can never reference a list outside this account.
+    if (list_id) {
+      const list = await prisma.mailingList.findFirst({ where: { id: list_id, apiKeyId }, select: { id: true } });
+      if (!list) throw Errors.notFound('List not found.');
+    }
+
     const segment = await prisma.segment.create({
       data: { apiKeyId, name, listId: list_id ?? null, filterRules: filter_rules },
       select: { id: true, name: true, listId: true, filterRules: true, createdAt: true },
@@ -67,7 +78,7 @@ export async function segmentRoutes(fastify: FastifyInstance): Promise<void> {
     let count = 0;
     if (segment.listId) {
       const memberships = await prisma.contactListMembership.findMany({
-        where: { listId: segment.listId, status: 'subscribed' },
+        where: { listId: segment.listId, status: 'subscribed', list: { apiKeyId } },
         include: { contact: true },
       });
       count = memberships.filter(m => matchRules(m.contact, rules)).length;
@@ -110,7 +121,7 @@ export async function segmentRoutes(fastify: FastifyInstance): Promise<void> {
     let contacts: Array<{ email: string; firstName: string | null; lastName: string | null }> = [];
     if (segment.listId) {
       const memberships = await prisma.contactListMembership.findMany({
-        where: { listId: segment.listId, status: 'subscribed' },
+        where: { listId: segment.listId, status: 'subscribed', list: { apiKeyId } },
         include: { contact: { select: { email: true, firstName: true, lastName: true } } },
       });
       contacts = memberships

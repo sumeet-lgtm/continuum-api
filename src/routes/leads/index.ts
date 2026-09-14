@@ -179,13 +179,13 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
         },
       }),
       prisma.replyEvent.findMany({
-        where: { fromEmail: lead.email },
+        where: { fromEmail: lead.email, mailbox: { apiKeyId } },
         orderBy: { receivedAt: 'desc' },
         take: 50,
         select: { id: true, subject: true, bodySnippet: true, status: true, receivedAt: true, enrollmentId: true },
       }),
       prisma.sequenceEnrollment.findMany({
-        where: { email: lead.email },
+        where: { email: lead.email, sequence: { apiKeyId } },
         orderBy: { enrolledAt: 'desc' },
         select: {
           id: true, sequenceId: true, status: true, currentStep: true, nextSendAt: true, enrolledAt: true, completedAt: true, repliedAt: true,
@@ -452,7 +452,7 @@ Return only valid JSON, no explanation.`;
 
     // Fetch enrollments separately (no Prisma back-relation on Lead)
     const enrollments = await prisma.sequenceEnrollment.findMany({
-      where: { email },
+      where: { email, sequence: { apiKeyId } },
       select: { sequenceId: true, status: true, currentStep: true, nextSendAt: true },
     });
 

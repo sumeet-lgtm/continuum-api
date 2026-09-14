@@ -79,6 +79,10 @@ async function pollMailboxes(): Promise<void> {
   const cfg = config as Record<string, unknown>;
   if (!cfg['IMAP_POLL_ENABLED']) return;
 
+  // Polls every tenant's connected mailbox for new replies; every downstream
+  // write below (replyEvent, sequenceEnrollment, lead, suppression) is
+  // scoped via this row's own mailbox.id/apiKeyId.
+  // tenant-sweep: see comment above
   const mailboxes = await prisma.mailbox.findMany({
     where: {
       status: 'active',
@@ -233,17 +237,26 @@ async function pollMailboxes(): Promise<void> {
               data: { status: enrollmentStatus, repliedAt: new Date() },
             });
 
-            await prisma.lead.updateMany({
-              where: { email: fromEmail.toLowerCase() },
-              data: {
-                status: classification.category === 'interested' ? 'interested'
-                  : classification.category === 'not_interested' ? 'not_interested'
-                  : classification.category === 'unsubscribe' ? 'unsubscribed'
-                  : classification.category === 'bounced' ? 'bounced'
-                  : 'replied',
-                repliedAt: new Date(),
-              },
-            }).catch(() => {});
+            // Scoped to this reply's own tenant (seq.apiKeyId) — without it, a
+            // reply to one tenant's outreach would silently overwrite a
+            // DIFFERENT tenant's Lead record for the same prospect email
+            // (two accounts emailing the same person is common), corrupting
+            // that other tenant's lead status/repliedAt. If the sequence
+            // lookup above came back empty, skip rather than fall back to an
+            // unscoped update.
+            if (seq?.apiKeyId) {
+              await prisma.lead.updateMany({
+                where: { email: fromEmail.toLowerCase(), apiKeyId: seq.apiKeyId },
+                data: {
+                  status: classification.category === 'interested' ? 'interested'
+                    : classification.category === 'not_interested' ? 'not_interested'
+                    : classification.category === 'unsubscribe' ? 'unsubscribed'
+                    : classification.category === 'bounced' ? 'bounced'
+                    : 'replied',
+                  repliedAt: new Date(),
+                },
+              }).catch(() => {});
+            }
 
             // Only a genuine reply should re-enroll the lead in REPLIED-triggered
             // subsequences — a bounce or unsubscribe isn't a signal to follow up.

@@ -56,6 +56,11 @@ export async function smtp2goEventsRoute(fastify: FastifyInstance): Promise<void
         return reply.status(200).send({ received: true });
       }
 
+      // Reverse lookup keyed by smtp2goMessageId, which is globally @unique
+      // on SendMessage (schema.prisma) — apiKeyId isn't known yet at this
+      // point, this lookup is how it gets resolved, and uniqueness
+      // guarantees no cross-tenant ambiguity.
+      // tenant-sweep: see comment above
       const sendMessage = await prisma.sendMessage.findFirst({ where: { smtp2goMessageId: emailId } });
       if (!sendMessage) {
         // Not one of ours (or arrived before the row committed) — ack, don't retry forever.

@@ -365,6 +365,7 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
         orderBy: { subscribedAt: 'desc' },
         select: { status: true, subscribedAt: true, unsubscribedAt: true, list: { select: { id: true, name: true } } },
       }),
+      // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
       prisma.suppression.findFirst({ where: { email }, select: { reason: true, createdAt: true } }),
     ]);
 
@@ -542,6 +543,7 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       // Load existing suppressions in bulk to skip them
+      // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
       const suppressionEmails = new Set(
         (await prisma.suppression.findMany({
           where: { email: { in: contacts.map(c => c.email.toLowerCase()) } },

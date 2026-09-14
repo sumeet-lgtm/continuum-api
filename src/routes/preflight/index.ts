@@ -112,6 +112,7 @@ export async function preflightRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     const [suppressions, cacheHits] = await Promise.all([
+      // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
       prisma.suppression.findMany({
         where: { email: { in: emails } },
         select: { email: true, reason: true },

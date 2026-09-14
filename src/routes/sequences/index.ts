@@ -249,7 +249,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
 
     if (parsed.data.list_id) {
       const members = await prisma.contactListMembership.findMany({
-        where: { listId: parsed.data.list_id, status: 'subscribed' },
+        where: { listId: parsed.data.list_id, status: 'subscribed', list: { apiKeyId } },
         include: { contact: { select: { email: true } } },
       });
       emails = [...new Set([...emails, ...members.map(m => m.contact.email)])];
@@ -267,8 +267,12 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
 
       // Cross-sequence exclusivity: one active sequence per lead
       if (!body.force_move) {
+        // Scoped to this account's own sequences only — without sequence: { apiKeyId },
+        // this could both false-positive-block an enrollment because of some OTHER
+        // tenant's unrelated active enrollment for the same email, and leak that
+        // other tenant's private sequence name/id back in the conflict response.
         const conflict = await prisma.sequenceEnrollment.findFirst({
-          where: { email, status: 'active', NOT: { sequenceId: id } },
+          where: { email, status: 'active', NOT: { sequenceId: id }, sequence: { apiKeyId } },
           select: { sequenceId: true, sequence: { select: { name: true } } },
         });
         if (conflict) {
@@ -279,7 +283,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       if (body.force_move) {
         // Deactivate any other active enrollment so this one becomes the sole active sequence
         await prisma.sequenceEnrollment.updateMany({
-          where: { email, status: 'active', NOT: { sequenceId: id } },
+          where: { email, status: 'active', NOT: { sequenceId: id }, sequence: { apiKeyId } },
           data: { status: 'paused' },
         });
       }

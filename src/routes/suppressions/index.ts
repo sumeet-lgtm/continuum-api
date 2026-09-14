@@ -127,6 +127,7 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const normalized = [...new Set(emails.map(e => e.trim().toLowerCase()).filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)))];
       const invalid = emails.length - normalized.length;
 
+      // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
       const existing = await prisma.suppression.findMany({
         where: { email: { in: normalized } },
         select: { email: true },
