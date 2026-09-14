@@ -76,91 +76,87 @@ async function triggerSubsequences(parentSequenceId: string, email: string, trig
   }
 }
 
-async function pollMailboxes(): Promise<void> {
-  const cfg = config as Record<string, unknown>;
-  if (!cfg['IMAP_POLL_ENABLED']) return;
+const IMAP_MAILBOX_TIMEOUT_MS = 45_000;
 
-  // Polls every tenant's connected mailbox for new replies; every downstream
-  // write below (replyEvent, sequenceEnrollment, lead, suppression) is
-  // scoped via this row's own mailbox.id/apiKeyId.
-  // tenant-sweep: see comment above
-  const mailboxes = await prisma.mailbox.findMany({
-    where: {
-      status: 'active',
-      OR: [{ passwordEnc: { not: null } }, { oauthTokenEnc: { not: null } }],
-    },
-    select: { id: true, type: true, host: true, port: true, username: true, passwordEnc: true, oauthTokenEnc: true },
+function timeoutAfter(ms: number, label: string): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    setTimeout(() => reject(new Error(`IMAP poll timed out after ${ms}ms (${label})`)), ms);
   });
+}
 
-  for (const mailbox of mailboxes) {
-    try {
-      const imap = await import('imap-simple').catch(() => null);
-      if (!imap) {
-        logger.warn('imap-simple not installed — skipping IMAP poll');
-        break;
-      }
+async function pollOneMailbox(mailbox: {
+  id: string; type: string; host: string | null; port: number | null;
+  username: string; passwordEnc: string | null; oauthTokenEnc: string | null;
+}): Promise<void> {
+  let connection: Awaited<ReturnType<typeof import('imap-simple').connect>> | null = null;
+  try {
+    const imap = await import('imap-simple').catch(() => null);
+    if (!imap) {
+      logger.warn('imap-simple not installed — skipping IMAP poll');
+      return;
+    }
 
-      let authConfig: { password?: string; xoauth2?: string };
-      if (mailbox.oauthTokenEnc) {
-        const { getOAuthAccessToken, buildXoauth2Token } = await import('../lib/oauth/tokens.js');
-        const { accessToken } = await getOAuthAccessToken(mailbox.oauthTokenEnc);
-        authConfig = { xoauth2: buildXoauth2Token(mailbox.username, accessToken) };
-      } else {
-        const { decryptValue } = await import('../lib/crypto.js');
-        const mailboxSecret = config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
-        authConfig = { password: decryptValue(mailbox.passwordEnc!, mailboxSecret) };
-      }
+    let authConfig: { password?: string; xoauth2?: string };
+    if (mailbox.oauthTokenEnc) {
+      const { getOAuthAccessToken, buildXoauth2Token } = await import('../lib/oauth/tokens.js');
+      const { accessToken } = await getOAuthAccessToken(mailbox.oauthTokenEnc);
+      authConfig = { xoauth2: buildXoauth2Token(mailbox.username, accessToken) };
+    } else {
+      const { decryptValue } = await import('../lib/crypto.js');
+      const mailboxSecret = config.MAILBOX_CREDS_SECRET ?? config.API_KEY_SALT;
+      authConfig = { password: decryptValue(mailbox.passwordEnc!, mailboxSecret) };
+    }
 
-      const connection = await imap.connect({
-        // Cast: node-imap's types mark password required even when xoauth2
-        // is supplied instead (see imapHost.ts for the same note).
-        imap: {
-          user: mailbox.username,
-          host: deriveImapHost(mailbox.host ?? 'imap.gmail.com'),
-          port: IMAP_PORT,
-          tls: true,
-          // node-imap wraps a not-yet-connected net.Socket in tls.connect(),
-          // then connects that socket separately -- servername isn't
-          // reliably defaulted from `host` in that pre-existing-socket
-          // path the way a from-scratch tls.connect(host, port) defaults
-          // it. Without it, SNI can go out empty/wrong, and Gmail's TLS
-          // frontend serves a fallback cert for unrecognized SNI that
-          // fails as "self-signed" -- confirmed by an isolated tls.connect
-          // to the same host/port with servername set succeeding
-          // (Google Trust Services WR2, authorized: true) in the same
-          // process where this real connection was failing.
-          tlsOptions: {
-            rejectUnauthorized: true,
-            servername: deriveImapHost(mailbox.host ?? 'imap.gmail.com'),
-            checkServerIdentity: loggingCheckServerIdentity,
-          },
-          authTimeout: 10000,
-          ...authConfig,
-        } as import('imap').Config,
-      });
+    connection = await imap.connect({
+      // Cast: node-imap's types mark password required even when xoauth2
+      // is supplied instead (see imapHost.ts for the same note).
+      imap: {
+        user: mailbox.username,
+        host: deriveImapHost(mailbox.host ?? 'imap.gmail.com'),
+        port: IMAP_PORT,
+        tls: true,
+        // node-imap wraps a not-yet-connected net.Socket in tls.connect(),
+        // then connects that socket separately -- servername isn't
+        // reliably defaulted from `host` in that pre-existing-socket
+        // path the way a from-scratch tls.connect(host, port) defaults
+        // it. Without it, SNI can go out empty/wrong, and Gmail's TLS
+        // frontend serves a fallback cert for unrecognized SNI that
+        // fails as "self-signed" -- confirmed by an isolated tls.connect
+        // to the same host/port with servername set succeeding
+        // (Google Trust Services WR2, authorized: true) in the same
+        // process where this real connection was failing.
+        tlsOptions: {
+          rejectUnauthorized: true,
+          servername: deriveImapHost(mailbox.host ?? 'imap.gmail.com'),
+          checkServerIdentity: loggingCheckServerIdentity,
+        },
+        authTimeout: 10000,
+        ...authConfig,
+      } as import('imap').Config,
+    });
 
-      await connection.openBox('INBOX');
-      const since = new Date(Date.now() - 15 * 60 * 1000);
-      // Fetch the whole raw RFC822 source ('' body spec) and hand it to
-      // mailparser instead of hand-parsing IMAP header fields + a raw TEXT
-      // body ourselves. The previous approach had two confirmed bugs found
-      // via a real live test (2026-09-14): (1) the From-address regex had
-      // two alternatives (bracketed vs bare email) but always read capture
-      // group 1, so a bare "From: user@domain" header with no display name
-      // — a real, common shape — produced an empty fromEmail, silently
-      // breaking every reply-to-enrollment match; (2) the 'TEXT' IMAP body
-      // spec returns the full raw MIME body for a multipart message
-      // (boundaries, Content-Type headers and all), not an extracted
-      // plain-text part, so bodySnippet (and therefore AI classification)
-      // was fed raw MIME boilerplate instead of the actual reply text.
-      // mailparser is already a dependency and already used the same way
-      // in smtp-relay.ts — reusing that established, correct pattern here.
-      const messages = await connection.search(['UNSEEN', ['SINCE', since.toUTCString()]], {
-        bodies: [''],
-        markSeen: false,
-      });
+    await connection.openBox('INBOX');
+    const since = new Date(Date.now() - 15 * 60 * 1000);
+    // Fetch the whole raw RFC822 source ('' body spec) and hand it to
+    // mailparser instead of hand-parsing IMAP header fields + a raw TEXT
+    // body ourselves. The previous approach had two confirmed bugs found
+    // via a real live test (2026-09-14): (1) the From-address regex had
+    // two alternatives (bracketed vs bare email) but always read capture
+    // group 1, so a bare "From: user@domain" header with no display name
+    // — a real, common shape — produced an empty fromEmail, silently
+    // breaking every reply-to-enrollment match; (2) the 'TEXT' IMAP body
+    // spec returns the full raw MIME body for a multipart message
+    // (boundaries, Content-Type headers and all), not an extracted
+    // plain-text part, so bodySnippet (and therefore AI classification)
+    // was fed raw MIME boilerplate instead of the actual reply text.
+    // mailparser is already a dependency and already used the same way
+    // in smtp-relay.ts — reusing that established, correct pattern here.
+    const messages = await connection.search(['UNSEEN', ['SINCE', since.toUTCString()]], {
+      bodies: [''],
+      markSeen: false,
+    });
 
-      for (const msg of messages) {
+    for (const msg of messages) {
         const rawPart = msg.parts.find((p: { which: string }) => p.which === '');
         if (!rawPart) continue;
         const raw = Buffer.isBuffer(rawPart.body) ? rawPart.body : Buffer.from(String(rawPart.body ?? ''), 'utf8');
@@ -305,27 +301,78 @@ async function pollMailboxes(): Promise<void> {
         }).catch(() => {});
       }
 
-      connection.end();
-    } catch (err) {
-      logger.error({ err, mailboxId: mailbox.id }, 'IMAP poll failed for mailbox');
-      // lastErrorMsg is the same field the dashboard shows as "mailbox
-      // error" and that warmup's SMTP send failures write to — it's meant
-      // to answer "is this mailbox broken for sending". IMAP poll (reply
-      // detection) is currently broken for every mailbox on every provider
-      // due to a network-level restriction we don't control (see
-      // imapHost.ts), so writing this error here would put a permanent,
-      // uninformative "self-signed certificate" banner on literally every
-      // IMAP-enabled mailbox regardless of whether sending works fine —
-      // exactly the kind of silent-background-failure-turned-confusing-UI
-      // this product is trying not to be. Keep it in our own logs (for
-      // support/debugging) without surfacing it to the customer until the
-      // underlying IMAP restriction is actually fixed.
-      await prisma.mailbox.update({
-        where: { id: mailbox.id },
-        data: { lastCheckedAt: new Date() },
-      }).catch(() => {});
+  } catch (err) {
+    logger.error({ err, mailboxId: mailbox.id }, 'IMAP poll failed for mailbox');
+    // lastErrorMsg is the same field the dashboard shows as "mailbox
+    // error" and that warmup's SMTP send failures write to — it's meant
+    // to answer "is this mailbox broken for sending". IMAP poll (reply
+    // detection) has historically been unreliable for every mailbox on
+    // every provider due to a network-level restriction we don't control
+    // (see imapHost.ts), so writing this error here would put a permanent,
+    // uninformative "self-signed certificate" banner on literally every
+    // IMAP-enabled mailbox regardless of whether sending works fine —
+    // exactly the kind of silent-background-failure-turned-confusing-UI
+    // this product is trying not to be. Keep it in our own logs (for
+    // support/debugging) without surfacing it to the customer until the
+    // underlying IMAP restriction is actually fixed.
+    await prisma.mailbox.update({
+      where: { id: mailbox.id },
+      data: { lastCheckedAt: new Date() },
+    }).catch(() => {});
+  } finally {
+    // Always close, even on a mid-poll failure — an un-ended connection
+    // left open on every error was a real, plausible contributor to the
+    // recurring-tick hang documented on pollMailboxes() below: enough
+    // lingering open sockets/auth sessions against the same mailbox could
+    // make a later poll's own connect attempt hang indefinitely instead of
+    // failing fast.
+    if (connection) {
+      try { connection.end(); } catch { /* already closed */ }
     }
   }
+}
+
+async function pollMailboxes(): Promise<void> {
+  const cfg = config as Record<string, unknown>;
+  if (!cfg['IMAP_POLL_ENABLED']) return;
+
+  // Polls every tenant's connected mailbox for new replies; every downstream
+  // write below (replyEvent, sequenceEnrollment, lead, suppression) is
+  // scoped via this row's own mailbox.id/apiKeyId.
+  // tenant-sweep: see comment above
+  const mailboxes = await prisma.mailbox.findMany({
+    where: {
+      status: 'active',
+      OR: [{ passwordEnc: { not: null } }, { oauthTokenEnc: { not: null } }],
+    },
+    select: { id: true, type: true, host: true, port: true, username: true, passwordEnc: true, oauthTokenEnc: true },
+  });
+
+  logger.info({ mailboxCount: mailboxes.length }, 'IMAP tick starting');
+
+  for (const mailbox of mailboxes) {
+    // Real bug, live-confirmed 2026-09-14: a hang anywhere in a single
+    // mailbox's poll (IMAP connect/openBox/search, or a slow OAuth token
+    // refresh) had nothing bounding it. With the worker's concurrency
+    // fixed at 1, one stuck mailbox silently blocked this job's promise
+    // from ever resolving — no error, no completion log, nothing — which
+    // meant the repeatable 'tick' job never finished and BullMQ never
+    // started the next one. Observed directly: one successful poll right
+    // after a deploy, then total silence for the next 50+ minutes despite
+    // a 15-minute schedule. A hard per-mailbox timeout, racing the real
+    // poll against a timer, ensures one bad mailbox can never take the
+    // whole recurring poll down with it again.
+    try {
+      await Promise.race([
+        pollOneMailbox(mailbox),
+        timeoutAfter(IMAP_MAILBOX_TIMEOUT_MS, mailbox.username),
+      ]);
+    } catch (err) {
+      logger.error({ err, mailboxId: mailbox.id, username: mailbox.username }, 'IMAP poll timed out or failed for mailbox — moving on');
+    }
+  }
+
+  logger.info({ mailboxCount: mailboxes.length }, 'IMAP tick complete');
 }
 
 export function startImapWorker(): Worker {
