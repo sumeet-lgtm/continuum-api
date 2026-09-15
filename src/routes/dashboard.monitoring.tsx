@@ -79,6 +79,7 @@ function MonitoringPage() {
 
   const addMonitor = async () => {
     if (!apiKey?.keyRaw || !email) return;
+    let created: Monitor | null = null;
     try {
       const res = await fetch(`${API_BASE}/v1/monitoring`, {
         method: "POST",
@@ -93,6 +94,7 @@ function MonitoringPage() {
         toast.error(data?.message ?? "Couldn't add monitor");
         return;
       }
+      created = await res.json().catch(() => null) as Monitor | null;
     } catch {
       toast.error("Couldn't add monitor — check your connection");
       return;
@@ -100,7 +102,10 @@ function MonitoringPage() {
     setEmail("");
     setInterval(24);
     setOpen(false);
-    await load();
+    if (created) {
+      setItems((prev) => [created!, ...prev.filter((m) => m.id !== created!.id)]);
+    }
+    load();
   };
 
   const togglePause = async (m: Monitor) => {

@@ -190,9 +190,32 @@ function VerifyPage() {
         setError((data as { error?: string }).error ?? `Request failed (${res.status})`);
       } else {
         setResult(data);
-        // Reload history to show new result (slight delay for DB write)
-        setTimeout(() => void loadVerifs(1, verifStatus, verifQ), 500);
+        const full = data as VerifyResponse & {
+          id?: string; domain?: string; subStatus?: string | null;
+          durationMs?: number | null; checkedAt?: string;
+        };
+        if (full.id && full.email) {
+          const row: VerifRow = {
+            id: full.id,
+            email: full.email,
+            domain: full.domain ?? full.email.split("@")[1] ?? "",
+            status: full.status ?? "unknown",
+            subStatus: full.subStatus ?? null,
+            flags: {
+              disposable: full.checks?.isDisposable ?? null,
+              roleAccount: full.checks?.isRoleAccount ?? null,
+              catchAll: full.checks?.isCatchAll ?? null,
+            },
+            score: full.score ?? null,
+            durationMs: full.durationMs ?? null,
+            checkedAt: full.checkedAt ?? new Date().toISOString(),
+          };
+          setVerifRows((prev) => [row, ...prev.filter((r) => r.id !== row.id)]);
+        }
         setVerifPage(1);
+        // Reconcile with the server shortly after (pagination/filters can
+        // change what this optimistic row's actual position should be).
+        setTimeout(() => void loadVerifs(1, verifStatus, verifQ), 500);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
