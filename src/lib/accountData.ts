@@ -28,6 +28,7 @@
 
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
+import { withTenant, type PrismaTx } from './tenantContext.js';
 
 interface OwnedIds {
   mailboxIds: string[];
@@ -39,15 +40,21 @@ interface OwnedIds {
   sendMessageIds: string[];
 }
 
-async function collectOwnedIds(apiKeyId: string): Promise<OwnedIds> {
+// Takes `tx` rather than opening its own transaction — every caller already
+// has one open via withTenant (RLS-covered models here — mailbox, campaign,
+// sequence, sendMessage — need that scope), and Prisma doesn't support
+// nested transactions. monitor/webhook/automation aren't RLS-covered, so
+// they stay on the plain `prisma` client even though they run alongside
+// tx-scoped calls in the same Promise.all.
+async function collectOwnedIds(tx: PrismaTx, apiKeyId: string): Promise<OwnedIds> {
   const [mailboxes, monitors, webhooks, automations, campaigns, sequences, sendMessages] = await Promise.all([
-    prisma.mailbox.findMany({ where: { apiKeyId }, select: { id: true } }),
+    tx.mailbox.findMany({ where: { apiKeyId }, select: { id: true } }),
     prisma.monitor.findMany({ where: { apiKeyId }, select: { id: true } }),
     prisma.webhook.findMany({ where: { apiKeyId }, select: { id: true } }),
     prisma.automation.findMany({ where: { apiKeyId }, select: { id: true } }),
-    prisma.campaign.findMany({ where: { apiKeyId }, select: { id: true } }),
-    prisma.sequence.findMany({ where: { apiKeyId }, select: { id: true } }),
-    prisma.sendMessage.findMany({ where: { apiKeyId }, select: { id: true } }),
+    tx.campaign.findMany({ where: { apiKeyId }, select: { id: true } }),
+    tx.sequence.findMany({ where: { apiKeyId }, select: { id: true } }),
+    tx.sendMessage.findMany({ where: { apiKeyId }, select: { id: true } }),
   ]);
   return {
     mailboxIds: mailboxes.map((r) => r.id),
@@ -62,93 +69,103 @@ async function collectOwnedIds(apiKeyId: string): Promise<OwnedIds> {
 
 
 export async function exportAccountData(apiKeyId: string): Promise<Record<string, unknown>> {
-  const ids = await collectOwnedIds(apiKeyId);
+  return withTenant(apiKeyId, async (tx) => {
+    const ids = await collectOwnedIds(tx, apiKeyId);
 
-  const [
-    mailboxes, monitors, webhooks, automations, campaigns, sequences,
-    sendMessages, verifications, bulkJobs, contacts, mailingLists,
-    segments, sendingDomains, emailTemplates, leads, inboxTests,
-    replyEvents, trackingEvents, monitorChecks, webhookDeliveries,
-    automationEnrollments,
-  ] = await Promise.all([
-    prisma.mailbox.findMany({ where: { apiKeyId } }),
-    prisma.monitor.findMany({ where: { apiKeyId } }),
-    prisma.webhook.findMany({ where: { apiKeyId } }),
-    prisma.automation.findMany({ where: { apiKeyId } }),
-    prisma.campaign.findMany({ where: { apiKeyId } }),
-    prisma.sequence.findMany({ where: { apiKeyId } }),
-    prisma.sendMessage.findMany({ where: { apiKeyId } }),
-    prisma.verification.findMany({ where: { apiKeyId } }),
-    prisma.bulkJob.findMany({ where: { apiKeyId } }),
-    prisma.contact.findMany({ where: { apiKeyId } }),
-    prisma.mailingList.findMany({ where: { apiKeyId } }),
-    prisma.segment.findMany({ where: { apiKeyId } }),
-    prisma.sendingDomain.findMany({ where: { apiKeyId } }),
-    prisma.emailTemplate.findMany({ where: { apiKeyId } }),
-    prisma.lead.findMany({ where: { apiKeyId } }),
-    prisma.inboxTest.findMany({ where: { apiKeyId } }),
-    prisma.replyEvent.findMany({ where: { mailboxId: { in: ids.mailboxIds } } }),
-    prisma.trackingEvent.findMany({
-      where: { OR: [{ sendMessageId: { in: ids.sendMessageIds } }, { campaignId: { in: ids.campaignIds } }, { sequenceId: { in: ids.sequenceIds } }] },
-    }),
-    prisma.monitorCheck.findMany({ where: { monitorId: { in: ids.monitorIds } } }),
-    prisma.webhookDelivery.findMany({ where: { webhookId: { in: ids.webhookIds } } }),
-    prisma.automationEnrollment.findMany({ where: { automationId: { in: ids.automationIds } } }),
-  ]);
-
-  return {
-    exportedAt: new Date().toISOString(),
-    apiKeyId,
-    data: {
+    const [
       mailboxes, monitors, webhooks, automations, campaigns, sequences,
       sendMessages, verifications, bulkJobs, contacts, mailingLists,
       segments, sendingDomains, emailTemplates, leads, inboxTests,
       replyEvents, trackingEvents, monitorChecks, webhookDeliveries,
       automationEnrollments,
-    },
-  };
+    ] = await Promise.all([
+      tx.mailbox.findMany({ where: { apiKeyId } }),
+      prisma.monitor.findMany({ where: { apiKeyId } }),
+      prisma.webhook.findMany({ where: { apiKeyId } }),
+      prisma.automation.findMany({ where: { apiKeyId } }),
+      tx.campaign.findMany({ where: { apiKeyId } }),
+      tx.sequence.findMany({ where: { apiKeyId } }),
+      tx.sendMessage.findMany({ where: { apiKeyId } }),
+      prisma.verification.findMany({ where: { apiKeyId } }),
+      prisma.bulkJob.findMany({ where: { apiKeyId } }),
+      tx.contact.findMany({ where: { apiKeyId } }),
+      tx.mailingList.findMany({ where: { apiKeyId } }),
+      tx.segment.findMany({ where: { apiKeyId } }),
+      prisma.sendingDomain.findMany({ where: { apiKeyId } }),
+      prisma.emailTemplate.findMany({ where: { apiKeyId } }),
+      tx.lead.findMany({ where: { apiKeyId } }),
+      prisma.inboxTest.findMany({ where: { apiKeyId } }),
+      tx.replyEvent.findMany({ where: { mailboxId: { in: ids.mailboxIds } } }),
+      prisma.trackingEvent.findMany({
+        where: { OR: [{ sendMessageId: { in: ids.sendMessageIds } }, { campaignId: { in: ids.campaignIds } }, { sequenceId: { in: ids.sequenceIds } }] },
+      }),
+      prisma.monitorCheck.findMany({ where: { monitorId: { in: ids.monitorIds } } }),
+      prisma.webhookDelivery.findMany({ where: { webhookId: { in: ids.webhookIds } } }),
+      prisma.automationEnrollment.findMany({ where: { automationId: { in: ids.automationIds } } }),
+    ]);
+
+    return {
+      exportedAt: new Date().toISOString(),
+      apiKeyId,
+      data: {
+        mailboxes, monitors, webhooks, automations, campaigns, sequences,
+        sendMessages, verifications, bulkJobs, contacts, mailingLists,
+        segments, sendingDomains, emailTemplates, leads, inboxTests,
+        replyEvents, trackingEvents, monitorChecks, webhookDeliveries,
+        automationEnrollments,
+      },
+    };
+  });
 }
 
 export async function deleteAccountData(apiKeyId: string): Promise<Record<string, number>> {
-  const ids = await collectOwnedIds(apiKeyId);
+  return withTenant(apiKeyId, async (tx) => {
+    const ids = await collectOwnedIds(tx, apiKeyId);
 
-  // [label, deleteMany call] pairs, in the exact order they must run —
-  // children of a non-cascading apiKeyId-owned parent before that parent
-  // (see the module doc comment above for which relations force this).
-  // Labels stay paired with their call here so the result counts can never
-  // be zipped back to the wrong table by an out-of-sync separate list.
-  const steps: [string, ReturnType<typeof prisma.replyEvent.deleteMany>][] = [
-    ['replyEvents', prisma.replyEvent.deleteMany({ where: { mailboxId: { in: ids.mailboxIds } } })],
-    ['trackingEvents', prisma.trackingEvent.deleteMany({
-      where: { OR: [{ sendMessageId: { in: ids.sendMessageIds } }, { campaignId: { in: ids.campaignIds } }, { sequenceId: { in: ids.sequenceIds } }] },
-    })],
-    ['monitorChecks', prisma.monitorCheck.deleteMany({ where: { monitorId: { in: ids.monitorIds } } })],
-    ['webhookDeliveries', prisma.webhookDelivery.deleteMany({ where: { webhookId: { in: ids.webhookIds } } })],
-    ['sendMessages', prisma.sendMessage.deleteMany({ where: { apiKeyId } })],
-    ['verifications', prisma.verification.deleteMany({ where: { apiKeyId } })],
-    ['bulkJobs', prisma.bulkJob.deleteMany({ where: { apiKeyId } })],
-    ['automationEnrollments', prisma.automationEnrollment.deleteMany({ where: { automationId: { in: ids.automationIds } } })],
-    ['automations', prisma.automation.deleteMany({ where: { apiKeyId } })],
-    ['campaigns', prisma.campaign.deleteMany({ where: { apiKeyId } })],
-    ['sequences', prisma.sequence.deleteMany({ where: { apiKeyId } })],
-    ['mailboxes', prisma.mailbox.deleteMany({ where: { apiKeyId } })],
-    ['contacts', prisma.contact.deleteMany({ where: { apiKeyId } })],
-    ['mailingLists', prisma.mailingList.deleteMany({ where: { apiKeyId } })],
-    ['segments', prisma.segment.deleteMany({ where: { apiKeyId } })],
-    ['sendingDomains', prisma.sendingDomain.deleteMany({ where: { apiKeyId } })],
-    ['emailTemplates', prisma.emailTemplate.deleteMany({ where: { apiKeyId } })],
-    ['leads', prisma.lead.deleteMany({ where: { apiKeyId } })],
-    ['inboxTests', prisma.inboxTest.deleteMany({ where: { apiKeyId } })],
-    // Last among their own children — nothing else still points at these.
-    ['webhooks', prisma.webhook.deleteMany({ where: { apiKeyId } })],
-    ['monitors', prisma.monitor.deleteMany({ where: { apiKeyId } })],
-  ];
+    // [label, thunk] pairs, in the exact order they must run — children of
+    // a non-cascading apiKeyId-owned parent before that parent (see the
+    // module doc comment above for which relations force this). Run as
+    // sequential awaits on the same `tx` (already one atomic transaction
+    // via withTenant) rather than prisma.$transaction(array) — Prisma
+    // doesn't support nesting a second transaction inside this one, and
+    // sequential awaits on one tx give the identical atomicity and
+    // ordering guarantee the original array form did. Labels stay paired
+        // with their call here so the result counts can never be zipped back
+    // to the wrong table by an out-of-sync separate list.
+    const steps: [string, () => ReturnType<PrismaTx['replyEvent']['deleteMany']>][] = [
+      ['replyEvents', () => tx.replyEvent.deleteMany({ where: { mailboxId: { in: ids.mailboxIds } } })],
+      ['trackingEvents', () => prisma.trackingEvent.deleteMany({
+        where: { OR: [{ sendMessageId: { in: ids.sendMessageIds } }, { campaignId: { in: ids.campaignIds } }, { sequenceId: { in: ids.sequenceIds } }] },
+      })],
+      ['monitorChecks', () => prisma.monitorCheck.deleteMany({ where: { monitorId: { in: ids.monitorIds } } })],
+      ['webhookDeliveries', () => prisma.webhookDelivery.deleteMany({ where: { webhookId: { in: ids.webhookIds } } })],
+      ['sendMessages', () => tx.sendMessage.deleteMany({ where: { apiKeyId } })],
+      ['verifications', () => prisma.verification.deleteMany({ where: { apiKeyId } })],
+      ['bulkJobs', () => prisma.bulkJob.deleteMany({ where: { apiKeyId } })],
+      ['automationEnrollments', () => prisma.automationEnrollment.deleteMany({ where: { automationId: { in: ids.automationIds } } })],
+      ['automations', () => prisma.automation.deleteMany({ where: { apiKeyId } })],
+      ['campaigns', () => tx.campaign.deleteMany({ where: { apiKeyId } })],
+      ['sequences', () => tx.sequence.deleteMany({ where: { apiKeyId } })],
+      ['mailboxes', () => tx.mailbox.deleteMany({ where: { apiKeyId } })],
+      ['contacts', () => tx.contact.deleteMany({ where: { apiKeyId } })],
+      ['mailingLists', () => tx.mailingList.deleteMany({ where: { apiKeyId } })],
+      ['segments', () => tx.segment.deleteMany({ where: { apiKeyId } })],
+      ['sendingDomains', () => prisma.sendingDomain.deleteMany({ where: { apiKeyId } })],
+      ['emailTemplates', () => prisma.emailTemplate.deleteMany({ where: { apiKeyId } })],
+      ['leads', () => tx.lead.deleteMany({ where: { apiKeyId } })],
+      ['inboxTests', () => prisma.inboxTest.deleteMany({ where: { apiKeyId } })],
+      // Last among their own children — nothing else still points at these.
+      ['webhooks', () => prisma.webhook.deleteMany({ where: { apiKeyId } })],
+      ['monitors', () => prisma.monitor.deleteMany({ where: { apiKeyId } })],
+    ];
 
-  const results = await prisma.$transaction(steps.map(([, call]) => call));
+    const counts: Record<string, number> = {};
+    for (const [label, run] of steps) {
+      const result = await run();
+      counts[label] = result.count ?? 0;
+    }
 
-  const counts: Record<string, number> = {};
-  steps.forEach(([label], i) => { counts[label] = results[i]?.count ?? 0; });
-
-  logger.info({ apiKeyId, counts }, 'Account data deleted');
-  return counts;
+    logger.info({ apiKeyId, counts }, 'Account data deleted');
+    return counts;
+  });
 }

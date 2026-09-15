@@ -6,6 +6,7 @@ import { requireMonthlySendQuota, incrementSendUsageBy } from '../../plugins/usa
 import { sendViaSes, isSesConfigured, SesNotConfiguredError } from '../../lib/ses.js';
 import { prisma } from '../../lib/prisma.js';
 import { config } from '../../config.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { dispatchWebhook, buildEventId } from '../../lib/webhooks.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
@@ -64,7 +65,7 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
 
         try {
           // Suppression check
-          const suppressed = await prisma.suppression.findUnique({ where: { email: to } });
+          const suppressed = await withTenant(apiKeyId, (tx) => tx.suppression.findUnique({ where: { email: to } }));
           if (suppressed) {
             results.push({ id: '', status: 'suppressed', error: `${to} is suppressed (${suppressed.reason})` });
             continue;
@@ -72,10 +73,10 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
 
           // Idempotency
           if (msg.idempotency_key) {
-            const existing = await prisma.sendMessage.findUnique({
+            const existing = await withTenant(apiKeyId, (tx) => tx.sendMessage.findUnique({
               where: { idempotencyKey: msg.idempotency_key },
               select: { id: true, status: true },
-            });
+            }));
             if (existing) {
               results.push({ id: existing.id, status: existing.status });
               continue;
@@ -86,7 +87,7 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
           const listUnsubscribeHeader = `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`;
 
           // Pre-create DB record to get real ID for tracking tokens
-          const record = await prisma.sendMessage.create({
+          const record = await withTenant(apiKeyId, (tx) => tx.sendMessage.create({
             data: {
               apiKeyId, to, from, subject,
               replyTo: reply_to ?? null, sesMessageId: null, status: 'queued',
@@ -94,7 +95,7 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
               trackingToken: 'pending',
             },
             select: { id: true },
-          });
+          }));
 
           let htmlBody = html_body;
           if (htmlBody) {
@@ -110,10 +111,10 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
             listUnsubscribeHeader,
           });
 
-          await prisma.sendMessage.update({
+          await withTenant(apiKeyId, (tx) => tx.sendMessage.update({
             where: { id: record.id },
             data: { sesMessageId, status: 'sent', sentAt: new Date(), trackingToken: record.id },
-          });
+          }));
 
           successCount++;
           results.push({ id: record.id, status: 'sent' });

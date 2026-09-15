@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors, AppError } from '../../plugins/errorHandler.js';
 
 const accountSchema = z.object({
@@ -30,8 +30,8 @@ export async function accountsRoutes(fastify: FastifyInstance): Promise<void> {
     if (q.search) where['name'] = { contains: q.search, mode: 'insensitive' };
     if (q.industry) where['industry'] = q.industry;
 
-    const [items, total] = await Promise.all([
-      prisma.account.findMany({
+    const [items, total] = await withTenant(apiKeyId, (tx) => Promise.all([
+      tx.account.findMany({
         where: where as never,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
@@ -40,8 +40,8 @@ export async function accountsRoutes(fastify: FastifyInstance): Promise<void> {
           _count: { select: { leads: true } },
         },
       }),
-      prisma.account.count({ where: where as never }),
-    ]);
+      tx.account.count({ where: where as never }),
+    ]));
 
     return reply.status(200).send({ data: items, total, page, limit });
   });
@@ -51,7 +51,7 @@ export async function accountsRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const account = await prisma.account.findFirst({
+    const account = await withTenant(apiKeyId, (tx) => tx.account.findFirst({
       where: { id, apiKeyId },
       include: {
         leads: {
@@ -61,7 +61,7 @@ export async function accountsRoutes(fastify: FastifyInstance): Promise<void> {
         },
         _count: { select: { leads: true } },
       },
-    });
+    }));
     if (!account) throw Errors.notFound('Account not found.');
 
     return reply.status(200).send(account);
@@ -75,13 +75,15 @@ export async function accountsRoutes(fastify: FastifyInstance): Promise<void> {
 
     const { name, domain, industry, employees, revenue, website, linkedin, city, country, notes } = parsed.data;
 
-    if (domain) {
-      const existing = await prisma.account.findFirst({ where: { apiKeyId, domain } });
-      if (existing) throw new AppError(409, 'CONFLICT', `An account with domain "${domain}" already exists.`);
-    }
+    const account = await withTenant(apiKeyId, async (tx) => {
+      if (domain) {
+        const existing = await tx.account.findFirst({ where: { apiKeyId, domain } });
+        if (existing) throw new AppError(409, 'CONFLICT', `An account with domain "${domain}" already exists.`);
+      }
 
-    const account = await prisma.account.create({
-      data: { apiKeyId, name, domain: domain || null, industry: industry || null, employees: employees || null, revenue: revenue || null, website: website || null, linkedin: linkedin || null, city: city || null, country: country || null, notes: notes || null },
+      return tx.account.create({
+        data: { apiKeyId, name, domain: domain || null, industry: industry || null, employees: employees || null, revenue: revenue || null, website: website || null, linkedin: linkedin || null, city: city || null, country: country || null, notes: notes || null },
+      });
     });
 
     return reply.status(201).send(account);
@@ -92,16 +94,19 @@ export async function accountsRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const account = await prisma.account.findFirst({ where: { id, apiKeyId } });
-    if (!account) throw Errors.notFound('Account not found.');
-
     const parsed = accountSchema.partial().safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues[0]?.message ?? 'Validation failed.');
 
     const updateData = Object.fromEntries(
       Object.entries(parsed.data).filter(([, v]) => v !== undefined)
     );
-    const updated = await prisma.account.update({ where: { id }, data: updateData as never });
+
+    const updated = await withTenant(apiKeyId, async (tx) => {
+      const account = await tx.account.findFirst({ where: { id, apiKeyId } });
+      if (!account) throw Errors.notFound('Account not found.');
+
+      return tx.account.update({ where: { id }, data: updateData as never });
+    });
     return reply.status(200).send(updated);
   });
 
@@ -110,12 +115,14 @@ export async function accountsRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const account = await prisma.account.findFirst({ where: { id, apiKeyId } });
-    if (!account) throw Errors.notFound('Account not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const account = await tx.account.findFirst({ where: { id, apiKeyId } });
+      if (!account) throw Errors.notFound('Account not found.');
 
-    // Unlink leads before deleting
-    await prisma.lead.updateMany({ where: { accountId: id }, data: { accountId: null } });
-    await prisma.account.delete({ where: { id } });
+      // Unlink leads before deleting
+      await tx.lead.updateMany({ where: { accountId: id }, data: { accountId: null } });
+      await tx.account.delete({ where: { id } });
+    });
 
     return reply.status(200).send({ deleted: true, id });
   });
@@ -126,21 +133,23 @@ export async function accountsRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const body = request.body as { lead_ids?: string[]; emails?: string[] };
 
-    const account = await prisma.account.findFirst({ where: { id, apiKeyId } });
-    if (!account) throw Errors.notFound('Account not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const account = await tx.account.findFirst({ where: { id, apiKeyId } });
+      if (!account) throw Errors.notFound('Account not found.');
 
-    if (body.lead_ids?.length) {
-      await prisma.lead.updateMany({
-        where: { id: { in: body.lead_ids }, apiKeyId },
-        data: { accountId: id },
-      });
-    }
-    if (body.emails?.length) {
-      await prisma.lead.updateMany({
-        where: { email: { in: body.emails.map(e => e.toLowerCase()) }, apiKeyId },
-        data: { accountId: id },
-      });
-    }
+      if (body.lead_ids?.length) {
+        await tx.lead.updateMany({
+          where: { id: { in: body.lead_ids }, apiKeyId },
+          data: { accountId: id },
+        });
+      }
+      if (body.emails?.length) {
+        await tx.lead.updateMany({
+          where: { email: { in: body.emails.map(e => e.toLowerCase()) }, apiKeyId },
+          data: { accountId: id },
+        });
+      }
+    });
 
     return reply.status(200).send({ linked: true, accountId: id });
   });
@@ -149,18 +158,22 @@ export async function accountsRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/accounts/auto-match', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const apiKeyId = request.apiKey.id;
 
-    const accounts = await prisma.account.findMany({ where: { apiKeyId, domain: { not: null } }, select: { id: true, domain: true } });
-    let matched = 0;
+    const matched = await withTenant(apiKeyId, async (tx) => {
+      const accounts = await tx.account.findMany({ where: { apiKeyId, domain: { not: null } }, select: { id: true, domain: true } });
+      let matched = 0;
 
-    for (const acct of accounts) {
-      if (!acct.domain) continue;
-      const domain = acct.domain.replace(/^www\./, '').toLowerCase();
-      const result = await prisma.lead.updateMany({
-        where: { apiKeyId, accountId: null, email: { endsWith: `@${domain}` } },
-        data: { accountId: acct.id },
-      });
-      matched += result.count;
-    }
+      for (const acct of accounts) {
+        if (!acct.domain) continue;
+        const domain = acct.domain.replace(/^www\./, '').toLowerCase();
+        const result = await tx.lead.updateMany({
+          where: { apiKeyId, accountId: null, email: { endsWith: `@${domain}` } },
+          data: { accountId: acct.id },
+        });
+        matched += result.count;
+      }
+
+      return matched;
+    });
 
     return reply.status(200).send({ matched });
   });

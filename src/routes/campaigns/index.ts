@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors, AppError } from '../../plugins/errorHandler.js';
 import { campaignQueue } from '../../lib/queue.js';
 import { sendViaSes, isSesConfigured } from '../../lib/ses.js';
@@ -49,7 +50,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at, send_rate_per_hour, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
 
-    const campaign = await prisma.campaign.create({
+    const campaign = await withTenant(apiKeyId, (tx) => tx.campaign.create({
       data: {
         apiKeyId, name, fromName: from_name, fromEmail: from_email,
         domainId: domain_id ?? null, replyTo: reply_to ?? null,
@@ -66,7 +67,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
         status: 'draft',
       },
       select: { id: true, name: true, subject: true, status: true, createdAt: true },
-    });
+    }));
     return reply.status(201).send(campaign);
   });
 
@@ -77,15 +78,15 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const page = Math.max(1, parseInt(q.page ?? '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '20', 10)));
 
-    const [items, total] = await Promise.all([
-      prisma.campaign.findMany({
+    const [items, total] = await withTenant(apiKeyId, (tx) => Promise.all([
+      tx.campaign.findMany({
         where: { apiKeyId, ...(q.status ? { status: q.status } : {}) },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit, take: limit,
         select: { id: true, name: true, subject: true, subjectB: true, fromName: true, fromEmail: true, status: true, totalRecipients: true, sentCount: true, openCount: true, clickCount: true, openCountB: true, clickCountB: true, bounceCount: true, complaintCount: true, trackOpens: true, trackClicks: true, createdAt: true, scheduledAt: true, sentAt: true },
       }),
-      prisma.campaign.count({ where: { apiKeyId, ...(q.status ? { status: q.status } : {}) } }),
-    ]);
+      tx.campaign.count({ where: { apiKeyId, ...(q.status ? { status: q.status } : {}) } }),
+    ]));
     return reply.status(200).send({ data: items, total, page, limit });
   });
 
@@ -93,8 +94,11 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/campaigns/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
+    const campaign = await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({ where: { id, apiKeyId } });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+      return campaign;
+    });
     return reply.status(200).send(campaign);
   });
 
@@ -102,36 +106,39 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.patch('/campaigns/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
-    if (campaign.status !== 'draft') throw Errors.forbidden('Only draft campaigns can be edited.');
 
-    const parsed = createSchema.partial().safeParse(request.body);
-    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+    const updated = await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({ where: { id, apiKeyId } });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+      if (campaign.status !== 'draft') throw Errors.forbidden('Only draft campaigns can be edited.');
 
-    const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at, send_rate_per_hour, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
+      const parsed = createSchema.partial().safeParse(request.body);
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const updated = await prisma.campaign.update({
-      where: { id },
-      data: {
-        ...(name && { name }), ...(from_name && { fromName: from_name }),
-        ...(from_email && { fromEmail: from_email }), ...(domain_id !== undefined && { domainId: domain_id }),
-        ...(reply_to !== undefined && { replyTo: reply_to }), ...(subject && { subject }),
-        ...(html_body && { htmlBody: html_body }), ...(text_body !== undefined && { textBody: text_body }),
-        ...(preheader !== undefined && { preheader: preheader ?? null }),
-        ...(subject_b !== undefined && { subjectB: subject_b ?? null }),
-        ...(list_ids && { listIds: list_ids }), ...(segment_ids && { segmentIds: segment_ids }),
-        ...(exclude_list_ids && { excludeListIds: exclude_list_ids }),
-        ...(track_opens !== undefined && { trackOpens: track_opens }),
-        ...(track_clicks !== undefined && { trackClicks: track_clicks }),
-        ...(scheduled_at !== undefined && { scheduledAt: scheduled_at ? new Date(scheduled_at) : null }),
-        ...(send_rate_per_hour !== undefined && { sendRatePerHour: send_rate_per_hour ?? null }),
-        ...(send_days !== undefined && { sendDays: send_days }),
-        ...(send_start_hour !== undefined && { sendStartHour: send_start_hour }),
-        ...(send_end_hour !== undefined && { sendEndHour: send_end_hour }),
-        ...(timezone !== undefined && { timezone }),
-      },
-      select: { id: true, status: true, updatedAt: true },
+      const { name, from_name, from_email, domain_id, reply_to, subject, html_body, text_body, preheader, subject_b, list_ids, segment_ids, exclude_list_ids, track_opens, track_clicks, scheduled_at, send_rate_per_hour, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
+
+      return tx.campaign.update({
+        where: { id },
+        data: {
+          ...(name && { name }), ...(from_name && { fromName: from_name }),
+          ...(from_email && { fromEmail: from_email }), ...(domain_id !== undefined && { domainId: domain_id }),
+          ...(reply_to !== undefined && { replyTo: reply_to }), ...(subject && { subject }),
+          ...(html_body && { htmlBody: html_body }), ...(text_body !== undefined && { textBody: text_body }),
+          ...(preheader !== undefined && { preheader: preheader ?? null }),
+          ...(subject_b !== undefined && { subjectB: subject_b ?? null }),
+          ...(list_ids && { listIds: list_ids }), ...(segment_ids && { segmentIds: segment_ids }),
+          ...(exclude_list_ids && { excludeListIds: exclude_list_ids }),
+          ...(track_opens !== undefined && { trackOpens: track_opens }),
+          ...(track_clicks !== undefined && { trackClicks: track_clicks }),
+          ...(scheduled_at !== undefined && { scheduledAt: scheduled_at ? new Date(scheduled_at) : null }),
+          ...(send_rate_per_hour !== undefined && { sendRatePerHour: send_rate_per_hour ?? null }),
+          ...(send_days !== undefined && { sendDays: send_days }),
+          ...(send_start_hour !== undefined && { sendStartHour: send_start_hour }),
+          ...(send_end_hour !== undefined && { sendEndHour: send_end_hour }),
+          ...(timezone !== undefined && { timezone }),
+        },
+        select: { id: true, status: true, updatedAt: true },
+      });
     });
     return reply.status(200).send(updated);
   });
@@ -140,10 +147,12 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.delete('/campaigns/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
-    if (!['draft', 'cancelled'].includes(campaign.status)) throw Errors.forbidden('Only draft/cancelled campaigns can be deleted.');
-    await prisma.campaign.delete({ where: { id } });
+    await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({ where: { id, apiKeyId } });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+      if (!['draft', 'cancelled'].includes(campaign.status)) throw Errors.forbidden('Only draft/cancelled campaigns can be deleted.');
+      await tx.campaign.delete({ where: { id } });
+    });
     return reply.status(200).send({ deleted: true, id });
   });
 
@@ -151,30 +160,38 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/campaigns/:id/send', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
-    if (!['draft', 'scheduled'].includes(campaign.status)) throw Errors.forbidden('Campaign cannot be sent in its current state.');
 
-    const delay = campaign.scheduledAt ? Math.max(0, campaign.scheduledAt.getTime() - Date.now()) : 0;
+    const status = await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({ where: { id, apiKeyId } });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+      if (!['draft', 'scheduled'].includes(campaign.status)) throw Errors.forbidden('Campaign cannot be sent in its current state.');
 
-    await prisma.campaign.update({ where: { id }, data: { status: delay > 0 ? 'scheduled' : 'sending' } });
-    await campaignQueue.add('send-campaign', { campaignId: id, apiKeyId }, { delay, jobId: `campaign-${id}` });
+      const delay = campaign.scheduledAt ? Math.max(0, campaign.scheduledAt.getTime() - Date.now()) : 0;
+      const status = delay > 0 ? ('scheduled' as const) : ('sending' as const);
+      await tx.campaign.update({ where: { id }, data: { status } });
+      await campaignQueue.add('send-campaign', { campaignId: id, apiKeyId }, { delay, jobId: `campaign-${id}` });
+      return status;
+    });
 
-    return reply.status(200).send({ started: true, id, status: delay > 0 ? 'scheduled' : 'sending' });
+    return reply.status(200).send({ started: true, id, status });
   });
 
   // POST /v1/campaigns/:id/cancel
   fastify.post('/campaigns/:id/cancel', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
-    if (!['scheduled', 'sending'].includes(campaign.status)) throw Errors.forbidden('Only scheduled or sending campaigns can be cancelled.');
 
-    const job = await campaignQueue.getJob(`campaign-${id}`);
-    if (job) await job.remove().catch(() => { /* already running */ });
+    await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({ where: { id, apiKeyId } });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+      if (!['scheduled', 'sending'].includes(campaign.status)) throw Errors.forbidden('Only scheduled or sending campaigns can be cancelled.');
 
-    await prisma.campaign.update({ where: { id }, data: { status: 'cancelled' } });
+      const job = await campaignQueue.getJob(`campaign-${id}`);
+      if (job) await job.remove().catch(() => { /* already running */ });
+
+      await tx.campaign.update({ where: { id }, data: { status: 'cancelled' } });
+    });
+
     return reply.status(200).send({ cancelled: true, id });
   });
 
@@ -189,17 +206,21 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/campaigns/:id/resume', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
-    if (!['paused_bounce', 'paused_quota'].includes(campaign.status)) {
-      throw Errors.forbidden('Only a paused campaign can be resumed via this endpoint.');
-    }
 
-    // Count how many recipients are still pending (not yet sent)
-    const pendingCount = await prisma.campaignRecipient.count({ where: { campaignId: id, status: 'pending' } });
+    const pendingCount = await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({ where: { id, apiKeyId } });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+      if (!['paused_bounce', 'paused_quota'].includes(campaign.status)) {
+        throw Errors.forbidden('Only a paused campaign can be resumed via this endpoint.');
+      }
 
-    await prisma.campaign.update({ where: { id }, data: { status: 'sending' } });
-    await campaignQueue.add('send-campaign', { campaignId: id, apiKeyId }, { jobId: `campaign-${id}-resume-${Date.now()}` });
+      // Count how many recipients are still pending (not yet sent)
+      const pendingCount = await tx.campaignRecipient.count({ where: { campaignId: id, status: 'pending' } });
+
+      await tx.campaign.update({ where: { id }, data: { status: 'sending' } });
+      await campaignQueue.add('send-campaign', { campaignId: id, apiKeyId }, { jobId: `campaign-${id}-resume-${Date.now()}` });
+      return pendingCount;
+    });
 
     return reply.status(200).send({ resumed: true, id, pending_recipients: pendingCount });
   });
@@ -214,17 +235,19 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const winner = body?.variant;
     if (winner !== 'a' && winner !== 'b') throw Errors.validationFailed({ variant: 'must be "a" or "b"' });
 
-    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
-    if (!campaign.subjectB) throw Errors.forbidden('This campaign has no A/B test configured.');
-    if (!['sending', 'paused_bounce', 'paused_quota'].includes(campaign.status)) {
-      throw Errors.forbidden('Winner can only be picked for campaigns that are currently sending or paused.');
-    }
+    const updated = await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({ where: { id, apiKeyId } });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+      if (!campaign.subjectB) throw Errors.forbidden('This campaign has no A/B test configured.');
+      if (!['sending', 'paused_bounce', 'paused_quota'].includes(campaign.status)) {
+        throw Errors.forbidden('Winner can only be picked for campaigns that are currently sending or paused.');
+      }
 
-    const loser = winner === 'a' ? 'b' : 'a';
-    const updated = await prisma.campaignRecipient.updateMany({
-      where: { campaignId: id, status: 'pending', variant: loser },
-      data: { variant: winner },
+      const loser = winner === 'a' ? 'b' : 'a';
+      return tx.campaignRecipient.updateMany({
+        where: { campaignId: id, status: 'pending', variant: loser },
+        data: { variant: winner },
+      });
     });
 
     return reply.status(200).send({ winner, updated_recipients: updated.count, id });
@@ -234,20 +257,23 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/campaigns/:id/duplicate', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
 
-    const copy = await prisma.campaign.create({
-      data: {
-        apiKeyId, name: `${campaign.name} (Copy)`,
-        fromName: campaign.fromName, fromEmail: campaign.fromEmail,
-        domainId: campaign.domainId, replyTo: campaign.replyTo,
-        subject: campaign.subject, htmlBody: campaign.htmlBody, textBody: campaign.textBody,
-        listIds: campaign.listIds, segmentIds: campaign.segmentIds, excludeListIds: campaign.excludeListIds,
-        trackOpens: campaign.trackOpens, trackClicks: campaign.trackClicks,
-        status: 'draft',
-      },
-      select: { id: true, status: true, createdAt: true },
+    const copy = await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({ where: { id, apiKeyId } });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+
+      return tx.campaign.create({
+        data: {
+          apiKeyId, name: `${campaign.name} (Copy)`,
+          fromName: campaign.fromName, fromEmail: campaign.fromEmail,
+          domainId: campaign.domainId, replyTo: campaign.replyTo,
+          subject: campaign.subject, htmlBody: campaign.htmlBody, textBody: campaign.textBody,
+          listIds: campaign.listIds, segmentIds: campaign.segmentIds, excludeListIds: campaign.excludeListIds,
+          trackOpens: campaign.trackOpens, trackClicks: campaign.trackClicks,
+          status: 'draft',
+        },
+        select: { id: true, status: true, createdAt: true },
+      });
     });
     return reply.status(201).send(copy);
   });
@@ -260,33 +286,40 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
     const { to } = parsed.data;
 
-    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
-    if (!isSesConfigured()) throw Errors.serviceUnavailable('Email sending (SES not configured)');
+    const subject = await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({ where: { id, apiKeyId } });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+      if (!isSesConfigured()) throw Errors.serviceUnavailable('Email sending (SES not configured)');
 
-    const unsubToken = generateUnsubToken(to, apiKeyId);
-    let html = campaign.htmlBody + generateUnsubHtml(unsubToken);
-    const fakeMessageId = `test_${id}_${Date.now()}`;
-    html = injectTracking(html, generateOpenToken(fakeMessageId), (url) => generateClickToken(fakeMessageId, url), null);
+      const unsubToken = generateUnsubToken(to, apiKeyId);
+      let html = campaign.htmlBody + generateUnsubHtml(unsubToken);
+      const fakeMessageId = `test_${id}_${Date.now()}`;
+      html = injectTracking(html, generateOpenToken(fakeMessageId), (url) => generateClickToken(fakeMessageId, url), null);
 
-    await sendViaSes({
-      to,
-      from: `${campaign.fromName} <${campaign.fromEmail}>`,
-      subject: `[TEST] ${campaign.subject}`,
-      htmlBody: html,
-      ...(campaign.textBody ? { textBody: campaign.textBody } : {}),
-      listUnsubscribeHeader: `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`,
+      await sendViaSes({
+        to,
+        from: `${campaign.fromName} <${campaign.fromEmail}>`,
+        subject: `[TEST] ${campaign.subject}`,
+        htmlBody: html,
+        ...(campaign.textBody ? { textBody: campaign.textBody } : {}),
+        listUnsubscribeHeader: `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`,
+      });
+
+      return `[TEST] ${campaign.subject}`;
     });
 
-    return reply.status(200).send({ sent: true, to, subject: `[TEST] ${campaign.subject}` });
+    return reply.status(200).send({ sent: true, to, subject });
   });
 
   // POST /v1/campaigns/:id/spam-check — analyze HTML body for spam triggers before send
   fastify.post('/campaigns/:id/spam-check', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
+    const campaign = await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({ where: { id, apiKeyId } });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+      return campaign;
+    });
 
     const html = campaign.htmlBody;
     const subject = campaign.subject;
@@ -332,15 +365,18 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const campaign = await prisma.campaign.findFirst({
-      where: { id, apiKeyId },
-      select: {
-        id: true, name: true, status: true, totalRecipients: true,
-        sentCount: true, deliveredCount: true, openCount: true, clickCount: true,
-        bounceCount: true, complaintCount: true, sentAt: true,
-      },
+    const campaign = await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({
+        where: { id, apiKeyId },
+        select: {
+          id: true, name: true, status: true, totalRecipients: true,
+          sentCount: true, deliveredCount: true, openCount: true, clickCount: true,
+          bounceCount: true, complaintCount: true, sentAt: true,
+        },
+      });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+      return campaign;
     });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
 
     const sent = campaign.sentCount || 1; // avoid div-by-zero
     const bounceRate = campaign.bounceCount / sent;
@@ -405,28 +441,32 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = overrideSchema.safeParse(request.body ?? {});
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const original = await prisma.campaign.findFirst({ where: { id, apiKeyId } });
-    if (!original) throw Errors.notFound('Campaign not found.');
-    if (original.status !== 'sent') throw Errors.forbidden('Can only retarget campaigns that have been sent.');
+    const { original, allRecipients, nonOpeners } = await withTenant(apiKeyId, async (tx) => {
+      const original = await tx.campaign.findFirst({ where: { id, apiKeyId } });
+      if (!original) throw Errors.notFound('Campaign not found.');
+      if (original.status !== 'sent') throw Errors.forbidden('Can only retarget campaigns that have been sent.');
 
-    // Find all recipients of the original campaign who did NOT open
-    const allRecipients = await prisma.campaignRecipient.findMany({
-      where: { campaignId: id, status: 'sent' },
-      select: { email: true },
-    });
+      // Find all recipients of the original campaign who did NOT open
+      const allRecipients = await tx.campaignRecipient.findMany({
+        where: { campaignId: id, status: 'sent' },
+        select: { email: true },
+      });
 
-    // Collect emails that had at least one genuinely-human open event on
-    // this campaign. isLikelyBot:false matters a lot here specifically —
-    // without it, an MPP-prefetched "open" would wrongly exclude a
-    // recipient who never actually saw the email from the retarget send,
-    // which is the exact opposite of what retargeting is for.
-    const openers = await prisma.trackingEvent.findMany({
-      where: { campaignId: id, type: 'open', isLikelyBot: false },
-      select: { email: true },
-      distinct: ['email'],
+      // Collect emails that had at least one genuinely-human open event on
+      // this campaign. isLikelyBot:false matters a lot here specifically —
+      // without it, an MPP-prefetched "open" would wrongly exclude a
+      // recipient who never actually saw the email from the retarget send,
+      // which is the exact opposite of what retargeting is for.
+      const openers = await prisma.trackingEvent.findMany({
+        where: { campaignId: id, type: 'open', isLikelyBot: false },
+        select: { email: true },
+        distinct: ['email'],
+      });
+      const openerSet = new Set(openers.map(e => e.email));
+      const nonOpeners = allRecipients.filter(r => !openerSet.has(r.email)).map(r => r.email);
+
+      return { original, allRecipients, nonOpeners };
     });
-    const openerSet = new Set(openers.map(e => e.email));
-    const nonOpeners = allRecipients.filter(r => !openerSet.has(r.email)).map(r => r.email);
 
     if (nonOpeners.length === 0) {
       return reply.status(200).send({
@@ -441,7 +481,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     // emails as a special excludedEmails JSON field so the worker can skip them.
     // This avoids mutating the suppression table (openers of one campaign are
     // not globally suppressed — they just shouldn't get the retarget campaign).
-    const retarget = await prisma.campaign.create({
+    const retarget = await withTenant(apiKeyId, (tx) => tx.campaign.create({
       data: {
         apiKeyId,
         name: `${original.name} — Retarget (non-openers)`,
@@ -460,7 +500,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
         retargetOfId: id,
       },
       select: { id: true, name: true, status: true, createdAt: true },
-    });
+    }));
 
     return reply.status(201).send({
       campaign_id:  retarget.id,
@@ -481,9 +521,6 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const q = request.query as { page?: string; limit?: string; status?: string; search?: string };
 
-    const campaign = await prisma.campaign.findFirst({ where: { id, apiKeyId }, select: { id: true } });
-    if (!campaign) throw Errors.notFound('Campaign not found.');
-
     const page = Math.max(1, parseInt(q.page ?? '1', 10));
     const limit = Math.min(200, Math.max(1, parseInt(q.limit ?? '50', 10)));
     const skip = (page - 1) * limit;
@@ -494,20 +531,25 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
       ...(q.search ? { email: { contains: q.search, mode: 'insensitive' as const } } : {}),
     };
 
-    const [total, rows] = await Promise.all([
-      prisma.campaignRecipient.count({ where }),
-      prisma.campaignRecipient.findMany({
-        where,
-        select: {
-          id: true, email: true, status: true, variant: true,
-          sesMessageId: true, sentAt: true, deliveredAt: true,
-          openedAt: true, clickedAt: true,
-        },
-        orderBy: { sentAt: 'desc' },
-        skip,
-        take: limit,
-      }),
-    ]);
+    const [total, rows] = await withTenant(apiKeyId, async (tx) => {
+      const campaign = await tx.campaign.findFirst({ where: { id, apiKeyId }, select: { id: true } });
+      if (!campaign) throw Errors.notFound('Campaign not found.');
+
+      return Promise.all([
+        tx.campaignRecipient.count({ where }),
+        tx.campaignRecipient.findMany({
+          where,
+          select: {
+            id: true, email: true, status: true, variant: true,
+            sesMessageId: true, sentAt: true, deliveredAt: true,
+            openedAt: true, clickedAt: true,
+          },
+          orderBy: { sentAt: 'desc' },
+          skip,
+          take: limit,
+        }),
+      ]);
+    });
 
     return reply.status(200).send({
       total,
@@ -560,9 +602,12 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
     const { about, sender, tone, list_ids, max_segments } = parsed.data;
     const apiKeyId = request.apiKey.id;
 
-    const lists = await prisma.mailingList.findMany({ where: { id: { in: list_ids }, apiKeyId }, select: { id: true } });
+    const lists = await withTenant(apiKeyId, (tx) => tx.mailingList.findMany({ where: { id: { in: list_ids }, apiKeyId }, select: { id: true } }));
     if (lists.length === 0) throw Errors.notFound('No matching lists found for this account.');
 
+    // deriveListSegments (campaignSegments.ts) opens its own withTenant
+    // transaction internally — this call is sequential with (not nested
+    // inside) the withTenant above, so there's no nested-transaction issue.
     const { totalContacts, segments } = await deriveListSegments(apiKeyId, list_ids, max_segments);
     if (totalContacts === 0) throw Errors.validationFailed([{ field: 'list_ids', message: 'These lists have no subscribed contacts to generate copy for.' }]);
 

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
 const addSchema = z.object({
@@ -33,21 +34,31 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const page = Math.max(1, parseInt(q.page ?? '1', 10));
       const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
+      const apiKeyId = request.apiKey.id;
       const where = {
         ...(q.reason ? { reason: q.reason as never } : {}),
-        OR: [{ apiKeyId: request.apiKey.id }, { apiKeyId: null }],
+        OR: [{ apiKeyId }, { apiKeyId: null }],
       };
 
-      const [items, total] = await Promise.all([
-        prisma.suppression.findMany({
+      // TODO(RLS): this deliberately shows the caller's own entries PLUS
+      // unattributed (apiKeyId: null) ones, but never another named
+      // tenant's — using withTenant here is the conservative choice (it
+      // can never leak another tenant's rows), but if the Suppression RLS
+      // policy scopes SELECT to `apiKeyId = current tenant` only (and not
+      // `OR apiKeyId IS NULL`), the unattributed rows this endpoint used to
+      // return will silently disappear from the result. Verify the actual
+      // policy text once the migration lands, and widen Suppression's
+      // policy (or add a narrower bypass+filter) if so.
+      const [items, total] = await withTenant(apiKeyId, (tx) => Promise.all([
+        tx.suppression.findMany({
           where,
           orderBy: { createdAt: 'desc' },
           skip: (page - 1) * limit,
           take: limit,
           select: { id: true, email: true, reason: true, createdAt: true },
         }),
-        prisma.suppression.count({ where }),
-      ]);
+        tx.suppression.count({ where }),
+      ]));
 
       return reply.status(200).send({ data: items, total, page, limit });
     },
@@ -61,13 +72,16 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const apiKeyId = request.apiKey.id;
       const where = { OR: [{ apiKeyId }, { apiKeyId: null }] };
 
-      const groups = await prisma.suppression.groupBy({
-        by: ['reason'],
-        where,
-        _count: { reason: true },
-      });
-
-      const total = await prisma.suppression.count({ where });
+      // TODO(RLS): see the note on GET /suppressions above — same
+      // own-plus-unattributed scope, same caveat about the real policy.
+      const [groups, total] = await withTenant(apiKeyId, (tx) => Promise.all([
+        tx.suppression.groupBy({
+          by: ['reason'],
+          where,
+          _count: { reason: true },
+        }),
+        tx.suppression.count({ where }),
+      ]));
       const byReason: Record<string, number> = {};
       for (const g of groups) {
         byReason[g.reason] = g._count.reason;
@@ -93,14 +107,17 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const batchSize = 1000;
       let csv = 'email,reason,added_at\n';
 
+      // Wrapped per-batch (not once for the whole loop) so a long CSV export
+      // doesn't hold a single transaction open for its entire duration —
+      // same query-per-iteration shape the original code had.
       while (true) {
-        const batch = await prisma.suppression.findMany({
+        const batch = await withTenant(apiKeyId, (tx) => tx.suppression.findMany({
           where,
           orderBy: { createdAt: 'desc' },
           skip: offset,
           take: batchSize,
           select: { email: true, reason: true, createdAt: true },
-        });
+        }));
         if (batch.length === 0) break;
         for (const row of batch) {
           const email = row.email.includes(',') ? `"${row.email}"` : row.email;
@@ -128,18 +145,22 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const invalid = emails.length - normalized.length;
 
       // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
-      const existing = await prisma.suppression.findMany({
+      // withRlsBypass: must see whether ANY tenant already suppressed these
+      // addresses, not just this caller's own rows.
+      const existing = await withRlsBypass((tx) => tx.suppression.findMany({
         where: { email: { in: normalized } },
         select: { email: true },
-      });
+      }));
       const existingSet = new Set(existing.map(e => e.email));
       const newEmails = normalized.filter(e => !existingSet.has(e));
 
       if (newEmails.length > 0) {
-        await prisma.suppression.createMany({
+        // New rows are explicitly attributed to this tenant — a normal
+        // tenant-scoped write, unlike the global read above.
+        await withTenant(apiKeyId, (tx) => tx.suppression.createMany({
           data: newEmails.map(email => ({ email, reason: 'manual', apiKeyId })),
           skipDuplicates: true,
-        });
+        }));
       }
 
       return reply.status(200).send({
@@ -172,17 +193,20 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const { email } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
-      const existing = await prisma.suppression.findUnique({ where: { email } });
+      // withRlsBypass: "already suppressed by anyone" is a deliberately
+      // global check (see comment above) — must not miss another tenant's
+      // existing entry for this address.
+      const existing = await withRlsBypass((tx) => tx.suppression.findUnique({ where: { email } }));
       if (existing) {
         return reply.status(200).send({
           id: existing.id, email: existing.email, reason: existing.reason, createdAt: existing.createdAt,
         });
       }
 
-      const record = await prisma.suppression.create({
+      const record = await withTenant(apiKeyId, (tx) => tx.suppression.create({
         data: { email, reason: 'manual', apiKeyId },
         select: { id: true, email: true, reason: true, createdAt: true },
-      });
+      }));
 
       return reply.status(201).send(record);
     },
@@ -204,10 +228,12 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const decoded = decodeURIComponent(email).trim().toLowerCase();
       const apiKeyId = request.apiKey.id;
 
-      const existing = await prisma.suppression.findFirst({ where: { email: decoded, apiKeyId } });
-      if (!existing) throw Errors.notFound('Suppression entry not found.');
+      await withTenant(apiKeyId, async (tx) => {
+        const existing = await tx.suppression.findFirst({ where: { email: decoded, apiKeyId } });
+        if (!existing) throw Errors.notFound('Suppression entry not found.');
 
-      await prisma.suppression.delete({ where: { id: existing.id } });
+        await tx.suppression.delete({ where: { id: existing.id } });
+      });
       return reply.status(200).send({ deleted: true, email: decoded });
     },
   );

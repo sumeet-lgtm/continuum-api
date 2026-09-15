@@ -8,6 +8,7 @@ import { processTemplate } from '../lib/spintax.js';
 import { logger } from '../lib/logger.js';
 import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
 import { getSendLimit, incrementSendUsageBy } from '../plugins/usageMeter.js';
+import { withTenant, withRlsBypass } from '../lib/tenantContext.js';
 
 interface CampaignJobData {
   campaignId: string;
@@ -34,15 +35,15 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   const { campaignId, apiKeyId } = job.data;
 
   if (!isSendTransportConfigured()) {
-    await prisma.campaign.update({
+    await withTenant(apiKeyId, (tx) => tx.campaign.update({
       where: { id: campaignId },
       data: { status: 'failed', errorMessage: 'Email sending is not configured. Contact support.' },
-    });
+    }));
     logger.error({ campaignId }, 'Campaign aborted — no send transport configured');
     return;
   }
 
-  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+  const campaign = await withTenant(apiKeyId, (tx) => tx.campaign.findUnique({ where: { id: campaignId } }));
   if (!campaign || campaign.status === 'cancelled') return;
 
   // Fetched once per campaign, not per recipient — a campaign can enroll
@@ -59,7 +60,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     (campaign.excludedEmails as string[] | null) ?? []
   );
 
-  await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'sending' } });
+  await withTenant(apiKeyId, (tx) => tx.campaign.update({ where: { id: campaignId }, data: { status: 'sending' } }));
 
   // Resolve all recipient emails from list_ids
   const listIds = campaign.listIds as string[];
@@ -74,10 +75,10 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   // below wasn't joining through contact.apiKeyId either). Fail loudly
   // instead of resolving to an unbounded audience.
   if (listIds.length === 0 && segmentIds.length === 0) {
-    await prisma.campaign.update({
+    await withTenant(apiKeyId, (tx) => tx.campaign.update({
       where: { id: campaignId },
       data: { status: 'failed', errorMessage: 'No list_ids or segment_ids specified — refusing to send to an unbounded audience.' },
-    });
+    }));
     logger.error({ campaignId, apiKeyId }, 'Campaign aborted — no list_ids/segment_ids specified');
     return;
   }
@@ -85,7 +86,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   // Get all subscribed contacts from lists — always scoped to this
   // account's own contacts (contact.apiKeyId), even if a listId somehow
   // didn't belong to them, as defense in depth against cross-tenant leakage.
-  const memberships = await prisma.contactListMembership.findMany({
+  const memberships = await withTenant(apiKeyId, (tx) => tx.contactListMembership.findMany({
     where: {
       listId: { in: listIds },
       status: 'subscribed',
@@ -93,7 +94,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
       ...(excludeListIds.length > 0 ? { NOT: { listId: { in: excludeListIds } } } : {}),
     },
     include: { contact: { select: { email: true, firstName: true, lastName: true, customFields: true } } },
-  });
+  }));
 
   // Deduplicate by email
   const seen = new Set<string>();
@@ -107,34 +108,37 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
 
   // Resolve segment recipients and merge
   if (segmentIds.length > 0) {
-    const segments = await prisma.segment.findMany({
-      where: { id: { in: segmentIds }, apiKeyId },
-      select: { id: true, listId: true, filterRules: true },
-    });
-    for (const seg of segments) {
-      if (!seg.listId) continue;
-      const segMemberships = await prisma.contactListMembership.findMany({
-        where: { listId: seg.listId, status: 'subscribed', contact: { apiKeyId } },
-        include: { contact: { select: { email: true, firstName: true, lastName: true, customFields: true } } },
+    await withTenant(apiKeyId, async (tx) => {
+      const segments = await tx.segment.findMany({
+        where: { id: { in: segmentIds }, apiKeyId },
+        select: { id: true, listId: true, filterRules: true },
       });
-      const rules = seg.filterRules as Array<{ field: string; operator: string; value: string }>;
-      for (const m of segMemberships) {
-        if (seen.has(m.contact.email)) continue;
-        if (matchSegmentRules(m.contact, rules)) {
-          seen.add(m.contact.email);
-          recipients.push(m.contact);
+      for (const seg of segments) {
+        if (!seg.listId) continue;
+        const segMemberships = await tx.contactListMembership.findMany({
+          where: { listId: seg.listId, status: 'subscribed', contact: { apiKeyId } },
+          include: { contact: { select: { email: true, firstName: true, lastName: true, customFields: true } } },
+        });
+        const rules = seg.filterRules as Array<{ field: string; operator: string; value: string }>;
+        for (const m of segMemberships) {
+          if (seen.has(m.contact.email)) continue;
+          if (matchSegmentRules(m.contact, rules)) {
+            seen.add(m.contact.email);
+            recipients.push(m.contact);
+          }
         }
       }
-    }
+    });
   }
 
   // Remove suppressed emails — Suppression is a platform-wide, deliberately
   // unscoped list (see schema.prisma); every tenant's sends must skip it.
-  // tenant-sweep: see comment above
-  const suppressions = await prisma.suppression.findMany({
+  // withRlsBypass, not withTenant: this must see every tenant's
+  // suppressions, not just this campaign's own apiKeyId.
+  const suppressions = await withRlsBypass((tx) => tx.suppression.findMany({
     where: { email: { in: recipients.map(r => r.email) } },
     select: { email: true },
-  });
+  }));
   const suppressedSet = new Set(suppressions.map(s => s.email));
   const validRecipients = recipients.filter(r =>
     !suppressedSet.has(r.email) && !retargetExcludeSet.has(r.email)
@@ -149,17 +153,17 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   // loudly instead of silently reaching contacts outside this account,
   // the way the 2026-09-14 incident did.
   if (validRecipients.length > 0) {
-    const ownedCount = await prisma.contact.count({
+    const ownedCount = await withTenant(apiKeyId, (tx) => tx.contact.count({
       where: { apiKeyId, email: { in: validRecipients.map(r => r.email) } },
-    });
+    }));
     if (ownedCount !== validRecipients.length) {
-      await prisma.campaign.update({
+      await withTenant(apiKeyId, (tx) => tx.campaign.update({
         where: { id: campaignId },
         data: {
           status: 'failed',
           errorMessage: `Recipient isolation check failed: resolved ${validRecipients.length} recipients but only ${ownedCount} are owned by this account. Send aborted before anything went out.`,
         },
-      });
+      }));
       logger.error(
         { campaignId, apiKeyId, resolved: validRecipients.length, owned: ownedCount },
         'CRITICAL: campaign recipient isolation check failed — send aborted',
@@ -181,7 +185,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
   }
 
   // Create recipient rows
-  await prisma.campaignRecipient.createMany({
+  await withTenant(apiKeyId, (tx) => tx.campaignRecipient.createMany({
     data: validRecipients.map(r => ({
       campaignId,
       email: r.email,
@@ -189,9 +193,9 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
       variant: recipientVariants.get(r.email) ?? 'a',
     })),
     skipDuplicates: true,
-  });
+  }));
 
-  await prisma.campaign.update({ where: { id: campaignId }, data: { totalRecipients: validRecipients.length } });
+  await withTenant(apiKeyId, (tx) => tx.campaign.update({ where: { id: campaignId }, data: { totalRecipients: validRecipients.length } }));
 
   const fromAddress = `${campaign.fromName} <${campaign.fromEmail}>`;
   const CHUNK_SIZE = 50;
@@ -206,7 +210,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
 
   for (let i = 0; i < validRecipients.length; i += CHUNK_SIZE) {
     // Check if campaign was cancelled mid-flight or needs auto-pause for high bounce rate
-    const current = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { status: true, bounceCount: true, sentCount: true } });
+    const current = await withTenant(apiKeyId, (tx) => tx.campaign.findUnique({ where: { id: campaignId }, select: { status: true, bounceCount: true, sentCount: true } }));
     if (current?.status === 'cancelled') {
       logger.info({ campaignId }, 'Campaign cancelled mid-send');
       stoppedEarly = true;
@@ -216,7 +220,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     if (current && current.sentCount >= 50) {
       const liveBouncePct = current.bounceCount / current.sentCount;
       if (liveBouncePct > 0.05) {
-        await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'paused_bounce' } });
+        await withTenant(apiKeyId, (tx) => tx.campaign.update({ where: { id: campaignId }, data: { status: 'paused_bounce' } }));
         logger.warn({ campaignId, bouncePct: liveBouncePct }, 'Campaign auto-paused: bounce rate exceeded 5%');
         void dispatchWebhook({
           apiKeyId,
@@ -244,7 +248,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     const sendLimit = getSendLimit(apiKeyRow?.plan ?? null, apiKeyRow?.monthlySendLimit);
     const sendRemaining = Math.max(0, sendLimit - (apiKeyRow?.currentMonthSendUsage ?? 0));
     if (sendRemaining <= 0) {
-      await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'paused_quota' } });
+      await withTenant(apiKeyId, (tx) => tx.campaign.update({ where: { id: campaignId }, data: { status: 'paused_quota' } }));
       logger.warn({ campaignId, apiKeyId }, 'Campaign auto-paused: monthly send quota exhausted');
       void dispatchWebhook({
         apiKeyId,
@@ -265,17 +269,18 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     // later chunk just because they weren't suppressed yet when this
     // campaign began.
     if (i > 0) {
-      // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
-      const freshlySuppressed = await prisma.suppression.findMany({
+      // withRlsBypass, not withTenant: Suppression is deliberately global
+      // (see schema.prisma) — not scoped by apiKeyId.
+      const freshlySuppressed = await withRlsBypass((tx) => tx.suppression.findMany({
         where: { email: { in: chunk.map(r => r.email) } },
         select: { email: true },
-      });
+      }));
       if (freshlySuppressed.length > 0) {
         const freshSet = new Set(freshlySuppressed.map(s => s.email));
-        await prisma.campaignRecipient.updateMany({
+        await withTenant(apiKeyId, (tx) => tx.campaignRecipient.updateMany({
           where: { campaignId, email: { in: [...freshSet] } },
           data: { status: 'suppressed' },
-        }).catch(() => {});
+        })).catch(() => {});
         chunk = chunk.filter(r => !freshSet.has(r.email));
       }
     }
@@ -328,14 +333,14 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
         if (!sendResult.ok) throw new Error(sendResult.errorMessage);
         const { sesMessageId, smtp2goMessageId } = sendResult;
 
-        await prisma.campaignRecipient.updateMany({
+        await withTenant(apiKeyId, (tx) => tx.campaignRecipient.updateMany({
           where: { campaignId, email: recipient.email },
           // campaign_recipients has no smtp2goMessageId column — sesMessageId
           // stays null on an SMTP2GO-fallback send here (informational field
           // only). Real bounce/complaint correlation runs through the
           // SendMessage row below, which does carry both ids.
           data: { status: 'sent', sesMessageId, sentAt: new Date(), variant: recipientVariant },
-        });
+        }));
 
         // Also register this send as a SendMessage row — the bounce/
         // complaint webhooks (POST /v1/send/events for SES, POST
@@ -345,7 +350,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
         // suppression, no closed-loop verification correction, nothing —
         // the recipient stayed fully sendable in every future campaign and
         // sequence despite having just hard-bounced.
-        await prisma.sendMessage.create({
+        await withTenant(apiKeyId, (tx) => tx.sendMessage.create({
           data: {
             apiKeyId, to: recipient.email, from: fromAddress, subject,
             sesMessageId, smtp2goMessageId, status: 'sent', sentAt: new Date(),
@@ -355,22 +360,22 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
             // counts can never be incremented.
             trackingToken: trackingId,
           },
-        }).catch((err) => {
+        })).catch((err) => {
           logger.warn({ err, email: recipient.email, campaignId }, 'Failed to register campaign send for bounce tracking (non-fatal)');
         });
 
         sentCount++;
       } catch (err) {
         logger.error({ err, email: recipient.email, campaignId }, 'Campaign send to recipient failed');
-        await prisma.campaignRecipient.updateMany({
+        await withTenant(apiKeyId, (tx) => tx.campaignRecipient.updateMany({
           where: { campaignId, email: recipient.email },
           data: { status: 'failed' },
-        });
+        }));
       }
     }));
 
     // Update progress
-    await prisma.campaign.update({ where: { id: campaignId }, data: { sentCount } });
+    await withTenant(apiKeyId, (tx) => tx.campaign.update({ where: { id: campaignId }, data: { sentCount } }));
     void incrementSendUsageBy(apiKeyId, sentCount - sentBeforeChunk);
 
     // Inter-chunk delay: honour drip rate if set, else 100ms to stay under SES burst limit.
@@ -391,7 +396,7 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
           logger.info({ campaignId, timezone: campaign.timezone }, 'Campaign outside send window — waiting 15min');
           await new Promise(r => setTimeout(r, 15 * 60 * 1000));
           // Re-check cancellation
-          const recheck = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { status: true } });
+          const recheck = await withTenant(apiKeyId, (tx) => tx.campaign.findUnique({ where: { id: campaignId }, select: { status: true } }));
           if (recheck?.status === 'cancelled') {
             logger.info({ campaignId }, 'Campaign cancelled while waiting for send window');
             return;
@@ -406,11 +411,11 @@ export async function processCampaign(job: Job<CampaignJobData>): Promise<void> 
     return;
   }
 
-  const finalCampaign = await prisma.campaign.update({
+  const finalCampaign = await withTenant(apiKeyId, (tx) => tx.campaign.update({
     where: { id: campaignId },
     data: { status: 'sent', sentAt: new Date(), sentCount },
     select: { id: true, name: true, subject: true, fromEmail: true, totalRecipients: true, sentCount: true, sentAt: true },
-  });
+  }));
 
   void dispatchWebhook({
     apiKeyId,

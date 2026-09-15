@@ -12,6 +12,7 @@ import { prisma } from '../lib/prisma.js';
 import { sendEmail } from '../lib/email.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { withTenant, withRlsBypass } from '../lib/tenantContext.js';
 
 const QUEUE_DAILY = 'continuum:daily-checks';
 
@@ -106,14 +107,18 @@ async function revokeExpiredKeys(): Promise<void> {
 async function runABWinnerPick(): Promise<void> {
   const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
 
-  const campaigns = await prisma.campaign.findMany({
+  // Scans every tenant's sent A/B campaigns; each row's own apiKeyId scopes
+  // its downstream campaignRecipient update below via withTenant. withRlsBypass
+  // here (not withTenant, no single tenant to scope to) — this must see every
+  // tenant's due-for-winner-pick campaigns in one query.
+  const campaigns = await withRlsBypass((tx) => tx.campaign.findMany({
     where: {
       status: 'sent',
       subjectB: { not: null },
       sentAt: { lte: fourHoursAgo },
     },
     select: { id: true, apiKeyId: true, openCount: true, openCountB: true },
-  });
+  }));
 
   let picked = 0;
   for (const c of campaigns) {
@@ -132,10 +137,10 @@ async function runABWinnerPick(): Promise<void> {
     const loser:  'a' | 'b' = winner === 'a' ? 'b' : 'a';
 
     // Flip any remaining pending loser recipients to winner variant
-    await prisma.campaignRecipient.updateMany({
+    await withTenant(c.apiKeyId, (tx) => tx.campaignRecipient.updateMany({
       where: { campaignId: c.id, variant: loser, status: 'pending' },
       data:  { variant: winner },
-    });
+    }));
 
     await prisma.auditLog.create({
       data: {

@@ -3,6 +3,7 @@ import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
+import { withTenant } from '../../lib/tenantContext.js';
 
 export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /v1/events/live — unified real-time event feed (SendEvent + TrackingEvent merged)
@@ -86,8 +87,8 @@ export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
         };
       }
 
-      const [items, total] = await Promise.all([
-        prisma.sendMessage.findMany({
+      const [items, total] = await withTenant(apiKeyId, (tx) => Promise.all([
+        tx.sendMessage.findMany({
           where: where as never,
           orderBy: { createdAt: 'desc' },
           skip: (page - 1) * limit,
@@ -97,8 +98,8 @@ export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
             sesMessageId: true, createdAt: true, sentAt: true, tags: true,
           },
         }),
-        prisma.sendMessage.count({ where: where as never }),
-      ]);
+        tx.sendMessage.count({ where: where as never }),
+      ]));
 
       return reply.status(200).send({ data: items, total, page, limit });
     },
@@ -112,13 +113,13 @@ export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const msg = await prisma.sendMessage.findFirst({
+      const msg = await withTenant(apiKeyId, (tx) => tx.sendMessage.findFirst({
         where: { id, apiKeyId },
         include: {
           events: { orderBy: { occurredAt: 'asc' } },
           trackingEvents: { orderBy: { occurredAt: 'asc' } },
         },
-      });
+      }));
       if (!msg) throw Errors.notFound('Message not found.');
 
       return reply.status(200).send(msg);
@@ -142,11 +143,13 @@ export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const baseWhere = where as Record<string, unknown>;
-      const [sent, delivered, bounced, complained, opens, clicks] = await Promise.all([
-        prisma.sendMessage.count({ where: { ...baseWhere, status: { in: ['sent', 'delivered', 'bounced', 'complained'] } } as never }),
-        prisma.sendMessage.count({ where: { ...baseWhere, status: 'delivered' } as never }),
-        prisma.sendMessage.count({ where: { ...baseWhere, status: 'bounced' } as never }),
-        prisma.sendMessage.count({ where: { ...baseWhere, status: 'complained' } as never }),
+      const [[sent, delivered, bounced, complained], opens, clicks] = await Promise.all([
+        withTenant(apiKeyId, (tx) => Promise.all([
+          tx.sendMessage.count({ where: { ...baseWhere, status: { in: ['sent', 'delivered', 'bounced', 'complained'] } } as never }),
+          tx.sendMessage.count({ where: { ...baseWhere, status: 'delivered' } as never }),
+          tx.sendMessage.count({ where: { ...baseWhere, status: 'bounced' } as never }),
+          tx.sendMessage.count({ where: { ...baseWhere, status: 'complained' } as never }),
+        ])),
         prisma.trackingEvent.count({ where: { type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } } }),
         prisma.trackingEvent.count({ where: { type: 'click', isLikelyBot: false, sendMessage: { apiKeyId } } }),
       ]);

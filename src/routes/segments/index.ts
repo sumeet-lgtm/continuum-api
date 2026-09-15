@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
 const STATIC_FIELDS = ['email', 'first_name', 'last_name', 'status', 'subscribed_after', 'subscribed_before'];
@@ -31,20 +31,22 @@ export async function segmentRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const { name, list_id, filter_rules } = parsed.data;
 
-    // A segment's listId was accepted straight from the request body with
-    // no ownership check — a customer could point a segment at another
-    // tenant's mailing list id, and every downstream contactListMembership
-    // lookup below (scoped only by listId, not by apiKeyId) would then
-    // return that other tenant's contacts. Validate ownership up front so
-    // segment.listId can never reference a list outside this account.
-    if (list_id) {
-      const list = await prisma.mailingList.findFirst({ where: { id: list_id, apiKeyId }, select: { id: true } });
-      if (!list) throw Errors.notFound('List not found.');
-    }
+    const segment = await withTenant(apiKeyId, async (tx) => {
+      // A segment's listId was accepted straight from the request body with
+      // no ownership check — a customer could point a segment at another
+      // tenant's mailing list id, and every downstream contactListMembership
+      // lookup below (scoped only by listId, not by apiKeyId) would then
+      // return that other tenant's contacts. Validate ownership up front so
+      // segment.listId can never reference a list outside this account.
+      if (list_id) {
+        const list = await tx.mailingList.findFirst({ where: { id: list_id, apiKeyId }, select: { id: true } });
+        if (!list) throw Errors.notFound('List not found.');
+      }
 
-    const segment = await prisma.segment.create({
-      data: { apiKeyId, name, listId: list_id ?? null, filterRules: filter_rules },
-      select: { id: true, name: true, listId: true, filterRules: true, createdAt: true },
+      return tx.segment.create({
+        data: { apiKeyId, name, listId: list_id ?? null, filterRules: filter_rules },
+        select: { id: true, name: true, listId: true, filterRules: true, createdAt: true },
+      });
     });
     return reply.status(201).send(segment);
   });
@@ -54,11 +56,11 @@ export async function segmentRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const q = request.query as { list_id?: string };
 
-    const segments = await prisma.segment.findMany({
+    const segments = await withTenant(apiKeyId, (tx) => tx.segment.findMany({
       where: { apiKeyId, ...(q.list_id ? { listId: q.list_id } : {}) },
       orderBy: { createdAt: 'desc' },
       select: { id: true, name: true, listId: true, filterRules: true, createdAt: true },
-    });
+    }));
     return reply.status(200).send({ data: segments });
   });
 
@@ -67,24 +69,28 @@ export async function segmentRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const segment = await prisma.segment.findFirst({
-      where: { id, apiKeyId },
-      select: { id: true, name: true, listId: true, filterRules: true, createdAt: true },
-    });
-    if (!segment) throw Errors.notFound('Segment not found.');
-
-    // Count matching contacts
-    const rules = segment.filterRules as Array<{ field: string; operator: string; value: string }>;
-    let count = 0;
-    if (segment.listId) {
-      const memberships = await prisma.contactListMembership.findMany({
-        where: { listId: segment.listId, status: 'subscribed', list: { apiKeyId } },
-        include: { contact: true },
+    const result = await withTenant(apiKeyId, async (tx) => {
+      const segment = await tx.segment.findFirst({
+        where: { id, apiKeyId },
+        select: { id: true, name: true, listId: true, filterRules: true, createdAt: true },
       });
-      count = memberships.filter(m => matchRules(m.contact, rules)).length;
-    }
+      if (!segment) throw Errors.notFound('Segment not found.');
 
-    return reply.status(200).send({ ...segment, matching_contacts: count });
+      // Count matching contacts
+      const rules = segment.filterRules as Array<{ field: string; operator: string; value: string }>;
+      let count = 0;
+      if (segment.listId) {
+        const memberships = await tx.contactListMembership.findMany({
+          where: { listId: segment.listId, status: 'subscribed', list: { apiKeyId } },
+          include: { contact: true },
+        });
+        count = memberships.filter(m => matchRules(m.contact, rules)).length;
+      }
+
+      return { ...segment, matching_contacts: count };
+    });
+
+    return reply.status(200).send(result);
   });
 
   // PATCH /v1/segments/:id — update name and/or filter rules
@@ -93,15 +99,17 @@ export async function segmentRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const body = request.body as { name?: string; filter_rules?: Array<{ field: string; operator: string; value: string }> };
 
-    const existing = await prisma.segment.findFirst({ where: { id, apiKeyId } });
-    if (!existing) throw Errors.notFound('Segment not found.');
+    const updated = await withTenant(apiKeyId, async (tx) => {
+      const existing = await tx.segment.findFirst({ where: { id, apiKeyId } });
+      if (!existing) throw Errors.notFound('Segment not found.');
 
-    const updated = await prisma.segment.update({
-      where: { id },
-      data: {
-        ...(body.name !== undefined && { name: body.name }),
-        ...(body.filter_rules !== undefined && { filterRules: body.filter_rules }),
-      },
+      return tx.segment.update({
+        where: { id },
+        data: {
+          ...(body.name !== undefined && { name: body.name }),
+          ...(body.filter_rules !== undefined && { filterRules: body.filter_rules }),
+        },
+      });
     });
     return reply.status(200).send(updated);
   });
@@ -111,24 +119,28 @@ export async function segmentRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const segment = await prisma.segment.findFirst({
-      where: { id, apiKeyId },
-      select: { id: true, listId: true, filterRules: true },
-    });
-    if (!segment) throw Errors.notFound('Segment not found.');
-
-    const rules = segment.filterRules as Array<{ field: string; operator: string; value: string }>;
-    let contacts: Array<{ email: string; firstName: string | null; lastName: string | null }> = [];
-    if (segment.listId) {
-      const memberships = await prisma.contactListMembership.findMany({
-        where: { listId: segment.listId, status: 'subscribed', list: { apiKeyId } },
-        include: { contact: { select: { email: true, firstName: true, lastName: true } } },
+    const contacts = await withTenant(apiKeyId, async (tx) => {
+      const segment = await tx.segment.findFirst({
+        where: { id, apiKeyId },
+        select: { id: true, listId: true, filterRules: true },
       });
-      contacts = memberships
-        .filter(m => matchRules(m.contact, rules))
-        .slice(0, 200)
-        .map(m => m.contact);
-    }
+      if (!segment) throw Errors.notFound('Segment not found.');
+
+      const rules = segment.filterRules as Array<{ field: string; operator: string; value: string }>;
+      let contacts: Array<{ email: string; firstName: string | null; lastName: string | null }> = [];
+      if (segment.listId) {
+        const memberships = await tx.contactListMembership.findMany({
+          where: { listId: segment.listId, status: 'subscribed', list: { apiKeyId } },
+          include: { contact: { select: { email: true, firstName: true, lastName: true } } },
+        });
+        contacts = memberships
+          .filter(m => matchRules(m.contact, rules))
+          .slice(0, 200)
+          .map(m => m.contact);
+      }
+
+      return contacts;
+    });
 
     return reply.status(200).send({ total: contacts.length, data: contacts });
   });
@@ -138,10 +150,12 @@ export async function segmentRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const existing = await prisma.segment.findFirst({ where: { id, apiKeyId } });
-    if (!existing) throw Errors.notFound('Segment not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const existing = await tx.segment.findFirst({ where: { id, apiKeyId } });
+      if (!existing) throw Errors.notFound('Segment not found.');
 
-    await prisma.segment.delete({ where: { id } });
+      await tx.segment.delete({ where: { id } });
+    });
     return reply.status(200).send({ deleted: true, id });
   });
 }

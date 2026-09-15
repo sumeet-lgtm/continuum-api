@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { verifyUnsubToken } from '../../lib/unsubscribe.js';
 
 function htmlPage(email: string, lists: Array<{ id: string; name: string; description: string | null; subscribed: boolean }>, suppressed: boolean, apiKeyId: string, token: string): string {
@@ -358,16 +359,22 @@ export async function preferencesRoutes(fastify: FastifyInstance): Promise<void>
 
       const { email, apiKeyId } = payload;
 
+      // Suppression is deliberately global (any tenant's bounce/complaint
+      // blocks every tenant's future sends to that address — see
+      // bounceHandling.ts), so it needs withRlsBypass, not withTenant:
+      // under a plain withTenant(apiKeyId) scope, RLS would hide a
+      // suppression another tenant's send caused, and this preference
+      // page would wrongly tell the recipient they aren't suppressed.
       const [contact, suppression] = await Promise.all([
-        prisma.contact.findUnique({
+        withTenant(apiKeyId, (tx) => tx.contact.findUnique({
           where: { apiKeyId_email: { apiKeyId, email } },
           include: {
             memberships: {
               include: { list: { select: { id: true, name: true, description: true } } },
             },
           },
-        }),
-        prisma.suppression.findUnique({ where: { email } }),
+        })),
+        withRlsBypass((tx) => tx.suppression.findUnique({ where: { email } })),
       ]);
 
       const lists = (contact?.memberships ?? []).map(m => ({
@@ -405,51 +412,59 @@ export async function preferencesRoutes(fastify: FastifyInstance): Promise<void>
       const { email, apiKeyId } = payload;
 
       if (action === 'unsubscribe_all') {
-        await prisma.suppression.upsert({
+        // Suppression's email column is globally unique — upserting it
+        // under a withTenant(apiKeyId) scope would hide any existing row
+        // another tenant already created (RLS-invisible), so Prisma's
+        // upsert would attempt an INSERT and crash on the unique-constraint
+        // violation instead of no-op'ing. withRlsBypass sees the real row
+        // regardless of which tenant owns it.
+        await withRlsBypass((tx) => tx.suppression.upsert({
           where: { email },
           create: { email, reason: 'unsubscribed', apiKeyId },
           update: {},
-        });
-        await prisma.contactListMembership.updateMany({
+        }));
+        await withTenant(apiKeyId, (tx) => tx.contactListMembership.updateMany({
           where: { contact: { email, apiKeyId }, status: 'subscribed' },
           data: { status: 'unsubscribed', unsubscribedAt: new Date() },
-        });
+        }));
         return reply.status(200).send({ ok: true, action: 'unsubscribe_all' });
       }
 
       // action === 'update' — save per-list preferences from keepListIds array
       const keepSet = new Set(keepListIds);
 
-      const contact = await prisma.contact.findUnique({
-        where: { apiKeyId_email: { apiKeyId, email } },
-        include: { memberships: { select: { id: true, listId: true, status: true } } },
-      });
+      await withTenant(apiKeyId, async (tx) => {
+        const contact = await tx.contact.findUnique({
+          where: { apiKeyId_email: { apiKeyId, email } },
+          include: { memberships: { select: { id: true, listId: true, status: true } } },
+        });
 
-      if (contact) {
-        for (const m of contact.memberships) {
-          const shouldKeep = keepSet.has(m.listId);
-          if (shouldKeep && m.status !== 'subscribed') {
-            await prisma.contactListMembership.update({
-              where: { id: m.id },
-              data: { status: 'subscribed', unsubscribedAt: null },
-            });
-          } else if (!shouldKeep && m.status === 'subscribed') {
-            await prisma.contactListMembership.update({
-              where: { id: m.id },
-              data: { status: 'unsubscribed', unsubscribedAt: new Date() },
-            });
+        if (contact) {
+          for (const m of contact.memberships) {
+            const shouldKeep = keepSet.has(m.listId);
+            if (shouldKeep && m.status !== 'subscribed') {
+              await tx.contactListMembership.update({
+                where: { id: m.id },
+                data: { status: 'subscribed', unsubscribedAt: null },
+              });
+            } else if (!shouldKeep && m.status === 'subscribed') {
+              await tx.contactListMembership.update({
+                where: { id: m.id },
+                data: { status: 'unsubscribed', unsubscribedAt: new Date() },
+              });
+            }
           }
         }
-      }
 
-      // If all lists unchecked → global suppression
-      if (keepSet.size === 0) {
-        await prisma.suppression.upsert({
-          where: { email },
-          create: { email, reason: 'unsubscribed', apiKeyId },
-          update: {},
-        });
-      }
+        // If all lists unchecked → global suppression
+        if (keepSet.size === 0) {
+          await tx.suppression.upsert({
+            where: { email },
+            create: { email, reason: 'unsubscribed', apiKeyId },
+            update: {},
+          });
+        }
+      });
 
       return reply.status(200).send({ ok: true, action: 'update' });
     },

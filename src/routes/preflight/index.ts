@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
 const bodySchema = z.object({
@@ -90,12 +91,14 @@ export async function preflightRoutes(fastify: FastifyInstance): Promise<void> {
 
     let emails: string[];
     if (list_id) {
-      const list = await prisma.mailingList.findFirst({ where: { id: list_id, apiKeyId } });
-      if (!list) throw Errors.notFound('List not found.');
+      const memberships = await withTenant(apiKeyId, async (tx) => {
+        const list = await tx.mailingList.findFirst({ where: { id: list_id, apiKeyId } });
+        if (!list) throw Errors.notFound('List not found.');
 
-      const memberships = await prisma.contactListMembership.findMany({
-        where: { listId: list_id, status: 'subscribed' },
-        select: { contact: { select: { email: true } } },
+        return tx.contactListMembership.findMany({
+          where: { listId: list_id, status: 'subscribed' },
+          select: { contact: { select: { email: true } } },
+        });
       });
       emails = memberships.map(m => m.contact.email);
     } else {
@@ -113,10 +116,13 @@ export async function preflightRoutes(fastify: FastifyInstance): Promise<void> {
 
     const [suppressions, cacheHits] = await Promise.all([
       // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
-      prisma.suppression.findMany({
+      // withRlsBypass (not withTenant) is intentional here: this must see suppression
+      // entries caused by ANY tenant, since a bounce/complaint/opt-out blocks sends
+      // platform-wide, not just for the customer whose send caused it.
+      withRlsBypass((tx) => tx.suppression.findMany({
         where: { email: { in: emails } },
         select: { email: true, reason: true },
-      }),
+      })),
       prisma.smtpCache.findMany({
         where: { email: { in: emails }, expiresAt: { gt: new Date() } },
         select: { email: true, reachable: true, isCatchAll: true },

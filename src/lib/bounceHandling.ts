@@ -16,6 +16,7 @@ import { config } from '../config.js';
 import { invalidateSmtpCache } from '../engine/smtpCache.js';
 import { monitorQueue } from './queue.js';
 import type { MonitorRecheckPayload } from '../types/job.js';
+import { withTenant, withRlsBypass } from './tenantContext.js';
 
 const BOUNCE_WARN_PCT          = 2.0;
 const BOUNCE_DANGER_PCT        = 5.0;
@@ -25,13 +26,22 @@ const BOUNCE_WINDOW_MS         = 24 * 60 * 60 * 1000;
 const BOUNCE_ALERT_COOLDOWN_MS = 4 * 60 * 60 * 1000;
 const BOUNCE_MIN_SENT          = 50;
 
-/** Upsert-by-email: the unique constraint on Suppression.email makes a repeat bounce a no-op. */
+/**
+ * Upsert-by-email: the unique constraint on Suppression.email makes a
+ * repeat bounce a no-op. withRlsBypass, not withTenant: Suppression is
+ * deliberately global (a hard bounce under ANY tenant's send means the
+ * address doesn't work, full stop), and upserting on its globally-unique
+ * email column under a withTenant(apiKeyId) scope would make an existing
+ * row owned by a different tenant RLS-invisible — Prisma would then try
+ * to INSERT instead of no-op, and crash on the unique-constraint
+ * violation instead of correctly finding the row.
+ */
 export async function suppress(email: string, reason: 'hard_bounce' | 'complaint' | 'soft_bounce', apiKeyId: string): Promise<void> {
-  await prisma.suppression.upsert({
+  await withRlsBypass((tx) => tx.suppression.upsert({
     where: { email },
     update: {}, // first reason wins; don't overwrite an existing suppression's cause
     create: { email, reason, apiKeyId },
-  }).catch((err) => {
+  })).catch((err) => {
     logger.error({ err, email, reason }, 'Failed to write suppression');
   });
 }
@@ -39,8 +49,10 @@ export async function suppress(email: string, reason: 'hard_bounce' | 'complaint
 /** 3-strike soft bounce suppression: track transient bounces, suppress after 3 consecutive. */
 export async function trackSoftBounce(email: string, apiKeyId: string): Promise<void> {
   try {
-    // Check if already hard-suppressed — skip if so
-    const existing = await prisma.suppression.findUnique({ where: { email } });
+    // Check if already hard-suppressed — skip if so. Global read for the
+    // same reason as suppress() above: a suppression from a different
+    // tenant must still count.
+    const existing = await withRlsBypass((tx) => tx.suppression.findUnique({ where: { email } }));
     if (existing) return;
 
     const track = await prisma.softBounceTrack.upsert({
@@ -93,10 +105,10 @@ export async function correctOnGroundTruth(email: string, apiKeyId: string): Pro
 export async function checkBounceRate(apiKeyId: string): Promise<void> {
   try {
     const since = new Date(Date.now() - BOUNCE_WINDOW_MS);
-    const [sent, bounced] = await Promise.all([
-      prisma.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since } } }),
-      prisma.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since }, status: 'bounced' } }),
-    ]);
+    const [sent, bounced] = await withTenant(apiKeyId, (tx) => Promise.all([
+      tx.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since } } }),
+      tx.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since }, status: 'bounced' } }),
+    ]));
 
     if (sent < BOUNCE_MIN_SENT) return;
 
@@ -171,10 +183,10 @@ export async function checkBounceRate(apiKeyId: string): Promise<void> {
 export async function checkComplaintRate(apiKeyId: string): Promise<void> {
   try {
     const since = new Date(Date.now() - BOUNCE_WINDOW_MS);
-    const [sent, complained] = await Promise.all([
-      prisma.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since } } }),
-      prisma.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since }, status: 'complained' } }),
-    ]);
+    const [sent, complained] = await withTenant(apiKeyId, (tx) => Promise.all([
+      tx.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since } } }),
+      tx.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since }, status: 'complained' } }),
+    ]));
 
     if (sent < BOUNCE_MIN_SENT) return;
 

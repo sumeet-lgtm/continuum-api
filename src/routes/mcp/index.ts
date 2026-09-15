@@ -14,6 +14,7 @@ import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { verifyEmail } from '../../engine/index.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
@@ -351,7 +352,7 @@ async function callTool(
         },
       });
       const res = await sesClient.send(cmd);
-      await prisma.sendMessage.create({
+      await withTenant(apiKeyId, (tx) => tx.sendMessage.create({
         data: {
           apiKeyId,
           to:           String(args['to']),
@@ -361,43 +362,47 @@ async function callTool(
           sesMessageId: res.MessageId ?? null,
           cc: [], bcc: [],
         },
-      });
+      }));
       return { content: text({ sent: true, message_id: res.MessageId }) };
     }
 
     case 'create_lead': {
       const email = String(args['email'] ?? '').trim().toLowerCase();
-      const lead = await prisma.lead.upsert({
-        where: { apiKeyId_email: { apiKeyId, email } },
-        create: {
-          apiKeyId, email,
-          firstName: args['first_name'] ? String(args['first_name']) : null,
-          lastName:  args['last_name']  ? String(args['last_name'])  : null,
-          company:   args['company']    ? String(args['company'])    : null,
-          title:     args['title']      ? String(args['title'])      : null,
-          customVars: (args['custom_variables'] ?? {}) as Prisma.InputJsonValue,
-        },
-        update: {
-          ...(args['first_name'] ? { firstName: String(args['first_name']) } : {}),
-          ...(args['last_name']  ? { lastName:  String(args['last_name'])  } : {}),
-          ...(args['company']    ? { company:   String(args['company'])    } : {}),
-          ...(args['title']      ? { title:     String(args['title'])      } : {}),
-          ...(args['custom_variables'] ? { customVars: args['custom_variables'] as Prisma.InputJsonValue } : {}),
-        },
-        select: { id: true, email: true, firstName: true, lastName: true, company: true, status: true },
-      });
+      const lead = await withTenant(apiKeyId, async (tx) => {
+        const lead = await tx.lead.upsert({
+          where: { apiKeyId_email: { apiKeyId, email } },
+          create: {
+            apiKeyId, email,
+            firstName: args['first_name'] ? String(args['first_name']) : null,
+            lastName:  args['last_name']  ? String(args['last_name'])  : null,
+            company:   args['company']    ? String(args['company'])    : null,
+            title:     args['title']      ? String(args['title'])      : null,
+            customVars: (args['custom_variables'] ?? {}) as Prisma.InputJsonValue,
+          },
+          update: {
+            ...(args['first_name'] ? { firstName: String(args['first_name']) } : {}),
+            ...(args['last_name']  ? { lastName:  String(args['last_name'])  } : {}),
+            ...(args['company']    ? { company:   String(args['company'])    } : {}),
+            ...(args['title']      ? { title:     String(args['title'])      } : {}),
+            ...(args['custom_variables'] ? { customVars: args['custom_variables'] as Prisma.InputJsonValue } : {}),
+          },
+          select: { id: true, email: true, firstName: true, lastName: true, company: true, status: true },
+        });
 
-      if (args['sequence_id']) {
-        const seqId = String(args['sequence_id']);
-        const seq = await prisma.sequence.findFirst({ where: { id: seqId, apiKeyId } });
-        if (seq) {
-          await prisma.sequenceEnrollment.upsert({
-            where: { sequenceId_email: { sequenceId: seqId, email } },
-            create: { sequenceId: seqId, email, status: 'active', nextSendAt: new Date() },
-            update: {},
-          });
+        if (args['sequence_id']) {
+          const seqId = String(args['sequence_id']);
+          const seq = await tx.sequence.findFirst({ where: { id: seqId, apiKeyId } });
+          if (seq) {
+            await tx.sequenceEnrollment.upsert({
+              where: { sequenceId_email: { sequenceId: seqId, email } },
+              create: { sequenceId: seqId, email, status: 'active', nextSendAt: new Date() },
+              update: {},
+            });
+          }
         }
-      }
+
+        return lead;
+      });
 
       return { content: text(lead) };
     }
@@ -405,27 +410,29 @@ async function callTool(
     case 'enroll_lead_in_sequence': {
       const email = String(args['email'] ?? '').trim().toLowerCase();
       const seqId = String(args['sequence_id'] ?? '');
-      const seq = await prisma.sequence.findFirst({ where: { id: seqId, apiKeyId } });
-      if (!seq) throw Errors.notFound('sequence');
-      const enrollment = await prisma.sequenceEnrollment.upsert({
-        where: { sequenceId_email: { sequenceId: seqId, email } },
-        create: { sequenceId: seqId, email, status: 'active', nextSendAt: new Date(), ...(args['variables'] ? { variables: args['variables'] as Prisma.InputJsonValue } : {}) },
-        update: { status: 'active', nextSendAt: new Date() },
-        select: { id: true, email: true, status: true, currentStep: true, nextSendAt: true },
+      const enrollment = await withTenant(apiKeyId, async (tx) => {
+        const seq = await tx.sequence.findFirst({ where: { id: seqId, apiKeyId } });
+        if (!seq) throw Errors.notFound('sequence');
+        return tx.sequenceEnrollment.upsert({
+          where: { sequenceId_email: { sequenceId: seqId, email } },
+          create: { sequenceId: seqId, email, status: 'active', nextSendAt: new Date(), ...(args['variables'] ? { variables: args['variables'] as Prisma.InputJsonValue } : {}) },
+          update: { status: 'active', nextSendAt: new Date() },
+          select: { id: true, email: true, status: true, currentStep: true, nextSendAt: true },
+        });
       });
       return { content: text(enrollment) };
     }
 
     case 'get_sequence_stats': {
       const seqId = String(args['sequence_id'] ?? '');
-      const [seq, stats] = await Promise.all([
-        prisma.sequence.findFirst({ where: { id: seqId, apiKeyId }, select: { id: true, name: true, status: true } }),
-        prisma.sequenceEnrollment.groupBy({
+      const [seq, stats] = await withTenant(apiKeyId, (tx) => Promise.all([
+        tx.sequence.findFirst({ where: { id: seqId, apiKeyId }, select: { id: true, name: true, status: true } }),
+        tx.sequenceEnrollment.groupBy({
           by: ['status'],
           where: { sequenceId: seqId },
           _count: { status: true },
         }),
-      ]);
+      ]));
       if (!seq) throw Errors.notFound('sequence');
       const counts = Object.fromEntries(stats.map(s => [s.status, s._count.status]));
       return { content: text({ ...seq, enrollments: counts }) };
@@ -433,21 +440,21 @@ async function callTool(
 
     case 'list_sequences': {
       const status = args['status'] ? String(args['status']) : undefined;
-      const sequences = await prisma.sequence.findMany({
+      const sequences = await withTenant(apiKeyId, (tx) => tx.sequence.findMany({
         where: { apiKeyId, ...(status ? { status } : {}) },
         select: { id: true, name: true, status: true, fromEmail: true, stopOnReply: true, createdAt: true },
         orderBy: { createdAt: 'desc' },
         take: 50,
-      });
+      }));
       return { content: text(sequences) };
     }
 
     case 'get_campaign_stats': {
       const campaignId = String(args['campaign_id'] ?? '');
-      const campaign = await prisma.campaign.findFirst({
+      const campaign = await withTenant(apiKeyId, (tx) => tx.campaign.findFirst({
         where: { id: campaignId, apiKeyId },
         select: { id: true, subject: true, status: true, totalRecipients: true, sentCount: true, openCount: true, clickCount: true, bounceCount: true, complaintCount: true, sentAt: true },
-      });
+      }));
       if (!campaign) throw Errors.notFound('campaign');
       const openRate  = campaign.sentCount > 0 ? (campaign.openCount / campaign.sentCount * 100).toFixed(1) : '0';
       const clickRate = campaign.sentCount > 0 ? (campaign.clickCount / campaign.sentCount * 100).toFixed(1) : '0';
@@ -457,27 +464,33 @@ async function callTool(
     case 'add_contact_to_list': {
       const email   = String(args['email'] ?? '').trim().toLowerCase();
       const listId  = String(args['list_id'] ?? '');
-      const suppressed = await prisma.suppression.findUnique({ where: { email } });
+      // Suppression is deliberately global (see schema.prisma) — withRlsBypass,
+      // not withTenant, so a bounce/complaint/opt-out recorded under ANY
+      // tenant still blocks this subscribe, matching the REST behavior.
+      const suppressed = await withRlsBypass((tx) => tx.suppression.findUnique({ where: { email } }));
       if (suppressed) return { content: text({ error: 'Email is suppressed', reason: suppressed.reason }) };
 
-      const contact = await prisma.contact.upsert({
-        where: { apiKeyId_email: { apiKeyId, email } },
-        create: { apiKeyId, email, firstName: args['first_name'] ? String(args['first_name']) : null, lastName: args['last_name'] ? String(args['last_name']) : null, ...(args['custom_fields'] ? { customFields: args['custom_fields'] as Prisma.InputJsonValue } : {}) },
-        update: {},
-        select: { id: true },
+      await withTenant(apiKeyId, async (tx) => {
+        const contact = await tx.contact.upsert({
+          where: { apiKeyId_email: { apiKeyId, email } },
+          create: { apiKeyId, email, firstName: args['first_name'] ? String(args['first_name']) : null, lastName: args['last_name'] ? String(args['last_name']) : null, ...(args['custom_fields'] ? { customFields: args['custom_fields'] as Prisma.InputJsonValue } : {}) },
+          update: {},
+          select: { id: true },
+        });
+        await tx.contactListMembership.upsert({
+          where: { contactId_listId: { contactId: contact.id, listId } },
+          create: { contactId: contact.id, listId, status: 'subscribed' },
+          update: { status: 'subscribed', unsubscribedAt: null },
+        });
+        await tx.mailingList.update({ where: { id: listId }, data: { contactCount: { increment: 1 } } }).catch(() => {});
       });
-      await prisma.contactListMembership.upsert({
-        where: { contactId_listId: { contactId: contact.id, listId } },
-        create: { contactId: contact.id, listId, status: 'subscribed' },
-        update: { status: 'subscribed', unsubscribedAt: null },
-      });
-      await prisma.mailingList.update({ where: { id: listId }, data: { contactCount: { increment: 1 } } }).catch(() => {});
       return { content: text({ subscribed: true, email, list_id: listId }) };
     }
 
     case 'check_suppression': {
       const email = String(args['email'] ?? '').trim().toLowerCase();
-      const record = await prisma.suppression.findUnique({ where: { email } });
+      // withRlsBypass: same global-suppression reasoning as above.
+      const record = await withRlsBypass((tx) => tx.suppression.findUnique({ where: { email } }));
       return { content: text({ email, suppressed: !!record, reason: record?.reason ?? null, suppressed_at: record?.createdAt ?? null }) };
     }
 
@@ -594,12 +607,12 @@ async function callTool(
         ];
       }
       const limit = Math.min(50, Math.max(1, Number(args['limit'] ?? 20)));
-      const leads = await prisma.lead.findMany({
+      const leads = await withTenant(apiKeyId, (tx) => tx.lead.findMany({
         where: where as NonNullable<Parameters<typeof prisma.lead.findMany>[0]>['where'],
         select: { id: true, email: true, firstName: true, lastName: true, company: true, title: true, status: true, createdAt: true },
         orderBy: { createdAt: 'desc' },
         take: limit,
-      });
+      }));
       return { content: text({ leads, count: leads.length }) };
     }
 

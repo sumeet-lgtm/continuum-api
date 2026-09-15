@@ -10,6 +10,7 @@ import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 import {
   suppress, trackSoftBounce, correctOnGroundTruth, checkComplaintRate,
 } from '../../lib/bounceHandling.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 
 // ─── SES event shapes (only the fields read) ─────────────────────────────────
 
@@ -98,7 +99,14 @@ export async function sendEventsRoute(fastify: FastifyInstance): Promise<void> {
         return reply.status(200).send({ received: true });
       }
 
-      const sendMessage = await prisma.sendMessage.findUnique({ where: { sesMessageId } });
+      // Reverse lookup keyed by sesMessageId, which is globally unique on
+      // SendMessage — apiKeyId isn't known yet at this point, this lookup is
+      // how it gets resolved, and uniqueness guarantees no cross-tenant
+      // ambiguity. See the matching note in smtp2goEvents.ts. withRlsBypass
+      // (not withTenant, which needs an apiKeyId we don't have yet) — RLS
+      // would otherwise hide this row entirely since no session context is
+      // set, breaking every SES webhook.
+      const sendMessage = await withRlsBypass((tx) => tx.sendMessage.findUnique({ where: { sesMessageId } }));
       if (!sendMessage) {
         // Not one of ours (or arrived before the row committed) — ack, don't retry forever.
         logger.info({ sesMessageId, eventType }, 'SES event for unknown sendMessage — acking');
@@ -124,7 +132,7 @@ async function handleSesEvent(
     await prisma.sendEvent.create({
       data: { sendMessageId, type: 'bounced', rawPayload: sesEvent as object },
     });
-    await prisma.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'bounced' } });
+    await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'bounced' } }));
 
     const bounceType = sesEvent.bounce?.bounceType ?? null;
     const recipients = sesEvent.bounce?.bouncedRecipients?.map((r) => r.emailAddress).filter((e): e is string => Boolean(e)) ?? [];
@@ -151,7 +159,7 @@ async function handleSesEvent(
     await prisma.sendEvent.create({
       data: { sendMessageId, type: 'complained', rawPayload: sesEvent as object },
     });
-    await prisma.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'complained' } });
+    await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'complained' } }));
 
     const recipients = sesEvent.complaint?.complainedRecipients?.map((r) => r.emailAddress).filter((e): e is string => Boolean(e)) ?? [];
     for (const email of recipients) {
@@ -172,7 +180,7 @@ async function handleSesEvent(
     await prisma.sendEvent.create({
       data: { sendMessageId, type: 'delivered', rawPayload: sesEvent as object },
     });
-    await prisma.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'delivered' } });
+    await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'delivered' } }));
 
     const recipients = sesEvent.delivery?.recipients ?? [];
     for (const email of recipients) {

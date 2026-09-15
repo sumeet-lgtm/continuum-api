@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
 const createSchema = z.object({
@@ -17,10 +18,10 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
     const apiKeyId = request.apiKey.id;
-    const list = await prisma.mailingList.create({
+    const list = await withTenant(apiKeyId, (tx) => tx.mailingList.create({
       data: { apiKeyId, name: parsed.data.name, description: parsed.data.description ?? null },
       select: { id: true, name: true, description: true, contactCount: true, createdAt: true },
-    });
+    }));
     return reply.status(201).send(list);
   });
 
@@ -31,14 +32,14 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     const page = Math.max(1, parseInt(q.page ?? '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
-    const [items, total] = await Promise.all([
-      prisma.mailingList.findMany({
+    const [items, total] = await withTenant(apiKeyId, (tx) => Promise.all([
+      tx.mailingList.findMany({
         where: { apiKeyId }, orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit, take: limit,
         select: { id: true, name: true, description: true, contactCount: true, createdAt: true, updatedAt: true },
       }),
-      prisma.mailingList.count({ where: { apiKeyId } }),
-    ]);
+      tx.mailingList.count({ where: { apiKeyId } }),
+    ]));
 
     return reply.status(200).send({ data: items, total, page, limit });
   });
@@ -47,10 +48,10 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/lists/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const list = await prisma.mailingList.findFirst({
+    const list = await withTenant(apiKeyId, (tx) => tx.mailingList.findFirst({
       where: { id, apiKeyId },
       select: { id: true, name: true, description: true, contactCount: true, createdAt: true, updatedAt: true },
-    });
+    }));
     if (!list) throw Errors.notFound('List not found.');
     return reply.status(200).send(list);
   });
@@ -62,17 +63,20 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = createSchema.partial().safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const existing = await prisma.mailingList.findFirst({ where: { id, apiKeyId } });
-    if (!existing) throw Errors.notFound('List not found.');
-
     const { name, description } = parsed.data;
-    const updated = await prisma.mailingList.update({
-      where: { id },
-      data: {
-        ...(name !== undefined ? { name } : {}),
-        ...(description !== undefined ? { description } : {}),
-      },
-      select: { id: true, name: true, description: true, contactCount: true, updatedAt: true },
+
+    const updated = await withTenant(apiKeyId, async (tx) => {
+      const existing = await tx.mailingList.findFirst({ where: { id, apiKeyId } });
+      if (!existing) throw Errors.notFound('List not found.');
+
+      return tx.mailingList.update({
+        where: { id },
+        data: {
+          ...(name !== undefined ? { name } : {}),
+          ...(description !== undefined ? { description } : {}),
+        },
+        select: { id: true, name: true, description: true, contactCount: true, updatedAt: true },
+      });
     });
     return reply.status(200).send(updated);
   });
@@ -81,9 +85,11 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.delete('/lists/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const existing = await prisma.mailingList.findFirst({ where: { id, apiKeyId } });
-    if (!existing) throw Errors.notFound('List not found.');
-    await prisma.mailingList.delete({ where: { id } });
+    await withTenant(apiKeyId, async (tx) => {
+      const existing = await tx.mailingList.findFirst({ where: { id, apiKeyId } });
+      if (!existing) throw Errors.notFound('List not found.');
+      await tx.mailingList.delete({ where: { id } });
+    });
     return reply.status(200).send({ deleted: true, id });
   });
 
@@ -95,13 +101,15 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     const q = request.query as { inactive_days?: string };
     const inactiveDays = Math.min(365, Math.max(7, parseInt(q.inactive_days ?? '90', 10)));
 
-    const list = await prisma.mailingList.findFirst({ where: { id, apiKeyId } });
-    if (!list) throw Errors.notFound('List not found.');
-
     // All subscribed members
-    const members = await prisma.contactListMembership.findMany({
-      where: { listId: id, status: 'subscribed' },
-      select: { contact: { select: { id: true, email: true, firstName: true, lastName: true } } },
+    const members = await withTenant(apiKeyId, async (tx) => {
+      const list = await tx.mailingList.findFirst({ where: { id, apiKeyId } });
+      if (!list) throw Errors.notFound('List not found.');
+
+      return tx.contactListMembership.findMany({
+        where: { listId: id, status: 'subscribed' },
+        select: { contact: { select: { id: true, email: true, firstName: true, lastName: true } } },
+      });
     });
 
     if (members.length === 0) {
@@ -117,6 +125,8 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     // MPP-enabled contact "active" forever regardless of real engagement,
     // defeating the entire point of this report (finding who to actually
     // clean off the list).
+    // trackingEvent is not an RLS-covered table, so this stays on the
+    // outer `prisma` client.
     const recentEvents = await prisma.trackingEvent.groupBy({
       by:       ['email'],
       where:    { email: { in: emails }, type: { in: ['open', 'click'] }, isLikelyBot: false },
@@ -159,12 +169,14 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     const inactiveDays = Math.min(365, Math.max(7, body.inactive_days ?? 90));
     const targetBuckets = body.buckets ?? ['inactive', 'never_opened'];
 
-    const list = await prisma.mailingList.findFirst({ where: { id, apiKeyId } });
-    if (!list) throw Errors.notFound('List not found.');
+    const members = await withTenant(apiKeyId, async (tx) => {
+      const list = await tx.mailingList.findFirst({ where: { id, apiKeyId } });
+      if (!list) throw Errors.notFound('List not found.');
 
-    const members = await prisma.contactListMembership.findMany({
-      where: { listId: id, status: 'subscribed' },
-      select: { id: true, contact: { select: { id: true, email: true } } },
+      return tx.contactListMembership.findMany({
+        where: { listId: id, status: 'subscribed' },
+        select: { id: true, contact: { select: { id: true, email: true } } },
+      });
     });
 
     const emails = members.map((m) => m.contact.email);
@@ -175,6 +187,8 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     // endpoint actually suppresses contacts; letting a bot-inflated "open"
     // mask real disengagement would mean it never suppresses anyone it
     // should.
+    // trackingEvent is not an RLS-covered table, so this stays on the
+    // outer `prisma` client.
     const recentEvents = await prisma.trackingEvent.groupBy({
       by:    ['email'],
       where: { email: { in: emails }, type: { in: ['open', 'click'] }, isLikelyBot: false },
@@ -197,18 +211,20 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     // Unsubscribe from list + add to global suppression
-    await prisma.contactListMembership.updateMany({
-      where: { id: { in: toSuppress.map((m) => m.id) } },
-      data:  { status: 'unsubscribed' },
-    });
+    await withTenant(apiKeyId, async (tx) => {
+      await tx.contactListMembership.updateMany({
+        where: { id: { in: toSuppress.map((m) => m.id) } },
+        data:  { status: 'unsubscribed' },
+      });
 
-    for (const m of toSuppress) {
-      await prisma.suppression.upsert({
-        where:  { email: m.contact.email },
-        update: { reason: 'manual' },
-        create: { apiKeyId, email: m.contact.email, reason: 'manual' },
-      }).catch(() => { /* ignore duplicate suppression */ });
-    }
+      for (const m of toSuppress) {
+        await tx.suppression.upsert({
+          where:  { email: m.contact.email },
+          update: { reason: 'manual' },
+          create: { apiKeyId, email: m.contact.email, reason: 'manual' },
+        }).catch(() => { /* ignore duplicate suppression */ });
+      }
+    });
 
     return reply.status(200).send({ suppressed: toSuppress.length, message: `${toSuppress.length} contact(s) suppressed.` });
   });

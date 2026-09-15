@@ -14,6 +14,7 @@ import { signOAuthState, verifyOAuthState } from '../../lib/oauth/state.js';
 import { isGoogleOAuthConfigured, getGoogleAuthUrl, exchangeGoogleCode } from '../../lib/oauth/google.js';
 import { isMicrosoftOAuthConfigured, getMicrosoftAuthUrl, exchangeMicrosoftCode } from '../../lib/oauth/microsoft.js';
 import { logger } from '../../lib/logger.js';
+import { withTenant } from '../../lib/tenantContext.js';
 
 const OAUTH_PROVIDER_DEFAULTS: Record<'google' | 'microsoft', { host: string; port: number }> = {
   google: { host: 'smtp.gmail.com', port: 587 },
@@ -104,30 +105,38 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
 
         // Re-connecting the same provider account updates the existing
         // mailbox's token in place instead of creating a duplicate row.
-        const existing = await prisma.mailbox.findFirst({
-          where: { apiKeyId: verified.apiKeyId, type: mailboxType, username: email },
-        });
-
-        if (existing) {
-          await prisma.mailbox.update({
-            where: { id: existing.id },
-            data: { oauthTokenEnc, passwordEnc: null, status: 'active', lastErrorMsg: null, host, port },
+        const outcome = await withTenant(verified.apiKeyId, async (tx) => {
+          const existing = await tx.mailbox.findFirst({
+            where: { apiKeyId: verified.apiKeyId, type: mailboxType, username: email },
           });
-        } else {
+
+          if (existing) {
+            await tx.mailbox.update({
+              where: { id: existing.id },
+              data: { oauthTokenEnc, passwordEnc: null, status: 'active', lastErrorMsg: null, host, port },
+            });
+            return { ok: true as const };
+          }
+
           // No requireAuth on this route (see comment above) — request.apiKey
           // isn't populated, so the plan has to be looked up directly.
           const apiKeyRecord = await prisma.apiKey.findUnique({ where: { id: verified.apiKeyId }, select: { plan: true } });
           const mailboxLimit = getMailboxLimit(apiKeyRecord?.plan ?? null);
-          const existingCount = await prisma.mailbox.count({ where: { apiKeyId: verified.apiKeyId } });
+          const existingCount = await tx.mailbox.count({ where: { apiKeyId: verified.apiKeyId } });
           if (existingCount >= mailboxLimit) {
-            return reply.redirect(`${dashboardUrl}?oauth_error=mailbox_limit_reached`);
+            return { ok: false as const, reason: 'mailbox_limit_reached' as const };
           }
-          await prisma.mailbox.create({
+          await tx.mailbox.create({
             data: {
               apiKeyId: verified.apiKeyId, type: mailboxType, username: email,
               oauthTokenEnc, host, port, status: 'active',
             },
           });
+          return { ok: true as const };
+        });
+
+        if (!outcome.ok) {
+          return reply.redirect(`${dashboardUrl}?oauth_error=${outcome.reason}`);
         }
 
         return reply.redirect(`${dashboardUrl}?connected=${provider}`);
@@ -149,7 +158,7 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
     // Enforce per-plan mailbox cap — advertised on the pricing page but
     // previously never checked here, unlike every other plan-gated resource.
     const mailboxLimit = getMailboxLimit(request.apiKey.plan);
-    const existingCount = await prisma.mailbox.count({ where: { apiKeyId } });
+    const existingCount = await withTenant(apiKeyId, (tx) => tx.mailbox.count({ where: { apiKeyId } }));
     if (existingCount >= mailboxLimit) {
       throw Errors.validationFailed({
         limit: `Your ${request.apiKey.plan ?? 'free'} plan allows ${mailboxLimit} mailboxes. Delete some or upgrade to add more.`,
@@ -170,7 +179,7 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
       lastErrorMsg = smtpResult.ok ? null : (smtpResult.error ?? 'SMTP test failed');
     }
 
-    const mailbox = await prisma.mailbox.create({
+    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.create({
       data: {
         apiKeyId, type, host: host ?? null, port: port ?? null, username,
         passwordEnc, dailyLimit: daily_limit,
@@ -178,18 +187,18 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
         status, lastErrorMsg, lastCheckedAt: host && passwordEnc ? new Date() : null,
       },
       select: { id: true, type: true, host: true, port: true, username: true, dailyLimit: true, status: true, lastErrorMsg: true, createdAt: true },
-    });
+    }));
     return reply.status(201).send(mailbox);
   });
 
   // GET /v1/mailboxes
   fastify.get('/mailboxes', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const apiKeyId = request.apiKey.id;
-    const mailboxes = await prisma.mailbox.findMany({
+    const mailboxes = await withTenant(apiKeyId, (tx) => tx.mailbox.findMany({
       where: { apiKeyId },
       orderBy: { createdAt: 'desc' },
       select: { id: true, type: true, host: true, username: true, dailyLimit: true, sentToday: true, status: true, lastErrorMsg: true, warmupConfig: true, createdAt: true, oauthTokenEnc: true },
-    });
+    }));
     // oauthTokenEnc is an encrypted blob — never send it to the client, only
     // whether one exists, so the dashboard knows to hide the password field.
     const data = mailboxes.map(({ oauthTokenEnc, ...rest }) => ({ ...rest, connectedViaOAuth: oauthTokenEnc !== null }));
@@ -200,10 +209,10 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/mailboxes/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const mailbox = await prisma.mailbox.findFirst({
+    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({
       where: { id, apiKeyId },
       select: { id: true, type: true, host: true, port: true, username: true, dailyLimit: true, sentToday: true, sendDelayMinMs: true, sendDelayMaxMs: true, status: true, lastErrorMsg: true, lastCheckedAt: true, warmupConfig: true, createdAt: true, oauthTokenEnc: true },
-    });
+    }));
     if (!mailbox) throw Errors.notFound('Mailbox not found.');
     const { oauthTokenEnc, ...rest } = mailbox;
     return reply.status(200).send({ ...rest, connectedViaOAuth: oauthTokenEnc !== null });
@@ -213,9 +222,11 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.delete('/mailboxes/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const mailbox = await prisma.mailbox.findFirst({ where: { id, apiKeyId } });
-    if (!mailbox) throw Errors.notFound('Mailbox not found.');
-    await prisma.mailbox.delete({ where: { id } });
+    await withTenant(apiKeyId, async (tx) => {
+      const mailbox = await tx.mailbox.findFirst({ where: { id, apiKeyId } });
+      if (!mailbox) throw Errors.notFound('Mailbox not found.');
+      await tx.mailbox.delete({ where: { id } });
+    });
     return reply.status(200).send({ deleted: true, id });
   });
 
@@ -223,11 +234,11 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/mailboxes/:id/test', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const mailbox = await prisma.mailbox.findFirst({ where: { id, apiKeyId } });
+    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({ where: { id, apiKeyId } }));
     if (!mailbox) throw Errors.notFound('Mailbox not found.');
 
     if (!mailbox.host || !(mailbox.passwordEnc || mailbox.oauthTokenEnc)) {
-      await prisma.mailbox.update({ where: { id }, data: { status: 'error', lastErrorMsg: 'Missing host or credentials' } });
+      await withTenant(apiKeyId, (tx) => tx.mailbox.update({ where: { id }, data: { status: 'error', lastErrorMsg: 'Missing host or credentials' } }));
       return reply.status(200).send({ ok: false, error: 'Missing SMTP host or credentials' });
     }
 
@@ -252,7 +263,7 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
       oauthTokenEnc: mailbox.oauthTokenEnc,
     });
 
-    await prisma.mailbox.update({
+    await withTenant(apiKeyId, (tx) => tx.mailbox.update({
       where: { id },
       data: {
         status: smtpResult.ok ? 'active' : 'error',
@@ -261,7 +272,7 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
           : (smtpResult.error ?? 'SMTP test failed'),
         lastCheckedAt: new Date(),
       },
-    });
+    }));
     return reply.status(200).send({
       ok: smtpResult.ok,
       error: smtpResult.error,
@@ -277,7 +288,7 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = warmupSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const mailbox = await prisma.mailbox.findFirst({ where: { id, apiKeyId } });
+    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({ where: { id, apiKeyId } }));
     if (!mailbox) throw Errors.notFound('Mailbox not found.');
 
     const { target_per_day, ramp_up_days, pool_tier } = parsed.data;
@@ -294,7 +305,7 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.delete('/mailboxes/:id/warmup', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const mailbox = await prisma.mailbox.findFirst({ where: { id, apiKeyId } });
+    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({ where: { id, apiKeyId } }));
     if (!mailbox) throw Errors.notFound('Mailbox not found.');
     await prisma.warmupConfig.update({ where: { mailboxId: id }, data: { enabled: false } });
     return reply.status(200).send({ disabled: true });
@@ -304,7 +315,7 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/mailboxes/:id/warmup', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const mailbox = await prisma.mailbox.findFirst({ where: { id, apiKeyId }, include: { warmupConfig: true } });
+    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({ where: { id, apiKeyId }, include: { warmupConfig: true } }));
     if (!mailbox) throw Errors.notFound('Mailbox not found.');
     if (!mailbox.warmupConfig) return reply.status(200).send({ enabled: false });
 

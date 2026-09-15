@@ -9,6 +9,7 @@ import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
 import { detectESP } from '../../lib/espMatch.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Prisma } from '@prisma/client';
 
 const GROWTH_PLANS = new Set(['growth', 'scale']);
@@ -257,7 +258,7 @@ export async function runLeadsQuery(apiKeyId: string, params: LeadsQueryParams) 
     ];
   }
 
-  return prisma.lead.findMany({
+  return withTenant(apiKeyId, (tx) => tx.lead.findMany({
     where,
     orderBy: { [params.sort_by]: params.sort_dir },
     take: params.limit,
@@ -265,7 +266,7 @@ export async function runLeadsQuery(apiKeyId: string, params: LeadsQueryParams) 
       id: true, email: true, firstName: true, lastName: true, company: true, title: true,
       status: true, tags: true, repliedAt: true, createdAt: true, updatedAt: true,
     },
-  });
+  }));
 }
 
 export function summarizeLeadsResult(params: LeadsQueryParams, count: number): string {

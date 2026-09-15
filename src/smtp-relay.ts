@@ -17,6 +17,7 @@ import SMTPServer from 'smtp-server';
 import { simpleParser } from 'mailparser';
 import { prisma } from './lib/prisma.js';
 import { logger } from './lib/logger.js';
+import { withTenant, withRlsBypass } from './lib/tenantContext.js';
 import { hashApiKey } from './lib/crypto.js';
 import { sendViaSes, isSesConfigured, type AttachmentInput } from './lib/ses.js';
 import { getSendLimit, incrementSendUsageBy } from './plugins/usageMeter.js';
@@ -135,7 +136,10 @@ const server = new SMTPServer.SMTPServer({
           let sentCount = 0;
 
           for (const recipient of to) {
-            const suppressed = await prisma.suppression.findUnique({ where: { email: recipient } });
+            // withRlsBypass, not withTenant: Suppression is deliberately
+            // global (see schema.prisma) — a bounce/complaint under any
+            // account still blocks this relay send.
+            const suppressed = await withRlsBypass((tx) => tx.suppression.findUnique({ where: { email: recipient } }));
             if (suppressed) {
               logger.info({ email: recipient }, 'SMTP relay: skipping suppressed recipient');
               continue;
@@ -161,12 +165,12 @@ const server = new SMTPServer.SMTPServer({
             // find it — same reason campaigns and sequences needed this:
             // no SendMessage row means no automatic suppression and no
             // closed-loop verification correction for anything sent here.
-            await prisma.sendMessage.create({
+            await withTenant(user.apiKeyId, (tx) => tx.sendMessage.create({
               data: {
                 apiKeyId: user.apiKeyId, from, to: recipient, subject,
                 sesMessageId, status: 'sent', sentAt: new Date(),
               },
-            }).catch((err) => {
+            })).catch((err) => {
               logger.warn({ err, email: recipient }, 'SMTP relay: failed to register send for bounce tracking (non-fatal)');
             });
 

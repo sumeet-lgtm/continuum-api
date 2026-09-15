@@ -26,6 +26,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { logger } from '../../lib/logger.js';
 
 // ─── Normalised event schema ──────────────────────────────────────────────────
@@ -259,11 +260,11 @@ async function executeRule(apiKeyId: string, connector: string, normalized: Norm
   }
 
   if (rule.action === 'enroll_sequence' && rule.sequence_id && normalized.customer_email) {
-    await prisma.sequenceEnrollment.upsert({
-      where:  { sequenceId_email: { sequenceId: rule.sequence_id, email: normalized.customer_email } },
-      create: { sequenceId: rule.sequence_id, email: normalized.customer_email, status: 'active', nextSendAt: new Date(), variables: normalized.metadata as Parameters<typeof prisma.sequenceEnrollment.create>[0]['data']['variables'] },
+    await withTenant(apiKeyId, (tx) => tx.sequenceEnrollment.upsert({
+      where:  { sequenceId_email: { sequenceId: rule.sequence_id!, email: normalized.customer_email! } },
+      create: { sequenceId: rule.sequence_id!, email: normalized.customer_email!, status: 'active', nextSendAt: new Date(), variables: normalized.metadata as Parameters<typeof prisma.sequenceEnrollment.create>[0]['data']['variables'] },
       update: {},
-    });
+    }));
     return { status: 'enrolled' };
   }
 

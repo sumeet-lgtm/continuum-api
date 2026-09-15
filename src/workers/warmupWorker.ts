@@ -6,6 +6,7 @@ import { decryptValue } from '../lib/crypto.js';
 import { logger } from '../lib/logger.js';
 import { config } from '../config.js';
 import { deriveImapHost, IMAP_PORT } from '../lib/imapHost.js';
+import { withTenant } from '../lib/tenantContext.js';
 
 interface WarmupTickPayload {
   tick: true;
@@ -217,7 +218,7 @@ export async function processWarmupTick(): Promise<void> {
 
     // Reset sentToday if it's a new day
     if (mailbox.sentTodayResetAt < today) {
-      await prisma.mailbox.update({ where: { id: mailbox.id }, data: { sentToday: 0, sentTodayResetAt: today } });
+      await withTenant(mailbox.apiKeyId, (tx) => tx.mailbox.update({ where: { id: mailbox.id }, data: { sentToday: 0, sentTodayResetAt: today } }));
       mailbox.sentToday = 0;
     }
 
@@ -266,10 +267,10 @@ export async function processWarmupTick(): Promise<void> {
           },
         );
 
-        await prisma.mailbox.update({
+        await withTenant(mailbox.apiKeyId, (tx) => tx.mailbox.update({
           where: { id: mailbox.id },
           data: { sentToday: { increment: 1 } },
-        });
+        }));
 
         // Auto-open/reply in the target mailbox (standard and premium)
         if (poolTier !== 'basic' && target.mailbox.host) {
@@ -287,10 +288,10 @@ export async function processWarmupTick(): Promise<void> {
         await new Promise(r => setTimeout(r, 30000 + Math.random() * 60000));
       } catch (err) {
         logger.error({ err, mailboxId: mailbox.id, targetMailboxId: target.mailboxId }, 'Warmup send failed');
-        await prisma.mailbox.update({
+        await withTenant(mailbox.apiKeyId, (tx) => tx.mailbox.update({
           where: { id: mailbox.id },
           data: { lastErrorMsg: err instanceof Error ? err.message : 'SMTP warmup error' },
-        }).catch(() => {});
+        })).catch(() => {});
       }
     }
 

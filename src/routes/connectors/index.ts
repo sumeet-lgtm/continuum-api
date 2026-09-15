@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { verifyEmail } from '../../engine/index.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
@@ -44,10 +45,10 @@ export async function connectorRoutes(fastify: FastifyInstance): Promise<void> {
       // Run verification + check for existing lead in parallel
       const [verResult, existingLead] = await Promise.all([
         verifyEmail({ email, apiKeyId, bulkJobId: undefined, sourceIp: undefined }),
-        prisma.lead.findUnique({
+        withTenant(apiKeyId, (tx) => tx.lead.findUnique({
           where: { apiKeyId_email: { apiKeyId, email } },
           select: { id: true, firstName: true, lastName: true, company: true, title: true, status: true, customVars: true },
-        }),
+        })),
       ]);
 
       // Clay expects flat key-value output for column mapping
@@ -148,28 +149,32 @@ export async function connectorRoutes(fastify: FastifyInstance): Promise<void> {
         }
 
         try {
-          const lead = await prisma.lead.upsert({
-            where:  { apiKeyId_email: { apiKeyId, email } },
-            create: { apiKeyId, email, firstName: firstName ?? null, lastName: lastName ?? null, company: company ?? null, title: title ?? null, customVars: customVars as Prisma.InputJsonValue },
-            update: {
-              ...(firstName ? { firstName } : {}),
-              ...(lastName  ? { lastName }  : {}),
-              ...(company   ? { company }   : {}),
-              ...(title     ? { title }     : {}),
-              customVars: customVars as Prisma.InputJsonValue,
-            },
-          });
+          const lead = await withTenant(apiKeyId, async (tx) => {
+            const lead = await tx.lead.upsert({
+              where:  { apiKeyId_email: { apiKeyId, email } },
+              create: { apiKeyId, email, firstName: firstName ?? null, lastName: lastName ?? null, company: company ?? null, title: title ?? null, customVars: customVars as Prisma.InputJsonValue },
+              update: {
+                ...(firstName ? { firstName } : {}),
+                ...(lastName  ? { lastName }  : {}),
+                ...(company   ? { company }   : {}),
+                ...(title     ? { title }     : {}),
+                customVars: customVars as Prisma.InputJsonValue,
+              },
+            });
 
-          if (sequenceId) {
-            const seq = await prisma.sequence.findFirst({ where: { id: sequenceId, apiKeyId } });
-            if (seq) {
-              await prisma.sequenceEnrollment.upsert({
-                where: { sequenceId_email: { sequenceId, email } },
-                create: { sequenceId, email, status: 'active', nextSendAt: new Date(), variables: customVars as Prisma.InputJsonValue },
-                update: {},
-              });
+            if (sequenceId) {
+              const seq = await tx.sequence.findFirst({ where: { id: sequenceId, apiKeyId } });
+              if (seq) {
+                await tx.sequenceEnrollment.upsert({
+                  where: { sequenceId_email: { sequenceId, email } },
+                  create: { sequenceId, email, status: 'active', nextSendAt: new Date(), variables: customVars as Prisma.InputJsonValue },
+                  update: {},
+                });
+              }
             }
-          }
+
+            return lead;
+          });
 
           results.push({ email: lead.email, status: 'created' });
         } catch (err) {
@@ -233,25 +238,29 @@ export async function connectorRoutes(fastify: FastifyInstance): Promise<void> {
         if (d.country)      customVars['country']  = d.country;
 
         try {
-          const lead = await prisma.lead.upsert({
-            where:  { apiKeyId_email: { apiKeyId, email: d.email } },
-            create: { apiKeyId, email: d.email, firstName: d.first_name ?? null, lastName: d.last_name ?? null, company: d.organization_name ?? null, title: d.title ?? null, customVars: customVars as Prisma.InputJsonValue },
-            update: {
-              ...(d.first_name        ? { firstName: d.first_name }         : {}),
-              ...(d.last_name         ? { lastName:  d.last_name }          : {}),
-              ...(d.organization_name ? { company:   d.organization_name }  : {}),
-              ...(d.title             ? { title:     d.title }              : {}),
-              customVars: customVars as Prisma.InputJsonValue,
-            },
-          });
-
-          if (sequenceId) {
-            await prisma.sequenceEnrollment.upsert({
-              where: { sequenceId_email: { sequenceId, email: lead.email } },
-              create: { sequenceId, email: lead.email, status: 'active', nextSendAt: new Date() },
-              update: {},
+          const lead = await withTenant(apiKeyId, async (tx) => {
+            const lead = await tx.lead.upsert({
+              where:  { apiKeyId_email: { apiKeyId, email: d.email } },
+              create: { apiKeyId, email: d.email, firstName: d.first_name ?? null, lastName: d.last_name ?? null, company: d.organization_name ?? null, title: d.title ?? null, customVars: customVars as Prisma.InputJsonValue },
+              update: {
+                ...(d.first_name        ? { firstName: d.first_name }         : {}),
+                ...(d.last_name         ? { lastName:  d.last_name }          : {}),
+                ...(d.organization_name ? { company:   d.organization_name }  : {}),
+                ...(d.title             ? { title:     d.title }              : {}),
+                customVars: customVars as Prisma.InputJsonValue,
+              },
             });
-          }
+
+            if (sequenceId) {
+              await tx.sequenceEnrollment.upsert({
+                where: { sequenceId_email: { sequenceId, email: lead.email } },
+                create: { sequenceId, email: lead.email, status: 'active', nextSendAt: new Date() },
+                update: {},
+              });
+            }
+
+            return lead;
+          });
 
           results.push({ email: lead.email, status: 'created' });
         } catch {
@@ -315,33 +324,35 @@ export async function connectorRoutes(fastify: FastifyInstance): Promise<void> {
         }
 
         try {
-          if (action === 'create_lead') {
-            const lead = await prisma.lead.upsert({
-              where:  { apiKeyId_email: { apiKeyId, email } },
-              create: { apiKeyId, email, firstName, lastName, company, title, customVars: customVars as Prisma.InputJsonValue },
-              update: { ...(firstName ? { firstName } : {}), ...(lastName ? { lastName } : {}), ...(company ? { company } : {}), ...(title ? { title } : {}), customVars: customVars as Prisma.InputJsonValue },
-            });
+          await withTenant(apiKeyId, async (tx) => {
+            if (action === 'create_lead') {
+              const lead = await tx.lead.upsert({
+                where:  { apiKeyId_email: { apiKeyId, email } },
+                create: { apiKeyId, email, firstName, lastName, company, title, customVars: customVars as Prisma.InputJsonValue },
+                update: { ...(firstName ? { firstName } : {}), ...(lastName ? { lastName } : {}), ...(company ? { company } : {}), ...(title ? { title } : {}), customVars: customVars as Prisma.InputJsonValue },
+              });
 
-            if (sequence_id) {
-              await prisma.sequenceEnrollment.upsert({
-                where:  { sequenceId_email: { sequenceId: sequence_id, email: lead.email } },
-                create: { sequenceId: sequence_id, email: lead.email, status: 'active', nextSendAt: new Date(), variables: customVars as Prisma.InputJsonValue },
+              if (sequence_id) {
+                await tx.sequenceEnrollment.upsert({
+                  where:  { sequenceId_email: { sequenceId: sequence_id, email: lead.email } },
+                  create: { sequenceId: sequence_id, email: lead.email, status: 'active', nextSendAt: new Date(), variables: customVars as Prisma.InputJsonValue },
+                  update: {},
+                });
+              }
+            } else if (action === 'subscribe' && list_id) {
+              const contact = await tx.contact.upsert({
+                where:  { apiKeyId_email: { apiKeyId, email } },
+                create: { apiKeyId, email, firstName, lastName, customFields: customVars as Prisma.InputJsonValue },
                 update: {},
+                select: { id: true },
+              });
+              await tx.contactListMembership.upsert({
+                where:  { contactId_listId: { contactId: contact.id, listId: list_id } },
+                create: { contactId: contact.id, listId: list_id, status: 'subscribed' },
+                update: { status: 'subscribed', unsubscribedAt: null },
               });
             }
-          } else if (action === 'subscribe' && list_id) {
-            const contact = await prisma.contact.upsert({
-              where:  { apiKeyId_email: { apiKeyId, email } },
-              create: { apiKeyId, email, firstName, lastName, customFields: customVars as Prisma.InputJsonValue },
-              update: {},
-              select: { id: true },
-            });
-            await prisma.contactListMembership.upsert({
-              where:  { contactId_listId: { contactId: contact.id, listId: list_id } },
-              create: { contactId: contact.id, listId: list_id, status: 'subscribed' },
-              update: { status: 'subscribed', unsubscribedAt: null },
-            });
-          }
+          });
           created++;
         } catch {
           errors++;

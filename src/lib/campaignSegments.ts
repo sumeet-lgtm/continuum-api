@@ -11,7 +11,7 @@
  * best signal actually available for its real list rather than only ever
  * seeing a bare email address.
  */
-import { prisma } from './prisma.js';
+import { withTenant } from './tenantContext.js';
 
 export interface ContactSignal {
   email: string;
@@ -75,52 +75,54 @@ export async function deriveListSegments(
   listIds: string[],
   maxSegments = 3,
 ): Promise<{ totalContacts: number; segments: CampaignSegment[] }> {
-  const memberships = await prisma.contactListMembership.findMany({
-    where: { listId: { in: listIds }, status: 'subscribed', list: { apiKeyId } },
-    include: { contact: { select: { email: true, firstName: true, customFields: true } } },
-  });
-
-  const seen = new Set<string>();
-  const rawContacts = memberships
-    .map((m) => m.contact)
-    .filter((c) => {
-      if (seen.has(c.email)) return false;
-      seen.add(c.email);
-      return true;
+  return withTenant(apiKeyId, async (tx) => {
+    const memberships = await tx.contactListMembership.findMany({
+      where: { listId: { in: listIds }, status: 'subscribed', list: { apiKeyId } },
+      include: { contact: { select: { email: true, firstName: true, customFields: true } } },
     });
 
-  const totalContacts = rawContacts.length;
-  if (totalContacts === 0) return { totalContacts: 0, segments: [] };
+    const seen = new Set<string>();
+    const rawContacts = memberships
+      .map((m) => m.contact)
+      .filter((c) => {
+        if (seen.has(c.email)) return false;
+        seen.add(c.email);
+        return true;
+      });
 
-  // Enrich by email against Lead/Account where available — this is what
-  // turns "we have an email list" into "we know 40% of these are security
-  // engineering titles at 200-1000 person companies," which is the entire
-  // point: segmentation grounded in the real list, not a guess.
-  const emails = rawContacts.map((c) => c.email);
-  const leads = await prisma.lead.findMany({
-    where: { apiKeyId, email: { in: emails } },
-    select: { email: true, title: true, company: true, account: { select: { industry: true, employees: true } } },
+    const totalContacts = rawContacts.length;
+    if (totalContacts === 0) return { totalContacts: 0, segments: [] };
+
+    // Enrich by email against Lead/Account where available — this is what
+    // turns "we have an email list" into "we know 40% of these are security
+    // engineering titles at 200-1000 person companies," which is the entire
+    // point: segmentation grounded in the real list, not a guess.
+    const emails = rawContacts.map((c) => c.email);
+    const leads = await tx.lead.findMany({
+      where: { apiKeyId, email: { in: emails } },
+      select: { email: true, title: true, company: true, account: { select: { industry: true, employees: true } } },
+    });
+    const leadByEmail = new Map(leads.map((l) => [l.email.toLowerCase(), l]));
+
+    const signals: ContactSignal[] = rawContacts.map((c) => {
+      const cf = c.customFields as Record<string, unknown> | null;
+      const lead = leadByEmail.get(c.email.toLowerCase());
+      return {
+        email: c.email,
+        firstName: c.firstName,
+        title: lead?.title ?? pickField(cf, TITLE_KEYS),
+        company: lead?.company ?? pickField(cf, COMPANY_KEYS),
+        industry: lead?.account?.industry ?? pickField(cf, INDUSTRY_KEYS),
+        employees: lead?.account?.employees ?? (() => {
+          const raw = pickField(cf, EMPLOYEES_KEYS);
+          const n = raw ? parseInt(raw, 10) : NaN;
+          return Number.isFinite(n) ? n : null;
+        })(),
+      };
+    });
+
+    return { totalContacts, segments: clusterSignals(signals, totalContacts, maxSegments) };
   });
-  const leadByEmail = new Map(leads.map((l) => [l.email.toLowerCase(), l]));
-
-  const signals: ContactSignal[] = rawContacts.map((c) => {
-    const cf = c.customFields as Record<string, unknown> | null;
-    const lead = leadByEmail.get(c.email.toLowerCase());
-    return {
-      email: c.email,
-      firstName: c.firstName,
-      title: lead?.title ?? pickField(cf, TITLE_KEYS),
-      company: lead?.company ?? pickField(cf, COMPANY_KEYS),
-      industry: lead?.account?.industry ?? pickField(cf, INDUSTRY_KEYS),
-      employees: lead?.account?.employees ?? (() => {
-        const raw = pickField(cf, EMPLOYEES_KEYS);
-        const n = raw ? parseInt(raw, 10) : NaN;
-        return Number.isFinite(n) ? n : null;
-      })(),
-    };
-  });
-
-  return { totalContacts, segments: clusterSignals(signals, totalContacts, maxSegments) };
 }
 
 /**

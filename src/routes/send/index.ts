@@ -17,6 +17,7 @@ import { processTemplate } from '../../lib/spintax.js';
 import { compileMjml } from '../../lib/mjml.js';
 import { sendQueue } from '../../lib/queue.js';
 import type { SendJobPayload } from '../../types/job.js';
+import { withTenant } from '../../lib/tenantContext.js';
 
 // ─── Input schema ─────────────────────────────────────────────────────────────
 
@@ -119,17 +120,17 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
 
       // ── Idempotency check ──────────────────────────────────────────────────────
       if (idempotency_key) {
-        const existing = await prisma.sendMessage.findUnique({
+        const existing = await withTenant(apiKeyId, (tx) => tx.sendMessage.findUnique({
           where: { idempotencyKey: idempotency_key },
           select: { id: true, sesMessageId: true, status: true },
-        });
+        }));
         if (existing) {
           return reply.status(200).send({ id: existing.id, sesMessageId: existing.sesMessageId, status: existing.status, idempotent: true });
         }
       }
 
       // ── Suppression check ──────────────────────────────────────────────────────
-      const suppressed = await prisma.suppression.findUnique({ where: { email: to } });
+      const suppressed = await withTenant(apiKeyId, (tx) => tx.suppression.findUnique({ where: { email: to } }));
       if (suppressed) {
         throw Errors.forbidden(`${to} is on the suppression list (${suppressed.reason}) and cannot be sent to.`);
       }
@@ -187,7 +188,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
 
         if (!isSendTransportConfigured()) throw Errors.serviceUnavailable('Send (no transport configured)');
 
-        const record = await prisma.sendMessage.create({
+        const record = await withTenant(apiKeyId, (tx) => tx.sendMessage.create({
           data: {
             apiKeyId, to, from: resolvedFrom, subject,
             replyTo: Array.isArray(reply_to) ? reply_to.join(', ') : (reply_to ?? null),
@@ -198,7 +199,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
             tags: tags ?? {},
           },
           select: { id: true, createdAt: true },
-        });
+        }));
 
         await sendQueue.add('send', {
           sendMessageId: record.id, to, subject, htmlBody: rawHtml, textBody,
@@ -241,7 +242,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       // ── Create DB record first so we get the real ID for tracking tokens ────────
       let record: { id: string; createdAt: Date };
       try {
-        record = await prisma.sendMessage.create({
+        record = await withTenant(apiKeyId, (tx) => tx.sendMessage.create({
           data: {
             apiKeyId, to, from, subject,
             replyTo: Array.isArray(reply_to) ? reply_to.join(', ') : (reply_to ?? null),
@@ -254,7 +255,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
             trackingToken: (trackOpens || trackClicks) ? 'pending' : null,
           },
           select: { id: true, createdAt: true },
-        });
+        }));
       } catch (err) {
         logger.error({ err, to, apiKeyId }, 'Failed to pre-create SendMessage');
         record = { id: `ephemeral_${Date.now()}`, createdAt: new Date() };
@@ -299,14 +300,14 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
 
       // ── Update DB record with send result ─────────────────────────────────────────
       try {
-        await prisma.sendMessage.update({
+        await withTenant(apiKeyId, (tx) => tx.sendMessage.update({
           where: { id: record.id },
           data: {
             sesMessageId, smtp2goMessageId, status, errorMessage,
             sentAt: status === 'sent' ? new Date() : null,
             trackingToken: (trackOpens || trackClicks) ? record.id : null,
           },
-        });
+        }));
       } catch (err) {
         logger.error({ err, to, apiKeyId, sesMessageId, smtp2goMessageId, status }, 'Failed to update SendMessage after send');
       }
@@ -350,9 +351,9 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         scheduled_at?: string;
       };
 
-      const msg = await prisma.sendMessage.findFirst({
+      const msg = await withTenant(apiKeyId, (tx) => tx.sendMessage.findFirst({
         where: { id, apiKeyId, status: 'scheduled' },
-      });
+      }));
       if (!msg) throw Errors.notFound('Scheduled message not found or not in scheduled state.');
 
       if (body.scheduled_at !== undefined) {
@@ -388,11 +389,11 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       if (body.subject !== undefined) dbUpdates['subject'] = body.subject;
       if (body.scheduled_at !== undefined) dbUpdates['scheduledAt'] = newScheduledAt;
 
-      const updated = await prisma.sendMessage.update({
+      const updated = await withTenant(apiKeyId, (tx) => tx.sendMessage.update({
         where: { id },
         data: dbUpdates as never,
         select: { id: true, subject: true, scheduledAt: true, status: true },
-      });
+      }));
 
       return reply.status(200).send({ ...updated, scheduled_at: updated.scheduledAt });
     },
@@ -406,19 +407,19 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const msg = await prisma.sendMessage.findFirst({
+      const msg = await withTenant(apiKeyId, (tx) => tx.sendMessage.findFirst({
         where: { id, apiKeyId, status: 'scheduled' },
-      });
+      }));
       if (!msg) throw Errors.notFound('Scheduled message not found.');
 
       // Remove from BullMQ
       const job = await sendQueue.getJob(id);
       if (job) await job.remove();
 
-      await prisma.sendMessage.update({
+      await withTenant(apiKeyId, (tx) => tx.sendMessage.update({
         where: { id },
         data: { status: 'cancelled' },
-      });
+      }));
 
       return reply.status(200).send({ cancelled: true, id });
     },

@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { config } from '../config.js';
+import { withTenant } from '../lib/tenantContext.js';
 
 const sesClient = new SESv2Client({ region: config.AWS_REGION ?? 'us-east-1' });
 
@@ -37,6 +38,9 @@ export async function runAutomationWorker(): Promise<void> {
 
   for (const enrollment of enrollments) {
     const step = enrollment.automation.steps[enrollment.currentStep];
+    // Known immediately from the sweep row's included automation relation —
+    // apiKeyId is a required field on Automation, so this is always present.
+    const apiKeyId = enrollment.automation.apiKeyId;
 
     if (!step) {
       // All steps done — mark completed
@@ -48,7 +52,7 @@ export async function runAutomationWorker(): Promise<void> {
     }
 
     // Check suppression
-    const suppressed = await prisma.suppression.findUnique({ where: { email: enrollment.email } });
+    const suppressed = await withTenant(apiKeyId, (tx) => tx.suppression.findUnique({ where: { email: enrollment.email } }));
     if (suppressed) {
       await prisma.automationEnrollment.update({
         where: { id: enrollment.id },
@@ -81,9 +85,8 @@ export async function runAutomationWorker(): Promise<void> {
       }));
 
       // Persist SendMessage record so open/click tracking + bounce handling works
-      const apiKeyId = enrollment.automation.apiKeyId;
       if (sesResp.MessageId && apiKeyId) {
-        await prisma.sendMessage.create({
+        await withTenant(apiKeyId, (tx) => tx.sendMessage.create({
           data: {
             apiKeyId,
             sesMessageId: sesResp.MessageId,
@@ -92,7 +95,7 @@ export async function runAutomationWorker(): Promise<void> {
             subject,
             status: 'sent',
           },
-        }).catch(() => { /* non-fatal — tracking optional */ });
+        })).catch(() => { /* non-fatal — tracking optional */ });
       }
 
       logger.info({ enrollmentId: enrollment.id, email: enrollment.email, stepOrder: step.stepOrder }, 'Automation step sent');

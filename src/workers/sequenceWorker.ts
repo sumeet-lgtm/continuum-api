@@ -8,6 +8,7 @@ import { generateOpenToken, generateClickToken, injectTracking } from '../lib/tr
 import { processTemplate } from '../lib/spintax.js';
 import { detectESP, rankMailboxesByESP } from '../lib/espMatch.js';
 import { logger } from '../lib/logger.js';
+import { withTenant, withRlsBypass } from '../lib/tenantContext.js';
 
 interface SequenceTickPayload {
   tick: true;
@@ -90,8 +91,9 @@ export async function processSequenceTick(): Promise<void> {
   // Every tenant's enrollments due for their next send; every downstream
   // read/write below is scoped via this row's own enrollment.sequence.apiKeyId
   // (see the lead/mailbox/sendMessage lookups further down in this function).
-  // tenant-sweep: see comment above
-  const dueEnrollments = await prisma.sequenceEnrollment.findMany({
+  // withRlsBypass, not withTenant: this sweep must see every tenant's due
+  // enrollments (and their sequences, also RLS-covered), not just one.
+  const dueEnrollments = await withRlsBypass((tx) => tx.sequenceEnrollment.findMany({
     where: {
       status: 'active',
       nextSendAt: { lte: now },
@@ -104,7 +106,7 @@ export async function processSequenceTick(): Promise<void> {
       },
     },
     take: 100, // Process 100 per tick
-  });
+  }));
   logger.info({ dueCount: dueEnrollments.length }, 'Sequence tick found due enrollments');
 
   // Suppression is shared across every send surface (transactional, campaigns,
@@ -114,9 +116,10 @@ export async function processSequenceTick(): Promise<void> {
   // cold-outreach steps just because this worker never checked. Batched once
   // per tick rather than per-enrollment, same pattern as the campaign worker.
   const dueEmails = [...new Set(dueEnrollments.map(e => e.email))];
-  // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
+  // withRlsBypass, not withTenant: Suppression is deliberately global
+  // (see schema.prisma) — not scoped by apiKeyId.
   const suppressions = dueEmails.length > 0
-    ? await prisma.suppression.findMany({ where: { email: { in: dueEmails } }, select: { email: true, reason: true } })
+    ? await withRlsBypass((tx) => tx.suppression.findMany({ where: { email: { in: dueEmails } }, select: { email: true, reason: true } }))
     : [];
   const suppressedMap = new Map(suppressions.map(s => [s.email, s.reason]));
 
@@ -126,10 +129,10 @@ export async function processSequenceTick(): Promise<void> {
 
     const suppressionReason = suppressedMap.get(enrollment.email);
     if (suppressionReason) {
-      await prisma.sequenceEnrollment.update({
+      await withTenant(sequence.apiKeyId, (tx) => tx.sequenceEnrollment.update({
         where: { id: enrollment.id },
         data: { status: suppressionReason === 'unsubscribed' ? 'unsubscribed' : 'bounced', completedAt: now },
-      });
+      }));
       continue;
     }
 
@@ -145,16 +148,18 @@ export async function processSequenceTick(): Promise<void> {
       const openTrackId = `${sequence.id}_step${enrollment.currentStep - 1}_${enrollment.email}`;
       const opened = await prisma.trackingEvent.findFirst({ where: { sendMessageId: openTrackId, type: 'open', isLikelyBot: false } });
       if (opened) {
-        await prisma.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } });
-        // Trigger OPENED subsequences
-        const openedSubseqs = await prisma.sequence.findMany({ where: { parentSequenceId: sequence.id, triggerEvent: 'OPENED' }, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
-        for (const sub of openedSubseqs) {
-          const exists = await prisma.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: sub.id, email: enrollment.email } } });
-          if (!exists) {
-            const delay = (sub.triggerDelayDays ?? 0) * 24 * 60 * 60 * 1000;
-            await prisma.sequenceEnrollment.create({ data: { sequenceId: sub.id, email: enrollment.email, variables: enrollment.variables ?? {}, nextSendAt: sub.steps.length > 0 ? new Date(Date.now() + delay) : null, status: 'active', currentStep: 0 } }).catch(() => {});
+        await withTenant(sequence.apiKeyId, async (tx) => {
+          await tx.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } });
+          // Trigger OPENED subsequences
+          const openedSubseqs = await tx.sequence.findMany({ where: { parentSequenceId: sequence.id, triggerEvent: 'OPENED' }, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
+          for (const sub of openedSubseqs) {
+            const exists = await tx.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: sub.id, email: enrollment.email } } });
+            if (!exists) {
+              const delay = (sub.triggerDelayDays ?? 0) * 24 * 60 * 60 * 1000;
+              await tx.sequenceEnrollment.create({ data: { sequenceId: sub.id, email: enrollment.email, variables: enrollment.variables ?? {}, nextSendAt: sub.steps.length > 0 ? new Date(Date.now() + delay) : null, status: 'active', currentStep: 0 } }).catch(() => {});
+            }
           }
-        }
+        });
         continue;
       }
     }
@@ -165,15 +170,17 @@ export async function processSequenceTick(): Promise<void> {
       const clickTrackId = `${sequence.id}_step${enrollment.currentStep - 1}_${enrollment.email}`;
       const clicked = await prisma.trackingEvent.findFirst({ where: { sendMessageId: clickTrackId, type: 'click', isLikelyBot: false } });
       if (clicked) {
-        await prisma.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } });
-        const clickedSubseqs = await prisma.sequence.findMany({ where: { parentSequenceId: sequence.id, triggerEvent: 'CLICKED' }, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
-        for (const sub of clickedSubseqs) {
-          const exists = await prisma.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: sub.id, email: enrollment.email } } });
-          if (!exists) {
-            const delay = (sub.triggerDelayDays ?? 0) * 24 * 60 * 60 * 1000;
-            await prisma.sequenceEnrollment.create({ data: { sequenceId: sub.id, email: enrollment.email, variables: enrollment.variables ?? {}, nextSendAt: sub.steps.length > 0 ? new Date(Date.now() + delay) : null, status: 'active', currentStep: 0 } }).catch(() => {});
+        await withTenant(sequence.apiKeyId, async (tx) => {
+          await tx.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } });
+          const clickedSubseqs = await tx.sequence.findMany({ where: { parentSequenceId: sequence.id, triggerEvent: 'CLICKED' }, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
+          for (const sub of clickedSubseqs) {
+            const exists = await tx.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: sub.id, email: enrollment.email } } });
+            if (!exists) {
+              const delay = (sub.triggerDelayDays ?? 0) * 24 * 60 * 60 * 1000;
+              await tx.sequenceEnrollment.create({ data: { sequenceId: sub.id, email: enrollment.email, variables: enrollment.variables ?? {}, nextSendAt: sub.steps.length > 0 ? new Date(Date.now() + delay) : null, status: 'active', currentStep: 0 } }).catch(() => {});
+            }
           }
-        }
+        });
         continue;
       }
     }
@@ -183,16 +190,16 @@ export async function processSequenceTick(): Promise<void> {
 
     if (nextStepIndex >= steps.length) {
       // All steps done
-      await prisma.sequenceEnrollment.update({
+      await withTenant(sequence.apiKeyId, (tx) => tx.sequenceEnrollment.update({
         where: { id: enrollment.id },
         data: { status: 'completed', completedAt: now },
-      });
+      }));
       continue;
     }
 
     const step = steps[nextStepIndex];
     if (!step) {
-      await prisma.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } });
+      await withTenant(sequence.apiKeyId, (tx) => tx.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } }));
       continue;
     }
 
@@ -204,10 +211,10 @@ export async function processSequenceTick(): Promise<void> {
       const nextSendAt = nextStep
         ? new Date(now.getTime() + (nextStep.delayDays * 24 * 60 * 60 * 1000) + (nextStep.delayHours * 60 * 60 * 1000))
         : null;
-      await prisma.sequenceEnrollment.update({
+      await withTenant(sequence.apiKeyId, (tx) => tx.sequenceEnrollment.update({
         where: { id: enrollment.id },
         data: { currentStep: nextStepIndex + 1, nextSendAt },
-      });
+      }));
       continue;
     }
 
@@ -223,10 +230,10 @@ export async function processSequenceTick(): Promise<void> {
     // used to do inline.
     const stepType = (step as { type?: string }).type ?? 'email';
     if (stepType !== 'email') {
-      await prisma.sequenceEnrollment.update({
+      await withTenant(sequence.apiKeyId, (tx) => tx.sequenceEnrollment.update({
         where: { id: enrollment.id },
         data: { status: 'awaiting_manual_action' },
-      });
+      }));
       continue;
     }
 
@@ -234,10 +241,10 @@ export async function processSequenceTick(): Promise<void> {
     // {{icebreaker}}, {{company_description}}, {{pain_point}}) so they are
     // available in every sequence step template without re-generation at send time.
     const vars = enrollment.variables as Record<string, string> ?? {};
-    const lead = await prisma.lead.findFirst({
+    const lead = await withTenant(sequence.apiKeyId, (tx) => tx.lead.findFirst({
       where: { email: enrollment.email, apiKeyId: sequence.apiKeyId },
       select: { customVars: true, firstName: true, lastName: true, company: true, title: true },
-    });
+    }));
     const leadVars = (lead?.customVars as Record<string, string>) ?? {};
     const mergedVars: Record<string, string> = {
       first_name: vars['first_name'] ?? lead?.firstName ?? enrollment.email.split('@')[0] ?? 'there',
@@ -271,7 +278,7 @@ export async function processSequenceTick(): Promise<void> {
 
     // Resolve sending mailbox: prefer ESP-matched mailbox from the pool
     let selectedMailbox: { id: string; host: string | null; port: number | null; username: string; passwordEnc: string | null; oauthTokenEnc: string | null } | null = null;
-    const poolMailboxes = await prisma.mailbox.findMany({
+    const poolMailboxes = await withTenant(sequence.apiKeyId, (tx) => tx.mailbox.findMany({
       where: {
         apiKeyId: sequence.apiKeyId,
         status: 'active',
@@ -279,7 +286,7 @@ export async function processSequenceTick(): Promise<void> {
         OR: [{ passwordEnc: { not: null } }, { oauthTokenEnc: { not: null } }],
       },
       select: { id: true, type: true, host: true, port: true, username: true, passwordEnc: true, oauthTokenEnc: true, sentToday: true, dailyLimit: true },
-    });
+    }));
 
     // Only pick mailboxes that haven't hit their daily limit
     const availableMailboxes = poolMailboxes.filter(m => m.sentToday < m.dailyLimit);
@@ -335,10 +342,10 @@ export async function processSequenceTick(): Promise<void> {
         );
 
         // Update mailbox daily sent count
-        await prisma.mailbox.update({
-          where: { id: selectedMailbox.id },
+        await withTenant(sequence.apiKeyId, (tx) => tx.mailbox.update({
+          where: { id: selectedMailbox!.id },
           data: { sentToday: { increment: 1 } },
-        }).catch(() => {});
+        })).catch(() => {});
       } else {
         // Fallback: send via shared SES
         const { sesMessageId } = await sendViaSes({
@@ -352,13 +359,13 @@ export async function processSequenceTick(): Promise<void> {
         // sesMessageId, a hard bounce on a sequence step (the SES-fallback
         // path specifically — mailbox-based sends get their bounce signal
         // from IMAP instead) never reached the shared suppression list.
-        await prisma.sendMessage.create({
+        await withTenant(sequence.apiKeyId, (tx) => tx.sendMessage.create({
           data: {
             apiKeyId: sequence.apiKeyId, to: enrollment.email, from: fromAddress, subject,
             sesMessageId, status: 'sent', sentAt: new Date(),
             sequenceStepId: step.id,  // enables per-step funnel analytics
           },
-        }).catch((err) => {
+        })).catch((err) => {
           logger.warn({ err, email: enrollment.email, sequenceId: sequence.id }, 'Failed to register sequence send for bounce tracking (non-fatal)');
         });
       }
@@ -375,7 +382,7 @@ export async function processSequenceTick(): Promise<void> {
       // same sender (thread coherence — keeps the conversation in one thread
       // and avoids the "different sender" confusion Smartlead calls out).
       const shouldStoreMailbox = nextStepIndex === 0 && selectedMailbox?.id;
-      await prisma.sequenceEnrollment.update({
+      await withTenant(sequence.apiKeyId, (tx) => tx.sequenceEnrollment.update({
         where: { id: enrollment.id },
         data: {
           currentStep: nextStepIndex + 1,
@@ -383,21 +390,23 @@ export async function processSequenceTick(): Promise<void> {
           ...(shouldStoreMailbox && { mailboxId: selectedMailbox!.id }),
           ...(isLastStep && { status: 'completed', completedAt: now }),
         },
-      });
+      }));
 
       // On last step completion: trigger NOT_REPLIED_IN_DAYS / NOT_OPENED_IN_DAYS subsequences
       if (isLastStep) {
-        const notRepliedSubseqs = await prisma.sequence.findMany({
-          where: { parentSequenceId: sequence.id, triggerEvent: { in: ['NOT_REPLIED_IN_DAYS', 'NOT_OPENED_IN_DAYS'] } },
-          include: { steps: { orderBy: { stepOrder: 'asc' } } },
-        });
-        for (const sub of notRepliedSubseqs) {
-          const exists = await prisma.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: sub.id, email: enrollment.email } } });
-          if (!exists) {
-            const delay = (sub.triggerDelayDays ?? 3) * 24 * 60 * 60 * 1000;
-            await prisma.sequenceEnrollment.create({ data: { sequenceId: sub.id, email: enrollment.email, variables: enrollment.variables ?? {}, nextSendAt: sub.steps.length > 0 ? new Date(Date.now() + delay) : null, status: 'active', currentStep: 0 } }).catch(() => {});
+        await withTenant(sequence.apiKeyId, async (tx) => {
+          const notRepliedSubseqs = await tx.sequence.findMany({
+            where: { parentSequenceId: sequence.id, triggerEvent: { in: ['NOT_REPLIED_IN_DAYS', 'NOT_OPENED_IN_DAYS'] } },
+            include: { steps: { orderBy: { stepOrder: 'asc' } } },
+          });
+          for (const sub of notRepliedSubseqs) {
+            const exists = await tx.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: sub.id, email: enrollment.email } } });
+            if (!exists) {
+              const delay = (sub.triggerDelayDays ?? 3) * 24 * 60 * 60 * 1000;
+              await tx.sequenceEnrollment.create({ data: { sequenceId: sub.id, email: enrollment.email, variables: enrollment.variables ?? {}, nextSendAt: sub.steps.length > 0 ? new Date(Date.now() + delay) : null, status: 'active', currentStep: 0 } }).catch(() => {});
+            }
           }
-        }
+        });
       }
     } catch (err) {
       logger.error({ err, enrollmentId: enrollment.id, email: enrollment.email }, 'Sequence step send failed');

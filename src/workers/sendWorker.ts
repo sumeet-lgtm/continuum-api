@@ -36,6 +36,7 @@ import { incrementSendUsageBy } from '../plugins/usageMeter.js';
 import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
 import { generateUnsubToken } from '../lib/unsubscribe.js';
 import { logger } from '../lib/logger.js';
+import { withTenant } from '../lib/tenantContext.js';
 import { initSentry, installCrashReporting } from '../lib/sentry.js';
 import type { SendJobPayload } from '../types/job.js';
 import type { EmailSentPayload, EmailSendFailedPayload } from '../types/webhook.js';
@@ -49,7 +50,7 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
   const data = job.data;
   const log = logger.child({ sendMessageId: data.sendMessageId, bullJobId: job.id });
 
-  const msg = await prisma.sendMessage.findUnique({ where: { id: data.sendMessageId } });
+  const msg = await withTenant(data.apiKeyId, (tx) => tx.sendMessage.findUnique({ where: { id: data.sendMessageId } }));
   if (!msg) {
     log.warn('SendMessage record no longer exists — skipping');
     return;
@@ -63,10 +64,10 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
   }
 
   if (!isSendTransportConfigured()) {
-    await prisma.sendMessage.update({
+    await withTenant(data.apiKeyId, (tx) => tx.sendMessage.update({
       where: { id: data.sendMessageId },
       data: { status: 'failed', errorMessage: new SesNotConfiguredError().message },
-    });
+    }));
     log.error('No send transport configured — cannot send');
     return;
   }
@@ -100,13 +101,13 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
   const errorMessage = sendResult.ok ? null : sendResult.errorMessage;
   if (!sendResult.ok) log.error({ errorMessage }, 'Scheduled send failed on every configured transport');
 
-  await prisma.sendMessage.update({
+  await withTenant(data.apiKeyId, (tx) => tx.sendMessage.update({
     where: { id: data.sendMessageId },
     data: {
       sesMessageId, smtp2goMessageId, status, errorMessage,
       sentAt: status === 'sent' ? new Date() : null,
     },
-  });
+  }));
 
   if (status === 'sent') {
     void incrementSendUsageBy(data.apiKeyId, 1);

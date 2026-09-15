@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { verifyOpenToken, verifyClickToken, TRANSPARENT_GIF } from '../../lib/tracking.js';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 import { classifyTrackingEvent, checkIpFanout, type BotReason } from '../../engine/botDetection.js';
@@ -80,24 +81,29 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
           // if_opened, see sequenceWorker.ts) silently end real outreach
           // sequences before a genuine human ever engaged.
           if (!isLikelyBot) {
-            await prisma.sendMessage.update({
-              where: { id: msg.id },
-              data: { status: 'opened' as never },
-            }).catch(() => { /* ignore */ });
+            // msg.apiKeyId was resolved by the bootstrap lookup above (the
+            // only query that had to run before we knew the tenant); every
+            // RLS-covered write below is scoped to that tenant.
+            await withTenant(msg.apiKeyId, async (tx) => {
+              await tx.sendMessage.update({
+                where: { id: msg.id },
+                data: { status: 'opened' as never },
+              }).catch(() => { /* ignore */ });
 
-            // Increment campaign open count for real-time health stats
-            if (campaignId) {
-              // Check variant to update the right counter (A or B)
-              const cr = await prisma.campaignRecipient.findFirst({
-                where: { campaignId, email: msg.to },
-                select: { variant: true },
-              }).catch(() => null);
-              const isVariantB = cr?.variant === 'b';
-              await prisma.campaign.update({
-                where: { id: campaignId },
-                data: isVariantB ? { openCountB: { increment: 1 } } : { openCount: { increment: 1 } },
-              }).catch(() => { /* non-fatal */ });
-            }
+              // Increment campaign open count for real-time health stats
+              if (campaignId) {
+                // Check variant to update the right counter (A or B)
+                const cr = await tx.campaignRecipient.findFirst({
+                  where: { campaignId, email: msg.to },
+                  select: { variant: true },
+                }).catch(() => null);
+                const isVariantB = cr?.variant === 'b';
+                await tx.campaign.update({
+                  where: { id: campaignId },
+                  data: isVariantB ? { openCountB: { increment: 1 } } : { openCount: { increment: 1 } },
+                }).catch(() => { /* non-fatal */ });
+              }
+            }).catch(() => { /* non-fatal — public tracking pixel must always render */ });
           }
         }
       }
@@ -123,12 +129,12 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
       if (payload) {
         let msg = await prisma.sendMessage.findUnique({
           where: { id: payload.sendMessageId },
-          select: { id: true, to: true, trackingToken: true, sentAt: true },
+          select: { id: true, to: true, apiKeyId: true, trackingToken: true, sentAt: true },
         });
         if (!msg) {
           msg = await prisma.sendMessage.findUnique({
             where: { trackingToken: payload.sendMessageId },
-            select: { id: true, to: true, trackingToken: true, sentAt: true },
+            select: { id: true, to: true, apiKeyId: true, trackingToken: true, sentAt: true },
           });
         }
 
@@ -162,15 +168,17 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
           // pre-send link scan shouldn't count as a real click or trigger
           // stop_on_click.
           if (!isLikelyBot && campaignId) {
-            const crClick = await prisma.campaignRecipient.findFirst({
-              where: { campaignId, email: msg.to },
-              select: { variant: true },
-            }).catch(() => null);
-            const isVariantBClick = crClick?.variant === 'b';
-            await prisma.campaign.update({
-              where: { id: campaignId },
-              data: isVariantBClick ? { clickCountB: { increment: 1 } } : { clickCount: { increment: 1 } },
-            }).catch(() => { /* non-fatal */ });
+            await withTenant(msg.apiKeyId, async (tx) => {
+              const crClick = await tx.campaignRecipient.findFirst({
+                where: { campaignId, email: msg.to },
+                select: { variant: true },
+              }).catch(() => null);
+              const isVariantBClick = crClick?.variant === 'b';
+              await tx.campaign.update({
+                where: { id: campaignId },
+                data: isVariantBClick ? { clickCountB: { increment: 1 } } : { clickCount: { increment: 1 } },
+              }).catch(() => { /* non-fatal */ });
+            }).catch(() => { /* non-fatal — click redirect must still fire */ });
           }
         }
 

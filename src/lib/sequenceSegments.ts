@@ -7,8 +7,8 @@
  * cleaner signal source campaignSegments.ts falls back to only when it
  * happens to find a matching Lead by email.
  */
-import { prisma } from './prisma.js';
 import { clusterSignals, type ContactSignal, type CampaignSegment } from './campaignSegments.js';
+import { withTenant } from './tenantContext.js';
 
 /**
  * Segments a sequence's current enrollments. Falls back to segmenting a
@@ -23,34 +23,36 @@ export async function deriveSequenceSegments(
   fallbackLeadIds: string[] = [],
   maxSegments = 3,
 ): Promise<{ totalContacts: number; segments: CampaignSegment[] }> {
-  const enrollments = await prisma.sequenceEnrollment.findMany({
-    where: { sequenceId, leadId: { not: null } },
-    select: { leadId: true },
+  return withTenant(apiKeyId, async (tx) => {
+    const enrollments = await tx.sequenceEnrollment.findMany({
+      where: { sequenceId, leadId: { not: null } },
+      select: { leadId: true },
+    });
+    let leadIds = [...new Set(enrollments.map((e) => e.leadId).filter((id): id is string => !!id))];
+
+    if (leadIds.length === 0 && fallbackLeadIds.length > 0) {
+      leadIds = [...new Set(fallbackLeadIds)];
+    }
+
+    if (leadIds.length === 0) return { totalContacts: 0, segments: [] };
+
+    const leads = await tx.lead.findMany({
+      where: { apiKeyId, id: { in: leadIds } },
+      select: { email: true, firstName: true, title: true, company: true, account: { select: { industry: true, employees: true } } },
+    });
+
+    const totalContacts = leads.length;
+    if (totalContacts === 0) return { totalContacts: 0, segments: [] };
+
+    const signals: ContactSignal[] = leads.map((l) => ({
+      email: l.email,
+      firstName: l.firstName,
+      title: l.title,
+      company: l.company,
+      industry: l.account?.industry ?? null,
+      employees: l.account?.employees ?? null,
+    }));
+
+    return { totalContacts, segments: clusterSignals(signals, totalContacts, maxSegments) };
   });
-  let leadIds = [...new Set(enrollments.map((e) => e.leadId).filter((id): id is string => !!id))];
-
-  if (leadIds.length === 0 && fallbackLeadIds.length > 0) {
-    leadIds = [...new Set(fallbackLeadIds)];
-  }
-
-  if (leadIds.length === 0) return { totalContacts: 0, segments: [] };
-
-  const leads = await prisma.lead.findMany({
-    where: { apiKeyId, id: { in: leadIds } },
-    select: { email: true, firstName: true, title: true, company: true, account: { select: { industry: true, employees: true } } },
-  });
-
-  const totalContacts = leads.length;
-  if (totalContacts === 0) return { totalContacts: 0, segments: [] };
-
-  const signals: ContactSignal[] = leads.map((l) => ({
-    email: l.email,
-    firstName: l.firstName,
-    title: l.title,
-    company: l.company,
-    industry: l.account?.industry ?? null,
-    employees: l.account?.employees ?? null,
-  }));
-
-  return { totalContacts, segments: clusterSignals(signals, totalContacts, maxSegments) };
 }

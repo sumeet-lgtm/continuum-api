@@ -5,6 +5,7 @@ import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { sendViaSmtp } from '../../lib/smtp.js';
+import { withTenant } from '../../lib/tenantContext.js';
 
 const replySchema = z.object({
   body: z.string().min(1, 'Reply body is required').max(20000),
@@ -18,30 +19,33 @@ export async function inboxRoutes(fastify: FastifyInstance): Promise<void> {
     const page = Math.max(1, parseInt(q.page ?? '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
-    // Find mailboxes owned by this API key
-    const mailboxIds = (await prisma.mailbox.findMany({ where: { apiKeyId }, select: { id: true } })).map(m => m.id);
+    const { items, total } = await withTenant(apiKeyId, async (tx) => {
+      // Find mailboxes owned by this API key
+      const mailboxIds = (await tx.mailbox.findMany({ where: { apiKeyId }, select: { id: true } })).map(m => m.id);
 
-    const where: Record<string, unknown> = { mailboxId: { in: mailboxIds } };
-    if (q.sequence_id) where['enrollmentId'] = { not: null };
+      const where: Record<string, unknown> = { mailboxId: { in: mailboxIds } };
+      if (q.sequence_id) where['enrollmentId'] = { not: null };
 
-    const [items, total] = await Promise.all([
-      prisma.replyEvent.findMany({
-        where: where as never,
-        orderBy: { receivedAt: 'desc' },
-        skip: (page - 1) * limit, take: limit,
-        include: {
-          enrollment: {
-            select: {
-              sequenceId: true,
-              email: true,
-              status: true,
-              sequence: { select: { id: true, name: true } },
+      const [items, total] = await Promise.all([
+        tx.replyEvent.findMany({
+          where: where as never,
+          orderBy: { receivedAt: 'desc' },
+          skip: (page - 1) * limit, take: limit,
+          include: {
+            enrollment: {
+              select: {
+                sequenceId: true,
+                email: true,
+                status: true,
+                sequence: { select: { id: true, name: true } },
+              },
             },
           },
-        },
-      }),
-      prisma.replyEvent.count({ where: where as never }),
-    ]);
+        }),
+        tx.replyEvent.count({ where: where as never }),
+      ]);
+      return { items, total };
+    });
 
     return reply.status(200).send({ data: items, total, page, limit });
   });
@@ -51,10 +55,12 @@ export async function inboxRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const mailboxIds = (await prisma.mailbox.findMany({ where: { apiKeyId }, select: { id: true } })).map(m => m.id);
-    const reply_ = await prisma.replyEvent.findFirst({
-      where: { id, mailboxId: { in: mailboxIds } },
-      include: { enrollment: true },
+    const reply_ = await withTenant(apiKeyId, async (tx) => {
+      const mailboxIds = (await tx.mailbox.findMany({ where: { apiKeyId }, select: { id: true } })).map(m => m.id);
+      return tx.replyEvent.findFirst({
+        where: { id, mailboxId: { in: mailboxIds } },
+        include: { enrollment: true },
+      });
     });
     if (!reply_) throw Errors.notFound('Reply not found.');
     return reply.status(200).send(reply_);
@@ -66,23 +72,25 @@ export async function inboxRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const body = request.body as { lead_status?: string; status?: string; is_read?: boolean };
 
-    const mailboxIds = (await prisma.mailbox.findMany({ where: { apiKeyId }, select: { id: true } })).map(m => m.id);
-    const event = await prisma.replyEvent.findFirst({ where: { id, mailboxId: { in: mailboxIds } } });
-    if (!event) throw Errors.notFound('Reply not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const mailboxIds = (await tx.mailbox.findMany({ where: { apiKeyId }, select: { id: true } })).map(m => m.id);
+      const event = await tx.replyEvent.findFirst({ where: { id, mailboxId: { in: mailboxIds } } });
+      if (!event) throw Errors.notFound('Reply not found.');
 
-    const updates: Record<string, unknown> = {};
-    if (body.status) updates['status'] = body.status;
-    if (body.is_read !== undefined) updates['isRead'] = body.is_read;
-    if (Object.keys(updates).length) {
-      await prisma.replyEvent.update({ where: { id }, data: updates as never });
-    }
+      const updates: Record<string, unknown> = {};
+      if (body.status) updates['status'] = body.status;
+      if (body.is_read !== undefined) updates['isRead'] = body.is_read;
+      if (Object.keys(updates).length) {
+        await tx.replyEvent.update({ where: { id }, data: updates as never });
+      }
 
-    if (body.lead_status && event.fromEmail) {
-      await prisma.lead.updateMany({
-        where: { apiKeyId, email: event.fromEmail.toLowerCase() },
-        data: { status: body.lead_status },
-      });
-    }
+      if (body.lead_status && event.fromEmail) {
+        await tx.lead.updateMany({
+          where: { apiKeyId, email: event.fromEmail.toLowerCase() },
+          data: { status: body.lead_status },
+        });
+      }
+    });
 
     return reply.status(200).send({ updated: true, id });
   });
@@ -95,10 +103,10 @@ export async function inboxRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = replySchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const event = await prisma.replyEvent.findFirst({
+    const event = await withTenant(apiKeyId, (tx) => tx.replyEvent.findFirst({
       where: { id, mailbox: { apiKeyId } },
       include: { mailbox: true },
-    });
+    }));
     if (!event) throw Errors.notFound('Reply not found.');
 
     const { mailbox } = event;
@@ -154,10 +162,10 @@ export async function inboxRoutes(fastify: FastifyInstance): Promise<void> {
       });
     }
 
-    await prisma.replyEvent.update({
+    await withTenant(apiKeyId, (tx) => tx.replyEvent.update({
       where: { id },
       data: { isRead: true, repliedAt: new Date() },
-    });
+    }));
 
     return reply.status(200).send({ sent: true, id });
   });

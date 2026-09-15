@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
 interface StatsQuery {
@@ -36,16 +37,16 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const apiKeyId = request.apiKey.id;
       const where = buildWhere(apiKeyId, q);
 
-      const [sent, delivered, bounced, complained, opensRaw, clicksRaw, opensBot, clicksBot] = await Promise.all([
-        prisma.sendMessage.count({ where: { ...where, status: { in: ['sent', 'delivered', 'bounced', 'complained', 'failed'] } } }),
-        prisma.sendMessage.count({ where: { ...where, status: 'delivered' } }),
-        prisma.sendMessage.count({ where: { ...where, status: 'bounced' } }),
-        prisma.sendMessage.count({ where: { ...where, status: 'complained' } }),
+      const [sent, delivered, bounced, complained, opensRaw, clicksRaw, opensBot, clicksBot] = await withTenant(apiKeyId, (tx) => Promise.all([
+        tx.sendMessage.count({ where: { ...where, status: { in: ['sent', 'delivered', 'bounced', 'complained', 'failed'] } } }),
+        tx.sendMessage.count({ where: { ...where, status: 'delivered' } }),
+        tx.sendMessage.count({ where: { ...where, status: 'bounced' } }),
+        tx.sendMessage.count({ where: { ...where, status: 'complained' } }),
         prisma.trackingEvent.count({ where: { type: 'open', sendMessage: { apiKeyId } } }),
         prisma.trackingEvent.count({ where: { type: 'click', sendMessage: { apiKeyId } } }),
         prisma.trackingEvent.count({ where: { type: 'open', isLikelyBot: true, sendMessage: { apiKeyId } } }),
         prisma.trackingEvent.count({ where: { type: 'click', isLikelyBot: true, sendMessage: { apiKeyId } } }),
-      ]);
+      ]));
 
       // Apple Mail Privacy Protection and corporate security gateways
       // inflate raw open/click counts substantially (M3AAWG puts non-human
@@ -82,14 +83,14 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const dateFrom = q.dateFrom ? new Date(q.dateFrom) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const dateTo = q.dateTo ? new Date(q.dateTo) : new Date();
 
-      const messages = await prisma.sendMessage.findMany({
+      const messages = await withTenant(apiKeyId, (tx) => tx.sendMessage.findMany({
         where: {
           apiKeyId,
           createdAt: { gte: dateFrom, lte: dateTo },
           ...(q.domain_id ? { domainId: q.domain_id } : {}),
         },
         select: { createdAt: true, status: true },
-      });
+      }));
 
       // Group by day
       const byDay = new Map<string, { sent: number; delivered: number; bounced: number; complained: number }>();
@@ -121,7 +122,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const page = Math.max(1, parseInt(q.page ?? '1', 10));
       const limit = Math.min(50, Math.max(1, parseInt(q.limit ?? '20', 10)));
 
-      const campaigns = await prisma.campaign.findMany({
+      const campaigns = await withTenant(apiKeyId, (tx) => tx.campaign.findMany({
         where: { apiKeyId, status: { in: ['sent', 'sending'] } },
         orderBy: { sentAt: 'desc' },
         skip: (page - 1) * limit,
@@ -131,7 +132,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
           totalRecipients: true, sentCount: true, deliveredCount: true,
           openCount: true, clickCount: true, bounceCount: true, complaintCount: true,
         },
-      });
+      }));
 
       return reply.status(200).send({
         data: campaigns.map(c => ({
@@ -152,10 +153,10 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const apiKeyId = request.apiKey.id;
 
-      const mailboxes = await prisma.mailbox.findMany({
+      const mailboxes = await withTenant(apiKeyId, (tx) => tx.mailbox.findMany({
         where: { apiKeyId },
         select: { id: true, username: true, type: true, status: true, sentToday: true, dailyLimit: true, warmupConfig: true },
-      });
+      }));
 
       return reply.status(200).send({ data: mailboxes });
     },
@@ -169,27 +170,31 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const mailbox = await prisma.mailbox.findFirst({
-        where: { id, apiKeyId },
-        select: {
-          id: true, username: true, type: true, status: true,
-          sentToday: true, dailyLimit: true, sendDelayMinMs: true, sendDelayMaxMs: true,
-          lastErrorMsg: true, lastCheckedAt: true, createdAt: true,
-          warmupConfig: true,
-        },
-      });
-      if (!mailbox) throw Errors.notFound('Mailbox not found.');
+      const { mailbox, enrollments } = await withTenant(apiKeyId, async (tx) => {
+        const mailbox = await tx.mailbox.findFirst({
+          where: { id, apiKeyId },
+          select: {
+            id: true, username: true, type: true, status: true,
+            sentToday: true, dailyLimit: true, sendDelayMinMs: true, sendDelayMaxMs: true,
+            lastErrorMsg: true, lastCheckedAt: true, createdAt: true,
+            warmupConfig: true,
+          },
+        });
+        if (!mailbox) throw Errors.notFound('Mailbox not found.');
 
-      // Aggregate sequence sends from this mailbox over last 30 days
-      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      const seqsOnMailbox = await prisma.sequence.findMany({ where: { mailboxId: id }, select: { id: true } });
-      const seqIds = seqsOnMailbox.map(s => s.id);
-      const enrollments = seqIds.length > 0
-        ? await prisma.sequenceEnrollment.findMany({
-            where: { sequenceId: { in: seqIds }, enrolledAt: { gte: since } },
-            select: { status: true, enrolledAt: true },
-          })
-        : [];
+        // Aggregate sequence sends from this mailbox over last 30 days
+        const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const seqsOnMailbox = await tx.sequence.findMany({ where: { mailboxId: id }, select: { id: true } });
+        const seqIds = seqsOnMailbox.map(s => s.id);
+        const enrollments = seqIds.length > 0
+          ? await tx.sequenceEnrollment.findMany({
+              where: { sequenceId: { in: seqIds }, enrolledAt: { gte: since } },
+              select: { status: true, enrolledAt: true },
+            })
+          : [];
+
+        return { mailbox, enrollments };
+      });
 
       const byDay: Record<string, { sent: number; replied: number; bounced: number }> = {};
       for (const e of enrollments) {
@@ -219,33 +224,35 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const page = Math.max(1, parseInt(q.page ?? '1', 10));
       const limit = Math.min(50, Math.max(1, parseInt(q.limit ?? '20', 10)));
 
-      const sequences = await prisma.sequence.findMany({
-        where: { apiKeyId },
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-        select: { id: true, name: true, status: true, createdAt: true },
-      });
+      const data = await withTenant(apiKeyId, async (tx) => {
+        const sequences = await tx.sequence.findMany({
+          where: { apiKeyId },
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * limit,
+          take: limit,
+          select: { id: true, name: true, status: true, createdAt: true },
+        });
 
-      const data = await Promise.all(sequences.map(async (seq) => {
-        const [total, active, completed, replied, bounced] = await Promise.all([
-          prisma.sequenceEnrollment.count({ where: { sequenceId: seq.id } }),
-          prisma.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'active' } }),
-          prisma.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'completed' } }),
-          prisma.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'replied' } }),
-          prisma.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'bounced' } }),
-        ]);
-        return {
-          ...seq,
-          total_enrolled: total,
-          active,
-          completed,
-          replied,
-          bounced,
-          reply_rate: total > 0 ? +((replied / total) * 100).toFixed(1) : 0,
-          completion_rate: total > 0 ? +((completed / total) * 100).toFixed(1) : 0,
-        };
-      }));
+        return Promise.all(sequences.map(async (seq) => {
+          const [total, active, completed, replied, bounced] = await Promise.all([
+            tx.sequenceEnrollment.count({ where: { sequenceId: seq.id } }),
+            tx.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'active' } }),
+            tx.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'completed' } }),
+            tx.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'replied' } }),
+            tx.sequenceEnrollment.count({ where: { sequenceId: seq.id, status: 'bounced' } }),
+          ]);
+          return {
+            ...seq,
+            total_enrolled: total,
+            active,
+            completed,
+            replied,
+            bounced,
+            reply_rate: total > 0 ? +((replied / total) * 100).toFixed(1) : 0,
+            completion_rate: total > 0 ? +((completed / total) * 100).toFixed(1) : 0,
+          };
+        }));
+      });
 
       return reply.status(200).send({ data });
     },
@@ -259,7 +266,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const sequence = await prisma.sequence.findFirst({ where: { id, apiKeyId }, select: { id: true } });
+      const sequence = await withTenant(apiKeyId, (tx) => tx.sequence.findFirst({ where: { id, apiKeyId }, select: { id: true } }));
       if (!sequence) throw Errors.notFound('Sequence not found.');
 
       const steps = await prisma.sequenceStep.findMany({
@@ -310,7 +317,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
 
       const attemptedStatuses = ['sent', 'delivered', 'bounced', 'complained'] as const;
 
-      const buckets = await Promise.all(ACCURACY_STATUSES.map(async (verifiedStatus) => {
+      const buckets = await withTenant(apiKeyId, (tx) => Promise.all(ACCURACY_STATUSES.map(async (verifiedStatus) => {
         const where = {
           apiKeyId,
           status: { in: [...attemptedStatuses] },
@@ -319,9 +326,9 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
         };
 
         const [total, bounced, complained] = await Promise.all([
-          prisma.sendMessage.count({ where }),
-          prisma.sendMessage.count({ where: { ...where, status: 'bounced' } }),
-          prisma.sendMessage.count({ where: { ...where, status: 'complained' } }),
+          tx.sendMessage.count({ where }),
+          tx.sendMessage.count({ where: { ...where, status: 'bounced' } }),
+          tx.sendMessage.count({ where: { ...where, status: 'complained' } }),
         ]);
 
         const sampleSizeOk = total >= MIN_SAMPLE_SIZE;
@@ -335,7 +342,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
           complaint_rate: sampleSizeOk ? +((complained / total) * 100).toFixed(2) : null,
           sample_size_ok: sampleSizeOk,
         };
-      }));
+      })));
 
       const validBucket = buckets.find((b) => b.verified_status === 'valid')!;
 
@@ -365,10 +372,10 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const where = buildWhere(apiKeyId, q);
 
       // Pull all messages that have a domainId, within the requested window
-      const messages = await prisma.sendMessage.findMany({
+      const messages = await withTenant(apiKeyId, (tx) => tx.sendMessage.findMany({
         where: { ...where, domainId: { not: null } },
         select: { domainId: true, status: true },
-      });
+      }));
 
       // Aggregate counts per domain in memory (avoids a GROUP BY that needs raw SQL)
       const byDomain = new Map<string, { sent: number; delivered: number; bounced: number; complained: number }>();
@@ -506,105 +513,109 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const sequence = await prisma.sequence.findFirst({
-        where: { id, apiKeyId },
-        select: { id: true, name: true },
-      });
-      if (!sequence) throw Errors.notFound('Sequence not found.');
+      const payload = await withTenant(apiKeyId, async (tx) => {
+        const sequence = await tx.sequence.findFirst({
+          where: { id, apiKeyId },
+          select: { id: true, name: true },
+        });
+        if (!sequence) throw Errors.notFound('Sequence not found.');
 
-      const steps = await prisma.sequenceStep.findMany({
-        where: { sequenceId: id },
-        orderBy: { stepOrder: 'asc' },
-        select: { id: true, stepOrder: true, subject: true, delayDays: true },
-      });
+        const steps = await prisma.sequenceStep.findMany({
+          where: { sequenceId: id },
+          orderBy: { stepOrder: 'asc' },
+          select: { id: true, stepOrder: true, subject: true, delayDays: true },
+        });
 
-      if (steps.length === 0) {
-        return reply.status(200).send({ sequence_id: id, name: sequence.name, steps: [] });
-      }
-
-      // Sent counts per step from CampaignRecipient-equivalent: SequenceEnrollmentLog
-      // Use SendMessage rows associated with each step via sequenceStepId
-      const stepIds = steps.map(s => s.id);
-
-      // Count sends per step
-      const sends = await prisma.sendMessage.groupBy({
-        by: ['sequenceStepId'],
-        where: { sequenceStepId: { in: stepIds }, status: { in: ['sent', 'delivered', 'bounced', 'complained', 'opened'] } },
-        _count: { id: true },
-      });
-      const sendMap = new Map(sends.map(s => [s.sequenceStepId!, s._count.id]));
-
-      // Count TrackingEvents per step
-      const stepSendIds = await prisma.sendMessage.findMany({
-        where: { sequenceStepId: { in: stepIds } },
-        select: { id: true, sequenceStepId: true, status: true },
-      });
-      const msgsByStep = new Map<string, string[]>();
-      for (const m of stepSendIds) {
-        if (!m.sequenceStepId) continue;
-        if (!msgsByStep.has(m.sequenceStepId)) msgsByStep.set(m.sequenceStepId, []);
-        msgsByStep.get(m.sequenceStepId)!.push(m.id);
-      }
-
-      // Aggregate events for all messages at once then bucket by step.
-      // isLikelyBot:false for open/click (unsubscribe has no bot analogue,
-      // so it's deliberately excluded from the filter below via a separate
-      // OR branch) — otherwise MPP/scanner noise makes every step look
-      // like it's performing, hiding which ones are actually working.
-      const allMsgIds = stepSendIds.map(m => m.id);
-      const events = allMsgIds.length > 0 ? await prisma.trackingEvent.findMany({
-        where: {
-          sendMessageId: { in: allMsgIds },
-          OR: [
-            { type: { in: ['open', 'click'] }, isLikelyBot: false },
-            { type: 'unsubscribe' },
-          ],
-        },
-        select: { sendMessageId: true, type: true },
-      }) : [];
-
-      const msgToStep = new Map(stepSendIds.map(m => [m.id, m.sequenceStepId!]));
-      const eventByStep = new Map<string, { opens: number; clicks: number; unsubscribes: number }>();
-      for (const ev of events) {
-        const stepId = ev.sendMessageId ? msgToStep.get(ev.sendMessageId) : undefined;
-        if (!stepId) continue;
-        if (!eventByStep.has(stepId)) eventByStep.set(stepId, { opens: 0, clicks: 0, unsubscribes: 0 });
-        const e = eventByStep.get(stepId)!;
-        if (ev.type === 'open')        e.opens++;
-        else if (ev.type === 'click')  e.clicks++;
-        else if (ev.type === 'unsubscribe') e.unsubscribes++;
-      }
-
-      // Bounce counts per step
-      const bouncesByStep = new Map<string, number>();
-      for (const m of stepSendIds) {
-        if (m.status === 'bounced' && m.sequenceStepId) {
-          bouncesByStep.set(m.sequenceStepId, (bouncesByStep.get(m.sequenceStepId) ?? 0) + 1);
+        if (steps.length === 0) {
+          return { sequence_id: id, name: sequence.name, steps: [] };
         }
-      }
 
-      const result = steps.map(step => {
-        const sent       = sendMap.get(step.id) ?? 0;
-        const ev         = eventByStep.get(step.id) ?? { opens: 0, clicks: 0, unsubscribes: 0 };
-        const bounces    = bouncesByStep.get(step.id) ?? 0;
-        return {
-          step_id:          step.id,
-          step_order:       step.stepOrder,
-          subject:          step.subject,
-          delay_days:       step.delayDays,
-          sent,
-          opens:            ev.opens,
-          clicks:           ev.clicks,
-          unsubscribes:     ev.unsubscribes,
-          bounces,
-          open_rate:        sent > 0 ? parseFloat((ev.opens / sent * 100).toFixed(1)) : 0,
-          click_rate:       sent > 0 ? parseFloat((ev.clicks / sent * 100).toFixed(1)) : 0,
-          unsubscribe_rate: sent > 0 ? parseFloat((ev.unsubscribes / sent * 100).toFixed(2)) : 0,
-          bounce_rate:      sent > 0 ? parseFloat((bounces / sent * 100).toFixed(2)) : 0,
-        };
+        // Sent counts per step from CampaignRecipient-equivalent: SequenceEnrollmentLog
+        // Use SendMessage rows associated with each step via sequenceStepId
+        const stepIds = steps.map(s => s.id);
+
+        // Count sends per step
+        const sends = await tx.sendMessage.groupBy({
+          by: ['sequenceStepId'],
+          where: { sequenceStepId: { in: stepIds }, status: { in: ['sent', 'delivered', 'bounced', 'complained', 'opened'] } },
+          _count: { id: true },
+        });
+        const sendMap = new Map(sends.map(s => [s.sequenceStepId!, s._count.id]));
+
+        // Count TrackingEvents per step
+        const stepSendIds = await tx.sendMessage.findMany({
+          where: { sequenceStepId: { in: stepIds } },
+          select: { id: true, sequenceStepId: true, status: true },
+        });
+        const msgsByStep = new Map<string, string[]>();
+        for (const m of stepSendIds) {
+          if (!m.sequenceStepId) continue;
+          if (!msgsByStep.has(m.sequenceStepId)) msgsByStep.set(m.sequenceStepId, []);
+          msgsByStep.get(m.sequenceStepId)!.push(m.id);
+        }
+
+        // Aggregate events for all messages at once then bucket by step.
+        // isLikelyBot:false for open/click (unsubscribe has no bot analogue,
+        // so it's deliberately excluded from the filter below via a separate
+        // OR branch) — otherwise MPP/scanner noise makes every step look
+        // like it's performing, hiding which ones are actually working.
+        const allMsgIds = stepSendIds.map(m => m.id);
+        const events = allMsgIds.length > 0 ? await prisma.trackingEvent.findMany({
+          where: {
+            sendMessageId: { in: allMsgIds },
+            OR: [
+              { type: { in: ['open', 'click'] }, isLikelyBot: false },
+              { type: 'unsubscribe' },
+            ],
+          },
+          select: { sendMessageId: true, type: true },
+        }) : [];
+
+        const msgToStep = new Map(stepSendIds.map(m => [m.id, m.sequenceStepId!]));
+        const eventByStep = new Map<string, { opens: number; clicks: number; unsubscribes: number }>();
+        for (const ev of events) {
+          const stepId = ev.sendMessageId ? msgToStep.get(ev.sendMessageId) : undefined;
+          if (!stepId) continue;
+          if (!eventByStep.has(stepId)) eventByStep.set(stepId, { opens: 0, clicks: 0, unsubscribes: 0 });
+          const e = eventByStep.get(stepId)!;
+          if (ev.type === 'open')        e.opens++;
+          else if (ev.type === 'click')  e.clicks++;
+          else if (ev.type === 'unsubscribe') e.unsubscribes++;
+        }
+
+        // Bounce counts per step
+        const bouncesByStep = new Map<string, number>();
+        for (const m of stepSendIds) {
+          if (m.status === 'bounced' && m.sequenceStepId) {
+            bouncesByStep.set(m.sequenceStepId, (bouncesByStep.get(m.sequenceStepId) ?? 0) + 1);
+          }
+        }
+
+        const result = steps.map(step => {
+          const sent       = sendMap.get(step.id) ?? 0;
+          const ev         = eventByStep.get(step.id) ?? { opens: 0, clicks: 0, unsubscribes: 0 };
+          const bounces    = bouncesByStep.get(step.id) ?? 0;
+          return {
+            step_id:          step.id,
+            step_order:       step.stepOrder,
+            subject:          step.subject,
+            delay_days:       step.delayDays,
+            sent,
+            opens:            ev.opens,
+            clicks:           ev.clicks,
+            unsubscribes:     ev.unsubscribes,
+            bounces,
+            open_rate:        sent > 0 ? parseFloat((ev.opens / sent * 100).toFixed(1)) : 0,
+            click_rate:       sent > 0 ? parseFloat((ev.clicks / sent * 100).toFixed(1)) : 0,
+            unsubscribe_rate: sent > 0 ? parseFloat((ev.unsubscribes / sent * 100).toFixed(2)) : 0,
+            bounce_rate:      sent > 0 ? parseFloat((bounces / sent * 100).toFixed(2)) : 0,
+          };
+        });
+
+        return { sequence_id: id, name: sequence.name, steps: result };
       });
 
-      return reply.status(200).send({ sequence_id: id, name: sequence.name, steps: result });
+      return reply.status(200).send(payload);
     },
   );
 
@@ -638,7 +649,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       };
 
       // Pull delivery status + recipient address, then get tracking events for those messages
-      const messages = await prisma.sendMessage.findMany({ where, select: { id: true, to: true, status: true } });
+      const messages = await withTenant(apiKeyId, (tx) => tx.sendMessage.findMany({ where, select: { id: true, to: true, status: true } }));
       const msgIds = messages.map((m) => m.id);
       // isLikelyBot:false matters more here than almost anywhere else in
       // this file — iCloud is exactly the provider Apple Mail Privacy
@@ -709,20 +720,20 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const now = new Date();
       const horizon = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days out
 
-      const [msgs, campaigns] = await Promise.all([
-        prisma.sendMessage.findMany({
+      const [msgs, campaigns] = await withTenant(apiKeyId, (tx) => Promise.all([
+        tx.sendMessage.findMany({
           where: { apiKeyId, scheduledAt: { gte: now, lte: horizon }, status: { in: ['queued', 'scheduled'] } },
           orderBy: { scheduledAt: 'asc' },
           take: 200,
           select: { id: true, to: true, subject: true, scheduledAt: true, status: true, tags: true },
         }),
-        prisma.campaign.findMany({
+        tx.campaign.findMany({
           where: { apiKeyId, scheduledAt: { gte: now, lte: horizon }, status: 'scheduled' },
           orderBy: { scheduledAt: 'asc' },
           take: 50,
           select: { id: true, name: true, subject: true, scheduledAt: true, status: true, totalRecipients: true },
         }),
-      ]);
+      ]));
 
       const items = [
         ...msgs.map((m) => ({

@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { AppError, Errors } from '../../plugins/errorHandler.js';
 import { config } from '../../config.js';
 import { Prisma } from '@prisma/client';
@@ -605,38 +606,40 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
         const email = mapped.email.toLowerCase();
 
         try {
-          await prisma.lead.upsert({
-            where: { apiKeyId_email: { apiKeyId, email } },
-            create: {
-              apiKeyId,
-              email,
-              firstName: mapped.firstName ?? null,
-              lastName: mapped.lastName ?? null,
-              company: mapped.company ?? null,
-              title: mapped.title ?? null,
-              customVars: {
-                ...(mapped.linkedinUrl ? { linkedin_url: mapped.linkedinUrl } : {}),
-                ...(mapped.phone ? { phone: mapped.phone } : {}),
-                ...(mapped.companyDomain ? { company_domain: mapped.companyDomain } : {}),
-                ...(mapped.companySize ? { company_size: mapped.companySize } : {}),
-                ...(mapped.companyIndustry ? { industry: mapped.companyIndustry } : {}),
-                ...(mapped.location ? { location: mapped.location } : {}),
-                ...(mapped.seniority ? { seniority: mapped.seniority } : {}),
-              } as Prisma.InputJsonValue,
-            },
-            update: {},
+          await withTenant(apiKeyId, async (tx) => {
+            await tx.lead.upsert({
+              where: { apiKeyId_email: { apiKeyId, email } },
+              create: {
+                apiKeyId,
+                email,
+                firstName: mapped.firstName ?? null,
+                lastName: mapped.lastName ?? null,
+                company: mapped.company ?? null,
+                title: mapped.title ?? null,
+                customVars: {
+                  ...(mapped.linkedinUrl ? { linkedin_url: mapped.linkedinUrl } : {}),
+                  ...(mapped.phone ? { phone: mapped.phone } : {}),
+                  ...(mapped.companyDomain ? { company_domain: mapped.companyDomain } : {}),
+                  ...(mapped.companySize ? { company_size: mapped.companySize } : {}),
+                  ...(mapped.companyIndustry ? { industry: mapped.companyIndustry } : {}),
+                  ...(mapped.location ? { location: mapped.location } : {}),
+                  ...(mapped.seniority ? { seniority: mapped.seniority } : {}),
+                } as Prisma.InputJsonValue,
+              },
+              update: {},
+            });
+
+            if (sequenceId) {
+              await tx.sequenceEnrollment
+                .upsert({
+                  where: { sequenceId_email: { sequenceId, email } },
+                  create: { sequenceId, email, status: 'active', nextSendAt: new Date() },
+                  update: {},
+                })
+                .catch(() => {/* best-effort */});
+            }
           });
           imported++;
-
-          if (sequenceId) {
-            await prisma.sequenceEnrollment
-              .upsert({
-                where: { sequenceId_email: { sequenceId, email } },
-                create: { sequenceId, email, status: 'active', nextSendAt: new Date() },
-                update: {},
-              })
-              .catch(() => {/* best-effort */});
-          }
         } catch {
           skipped++;
         }

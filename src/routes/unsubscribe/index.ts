@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { verifyUnsubToken } from '../../lib/unsubscribe.js';
 
 const CONFIRMATION_HTML = `<!DOCTYPE html>
@@ -55,20 +55,28 @@ export async function unsubscribeRoutes(fastify: FastifyInstance): Promise<void>
 
       const { email } = payload;
 
-      const existing = await prisma.suppression.findUnique({ where: { email } });
-      if (existing) {
-        return reply.status(200).header('Content-Type', 'text/html').send(ALREADY_HTML);
-      }
+      // The verified token already carries apiKeyId, so the tenant is known
+      // before any DB access — no separate bootstrap lookup is needed here.
+      const alreadyUnsubscribed = await withTenant(payload.apiKeyId, async (tx) => {
+        const existing = await tx.suppression.findUnique({ where: { email } });
+        if (existing) return true;
 
-      await prisma.suppression.create({
-        data: { email, reason: 'unsubscribed', apiKeyId: payload.apiKeyId },
+        await tx.suppression.create({
+          data: { email, reason: 'unsubscribed', apiKeyId: payload.apiKeyId },
+        });
+
+        // Also update any contact memberships for this email
+        await tx.contactListMembership.updateMany({
+          where: { contact: { email } },
+          data: { status: 'unsubscribed', unsubscribedAt: new Date() },
+        }).catch(() => { /* ignore if table doesn't have records */ });
+
+        return false;
       });
 
-      // Also update any contact memberships for this email
-      await prisma.contactListMembership.updateMany({
-        where: { contact: { email } },
-        data: { status: 'unsubscribed', unsubscribedAt: new Date() },
-      }).catch(() => { /* ignore if table doesn't have records */ });
+      if (alreadyUnsubscribed) {
+        return reply.status(200).header('Content-Type', 'text/html').send(ALREADY_HTML);
+      }
 
       return reply.status(200).header('Content-Type', 'text/html').send(CONFIRMATION_HTML);
     },
@@ -93,11 +101,11 @@ export async function unsubscribeRoutes(fastify: FastifyInstance): Promise<void>
         const payload = verifyUnsubToken(token);
         if (!payload) return reply.status(400).send({ error: 'Invalid or expired token' });
 
-        await prisma.suppression.upsert({
+        await withTenant(payload.apiKeyId, (tx) => tx.suppression.upsert({
           where: { email: payload.email },
           create: { email: payload.email, reason: 'unsubscribed', apiKeyId: payload.apiKeyId },
           update: {},
-        });
+        }));
       }
 
       return reply.status(200).send({ unsubscribed: true });

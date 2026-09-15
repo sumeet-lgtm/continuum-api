@@ -5,6 +5,7 @@ import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit, requireIpRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { generateOptinToken, verifyOptinToken } from '../../lib/optinToken.js';
 import { config } from '../../config.js';
@@ -37,46 +38,52 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const { email, first_name, last_name, custom_fields, gdpr_consent, double_optin, confirm_url } = parsed.data;
 
-    // Check list ownership
-    const list = await prisma.mailingList.findFirst({ where: { id: listId, apiKeyId } });
-    if (!list) throw Errors.notFound('List not found.');
-
-    // Suppression check
-    const suppressed = await prisma.suppression.findUnique({ where: { email } });
+    // Suppression check — withRlsBypass, not withTenant: a suppression
+    // caused by a DIFFERENT tenant's send must still block this subscribe
+    // (Suppression is deliberately global, see schema.prisma).
+    const suppressed = await withRlsBypass((tx) => tx.suppression.findUnique({ where: { email } }));
     if (suppressed) {
       throw { statusCode: 422, message: `${email} is suppressed and cannot be subscribed.` };
     }
 
-    // Upsert contact
-    const contact = await prisma.contact.upsert({
-      where: { apiKeyId_email: { apiKeyId, email } },
-      create: { apiKeyId, email, firstName: first_name ?? null, lastName: last_name ?? null, customFields: (custom_fields ?? {}) as Prisma.InputJsonValue },
-      update: {
-        ...(first_name !== undefined && { firstName: first_name }),
-        ...(last_name !== undefined && { lastName: last_name }),
-        ...(custom_fields !== undefined && { customFields: custom_fields as Prisma.InputJsonValue }),
-      },
-      select: { id: true, email: true },
+    const { list, contact, membership } = await withTenant(apiKeyId, async (tx) => {
+      // Check list ownership
+      const list = await tx.mailingList.findFirst({ where: { id: listId, apiKeyId } });
+      if (!list) throw Errors.notFound('List not found.');
+
+      // Upsert contact
+      const contact = await tx.contact.upsert({
+        where: { apiKeyId_email: { apiKeyId, email } },
+        create: { apiKeyId, email, firstName: first_name ?? null, lastName: last_name ?? null, customFields: (custom_fields ?? {}) as Prisma.InputJsonValue },
+        update: {
+          ...(first_name !== undefined && { firstName: first_name }),
+          ...(last_name !== undefined && { lastName: last_name }),
+          ...(custom_fields !== undefined && { customFields: custom_fields as Prisma.InputJsonValue }),
+        },
+        select: { id: true, email: true },
+      });
+
+      // Determine initial membership status
+      const membershipStatus = double_optin ? 'pending_confirmation' : 'subscribed';
+
+      // Upsert membership
+      const membership = await tx.contactListMembership.upsert({
+        where: { contactId_listId: { contactId: contact.id, listId } },
+        create: { contactId: contact.id, listId, status: membershipStatus, gdprConsent: gdpr_consent },
+        update: { status: membershipStatus, gdprConsent: gdpr_consent },
+        select: { id: true, status: true, subscribedAt: true },
+      });
+
+      // Update list contact count
+      if (!double_optin) {
+        await tx.mailingList.update({
+          where: { id: listId },
+          data: { contactCount: { increment: 1 } },
+        }).catch(() => { /* best effort */ });
+      }
+
+      return { list, contact, membership };
     });
-
-    // Determine initial membership status
-    const membershipStatus = double_optin ? 'pending_confirmation' : 'subscribed';
-
-    // Upsert membership
-    const membership = await prisma.contactListMembership.upsert({
-      where: { contactId_listId: { contactId: contact.id, listId } },
-      create: { contactId: contact.id, listId, status: membershipStatus, gdprConsent: gdpr_consent },
-      update: { status: membershipStatus, gdprConsent: gdpr_consent },
-      select: { id: true, status: true, subscribedAt: true },
-    });
-
-    // Update list contact count
-    if (!double_optin) {
-      await prisma.mailingList.update({
-        where: { id: listId },
-        data: { contactCount: { increment: 1 } },
-      }).catch(() => { /* best effort */ });
-    }
 
     // Send double opt-in confirmation email if requested
     if (double_optin) {
@@ -118,19 +125,21 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const page = Math.max(1, parseInt(q.page ?? '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
-    const list = await prisma.mailingList.findFirst({ where: { id: listId, apiKeyId } });
-    if (!list) throw Errors.notFound('List not found.');
+    const memberships = await withTenant(apiKeyId, async (tx) => {
+      const list = await tx.mailingList.findFirst({ where: { id: listId, apiKeyId } });
+      if (!list) throw Errors.notFound('List not found.');
 
-    const memberships = await prisma.contactListMembership.findMany({
-      where: {
-        listId,
-        ...(q.status ? { status: q.status } : {}),
-        ...(q.search ? { contact: { email: { contains: q.search, mode: 'insensitive' } } } : {}),
-      },
-      orderBy: { subscribedAt: 'desc' },
-      skip: (page - 1) * limit,
-      take: limit,
-      include: { contact: { select: { email: true, firstName: true, lastName: true, customFields: true } } },
+      return tx.contactListMembership.findMany({
+        where: {
+          listId,
+          ...(q.status ? { status: q.status } : {}),
+          ...(q.search ? { contact: { email: { contains: q.search, mode: 'insensitive' } } } : {}),
+        },
+        orderBy: { subscribedAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        include: { contact: { select: { email: true, firstName: true, lastName: true, customFields: true } } },
+      });
     });
 
     return reply.status(200).send({ data: memberships, page, limit });
@@ -142,7 +151,7 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const q = request.query as { status?: string };
 
-    const list = await prisma.mailingList.findFirst({ where: { id: listId, apiKeyId } });
+    const list = await withTenant(apiKeyId, (tx) => tx.mailingList.findFirst({ where: { id: listId, apiKeyId } }));
     if (!list) throw Errors.notFound('List not found.');
 
     const date = new Date().toISOString().slice(0, 10);
@@ -159,14 +168,18 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
 
     let csv = 'email,first_name,last_name,status,subscribed_at,unsubscribed_at\n';
 
+    // Each page runs inside its own withTenant transaction rather than one
+    // transaction spanning the whole export — a very large list could
+    // otherwise keep a single interactive transaction open long enough to
+    // risk hitting Prisma's transaction timeout.
     while (true) {
-      const batch = await prisma.contactListMembership.findMany({
+      const batch = await withTenant(apiKeyId, (tx) => tx.contactListMembership.findMany({
         where,
         orderBy: { subscribedAt: 'desc' },
         skip: offset,
         take: batchSize,
         include: { contact: { select: { email: true, firstName: true, lastName: true } } },
-      });
+      }));
       if (batch.length === 0) break;
       for (const m of batch) {
         const email = m.contact.email.includes(',') ? `"${m.contact.email}"` : m.contact.email;
@@ -187,13 +200,17 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const email = decodeURIComponent(rawEmail).toLowerCase();
     const apiKeyId = request.apiKey.id;
 
-    const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } }, select: { id: true } });
-    if (!contact) throw Errors.notFound('Contact not found.');
+    const membership = await withTenant(apiKeyId, async (tx) => {
+      const contact = await tx.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } }, select: { id: true } });
+      if (!contact) throw Errors.notFound('Contact not found.');
 
-    const membership = await prisma.contactListMembership.findUnique({
-      where: { contactId_listId: { contactId: contact.id, listId } },
+      const membership = await tx.contactListMembership.findUnique({
+        where: { contactId_listId: { contactId: contact.id, listId } },
+      });
+      if (!membership) throw Errors.notFound('Contact not subscribed to this list.');
+
+      return membership;
     });
-    if (!membership) throw Errors.notFound('Contact not subscribed to this list.');
 
     return reply.status(200).send(membership);
   });
@@ -204,17 +221,19 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const email = decodeURIComponent(rawEmail).toLowerCase();
     const apiKeyId = request.apiKey.id;
 
-    const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } }, select: { id: true } });
-    if (!contact) throw Errors.notFound('Contact not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const contact = await tx.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } }, select: { id: true } });
+      if (!contact) throw Errors.notFound('Contact not found.');
 
-    const membership = await prisma.contactListMembership.findUnique({
-      where: { contactId_listId: { contactId: contact.id, listId } },
-    });
-    if (!membership) throw Errors.notFound('Contact not subscribed to this list.');
+      const membership = await tx.contactListMembership.findUnique({
+        where: { contactId_listId: { contactId: contact.id, listId } },
+      });
+      if (!membership) throw Errors.notFound('Contact not subscribed to this list.');
 
-    await prisma.contactListMembership.update({
-      where: { id: membership.id },
-      data: { status: 'unsubscribed', unsubscribedAt: new Date() },
+      await tx.contactListMembership.update({
+        where: { id: membership.id },
+        data: { status: 'unsubscribed', unsubscribedAt: new Date() },
+      });
     });
 
     return reply.status(200).send({ unsubscribed: true, email, list_id: listId });
@@ -226,11 +245,14 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const email = decodeURIComponent(rawEmail).toLowerCase();
     const apiKeyId = request.apiKey.id;
 
-    const contact = await prisma.contact.findUnique({
-      where: { apiKeyId_email: { apiKeyId, email } },
-      include: { memberships: { include: { list: { select: { id: true, name: true } } } } },
+    const contact = await withTenant(apiKeyId, async (tx) => {
+      const contact = await tx.contact.findUnique({
+        where: { apiKeyId_email: { apiKeyId, email } },
+        include: { memberships: { include: { list: { select: { id: true, name: true } } } } },
+      });
+      if (!contact) throw Errors.notFound('Contact not found.');
+      return contact;
     });
-    if (!contact) throw Errors.notFound('Contact not found.');
 
     return reply.status(200).send(contact);
   });
@@ -249,18 +271,21 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = patchSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
-    if (!contact) throw Errors.notFound('Contact not found.');
-
     const { first_name, last_name, custom_fields } = parsed.data;
-    const updated = await prisma.contact.update({
-      where: { apiKeyId_email: { apiKeyId, email } },
-      data: {
-        ...(first_name !== undefined && { firstName: first_name }),
-        ...(last_name  !== undefined && { lastName:  last_name }),
-        ...(custom_fields !== undefined && { customFields: custom_fields as Prisma.InputJsonValue }),
-      },
-      select: { id: true, email: true, firstName: true, lastName: true, customFields: true, updatedAt: true },
+
+    const updated = await withTenant(apiKeyId, async (tx) => {
+      const contact = await tx.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
+      if (!contact) throw Errors.notFound('Contact not found.');
+
+      return tx.contact.update({
+        where: { apiKeyId_email: { apiKeyId, email } },
+        data: {
+          ...(first_name !== undefined && { firstName: first_name }),
+          ...(last_name  !== undefined && { lastName:  last_name }),
+          ...(custom_fields !== undefined && { customFields: custom_fields as Prisma.InputJsonValue }),
+        },
+        select: { id: true, email: true, firstName: true, lastName: true, customFields: true, updatedAt: true },
+      });
     });
     return reply.status(200).send(updated);
   });
@@ -271,26 +296,33 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const email = decodeURIComponent(rawEmail).toLowerCase();
     const apiKeyId = request.apiKey.id;
 
-    const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
-    if (!contact) throw Errors.notFound('Contact not found.');
-
     // isLikelyBot:false throughout — see engine/botDetection.ts. Without
     // it, Apple MPP alone inflates every MPP-enabled contact's engagement
     // score and recency, which is exactly backwards from what this
     // endpoint exists to tell a customer (who is actually worth
     // prioritizing outreach to).
-    const [sendCount, opens, clicks, bounces, complaints, lastEvent] = await Promise.all([
-      prisma.sendMessage.count({ where: { apiKeyId, to: email } }),
-      prisma.trackingEvent.count({ where: { email, type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } } }),
-      prisma.trackingEvent.count({ where: { email, type: 'click', isLikelyBot: false, sendMessage: { apiKeyId } } }),
-      prisma.sendMessage.count({ where: { apiKeyId, to: email, status: 'bounced' } }),
-      prisma.sendMessage.count({ where: { apiKeyId, to: email, status: 'complained' } }),
-      prisma.trackingEvent.findFirst({
-        where: { email, isLikelyBot: false, sendMessage: { apiKeyId } },
-        orderBy: { occurredAt: 'desc' },
-        select: { occurredAt: true },
-      }),
-    ]);
+    // trackingEvent is not an RLS-covered table, so those two queries stay
+    // on the outer `prisma` client even though they run alongside the
+    // sendMessage counts inside this tenant-scoped transaction.
+    const { sendCount, opens, clicks, bounces, complaints, lastEvent } = await withTenant(apiKeyId, async (tx) => {
+      const contact = await tx.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
+      if (!contact) throw Errors.notFound('Contact not found.');
+
+      const [sendCount, opens, clicks, bounces, complaints, lastEvent] = await Promise.all([
+        tx.sendMessage.count({ where: { apiKeyId, to: email } }),
+        prisma.trackingEvent.count({ where: { email, type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } } }),
+        prisma.trackingEvent.count({ where: { email, type: 'click', isLikelyBot: false, sendMessage: { apiKeyId } } }),
+        tx.sendMessage.count({ where: { apiKeyId, to: email, status: 'bounced' } }),
+        tx.sendMessage.count({ where: { apiKeyId, to: email, status: 'complained' } }),
+        prisma.trackingEvent.findFirst({
+          where: { email, isLikelyBot: false, sendMessage: { apiKeyId } },
+          orderBy: { occurredAt: 'desc' },
+          select: { occurredAt: true },
+        }),
+      ]);
+
+      return { sendCount, opens, clicks, bounces, complaints, lastEvent };
+    });
 
     const delivered = sendCount - bounces - complaints;
     const openRate  = delivered > 0 ? opens / delivered : 0;
@@ -341,15 +373,32 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const q = request.query as { limit?: string };
     const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
-    const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
-    if (!contact) throw Errors.notFound('Contact not found.');
+    // trackingEvent is not an RLS-covered table, so it stays on the outer
+    // `prisma` client while the other two tenant-scoped queries run through
+    // `tx`. Suppression runs separately under withRlsBypass, not `tx` — it's
+    // deliberately global (see schema.prisma), and nesting it inside this
+    // withTenant(apiKeyId) scope would hide a suppression another tenant's
+    // send caused.
+    const [{ sends, listChanges }, trackingEvents, suppression] = await Promise.all([
+      withTenant(apiKeyId, async (tx) => {
+        const contact = await tx.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
+        if (!contact) throw Errors.notFound('Contact not found.');
 
-    const [sends, trackingEvents, listChanges, suppression] = await Promise.all([
-      prisma.sendMessage.findMany({
-        where: { apiKeyId, to: email },
-        orderBy: { createdAt: 'desc' },
-        take: limit,
-        select: { id: true, subject: true, status: true, createdAt: true, sentAt: true, templateId: true },
+        const [sends, listChanges] = await Promise.all([
+          tx.sendMessage.findMany({
+            where: { apiKeyId, to: email },
+            orderBy: { createdAt: 'desc' },
+            take: limit,
+            select: { id: true, subject: true, status: true, createdAt: true, sentAt: true, templateId: true },
+          }),
+          tx.contactListMembership.findMany({
+            where: { contact: { apiKeyId, email } },
+            orderBy: { subscribedAt: 'desc' },
+            select: { status: true, subscribedAt: true, unsubscribedAt: true, list: { select: { id: true, name: true } } },
+          }),
+        ]);
+
+        return { sends, listChanges };
       }),
       // isLikelyBot:false — this timeline is presented to the customer as
       // "email_opened"/"email_clicked" (real engagement), which a bot
@@ -360,13 +409,7 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
         take: limit,
         select: { id: true, type: true, linkUrl: true, occurredAt: true, sendMessageId: true },
       }),
-      prisma.contactListMembership.findMany({
-        where: { contact: { apiKeyId, email } },
-        orderBy: { subscribedAt: 'desc' },
-        select: { status: true, subscribedAt: true, unsubscribedAt: true, list: { select: { id: true, name: true } } },
-      }),
-      // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
-      prisma.suppression.findFirst({ where: { email }, select: { reason: true, createdAt: true } }),
+      withRlsBypass((tx) => tx.suppression.findFirst({ where: { email }, select: { reason: true, createdAt: true } })),
     ]);
 
     // Merge events into a unified timeline
@@ -407,12 +450,17 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     const email = decodeURIComponent(rawEmail).toLowerCase();
     const apiKeyId = request.apiKey.id;
 
-    const contact = await prisma.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
-    if (!contact) throw Errors.notFound('Contact not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const contact = await tx.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
+      if (!contact) throw Errors.notFound('Contact not found.');
+    });
 
     // isLikelyBot:false — a bot/scanner prefetch's timing has nothing to
     // do with when this contact actually reads email, and would corrupt
     // the recommended send window otherwise.
+    // trackingEvent is not an RLS-covered table, so this query stays on
+    // the outer `prisma` client — only the contact-ownership check above
+    // needs to run inside withTenant.
     const opens = await prisma.trackingEvent.findMany({
       where: { email, type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } },
       select: { occurredAt: true },
@@ -469,10 +517,21 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
 
     const { contactId, listId } = payload;
 
-    const membership = await prisma.contactListMembership.findUnique({
+    // Deviation: this route is reached via an emailed token (contactId +
+    // listId only), not API-key auth, so there is no apiKeyId to open
+    // withTenant with up front. Resolve the owning tenant from the list
+    // first (if the list doesn't exist, membership can't either, so this
+    // preserves the original "Subscription not found" 404 for that case),
+    // then scope the rest of the work with withTenant using that tenant.
+    const list = await prisma.mailingList.findUnique({ where: { id: listId }, select: { apiKeyId: true } });
+    if (!list) {
+      return reply.status(404).type('text/html').send('<h2>Subscription not found.</h2>');
+    }
+
+    const membership = await withTenant(list.apiKeyId, (tx) => tx.contactListMembership.findUnique({
       where: { contactId_listId: { contactId, listId } },
       include: { list: { select: { name: true } }, contact: { select: { email: true } } },
-    });
+    }));
 
     if (!membership) {
       return reply.status(404).type('text/html').send('<h2>Subscription not found.</h2>');
@@ -482,16 +541,18 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(200).type('text/html').send(`<h2>You're already confirmed for ${membership.list.name}!</h2>`);
     }
 
-    await prisma.contactListMembership.update({
-      where: { contactId_listId: { contactId, listId } },
-      data: { status: 'subscribed' },
-    });
+    await withTenant(list.apiKeyId, async (tx) => {
+      await tx.contactListMembership.update({
+        where: { contactId_listId: { contactId, listId } },
+        data: { status: 'subscribed' },
+      });
 
-    // Increment list counter now that confirmation is complete
-    await prisma.mailingList.update({
-      where: { id: listId },
-      data: { contactCount: { increment: 1 } },
-    }).catch(() => {});
+      // Increment list counter now that confirmation is complete
+      await tx.mailingList.update({
+        where: { id: listId },
+        data: { contactCount: { increment: 1 } },
+      }).catch(() => {});
+    });
 
     return reply.status(200).type('text/html').send(
       `<!doctype html><html><head><meta charset=utf-8><title>Subscribed</title><style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;text-align:center;color:#111}h1{font-size:2rem;margin-bottom:.5rem}p{color:#555}</style></head><body><h1>✓ You're subscribed!</h1><p>You've confirmed your subscription to <strong>${membership.list.name}</strong>.</p><p>Email: ${membership.contact.email}</p></body></html>`,
@@ -529,26 +590,31 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
       const apiKeyId = request.apiKey.id;
 
       // Resolve or create target list
-      let resolvedListId = list_id ?? null;
-      if (!resolvedListId && list_name) {
-        const newList = await prisma.mailingList.create({
-          data: { apiKeyId, name: list_name, description: `Imported from ${source_platform ?? 'CSV'}` },
-          select: { id: true },
-        });
-        resolvedListId = newList.id;
-      }
-      if (resolvedListId) {
-        const listOwned = await prisma.mailingList.findFirst({ where: { id: resolvedListId, apiKeyId }, select: { id: true } });
-        if (!listOwned) throw Errors.notFound('List not found');
-      }
+      const resolvedListId = await withTenant(apiKeyId, async (tx) => {
+        let resolvedListId = list_id ?? null;
+        if (!resolvedListId && list_name) {
+          const newList = await tx.mailingList.create({
+            data: { apiKeyId, name: list_name, description: `Imported from ${source_platform ?? 'CSV'}` },
+            select: { id: true },
+          });
+          resolvedListId = newList.id;
+        }
+        if (resolvedListId) {
+          const listOwned = await tx.mailingList.findFirst({ where: { id: resolvedListId, apiKeyId }, select: { id: true } });
+          if (!listOwned) throw Errors.notFound('List not found');
+        }
+        return resolvedListId;
+      });
 
-      // Load existing suppressions in bulk to skip them
-      // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
+      // Load existing suppressions in bulk to skip them. withRlsBypass, not
+      // withTenant: Suppression is deliberately global (see schema.prisma)
+      // — a bounce/complaint/opt-out under any tenant must still be
+      // respected here.
       const suppressionEmails = new Set(
-        (await prisma.suppression.findMany({
+        (await withRlsBypass((tx) => tx.suppression.findMany({
           where: { email: { in: contacts.map(c => c.email.toLowerCase()) } },
           select: { email: true },
-        })).map(s => s.email),
+        }))).map(s => s.email),
       );
 
       let imported = 0, skipped = 0;
@@ -570,31 +636,37 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
       // batch).
       const CONCURRENCY = 20;
 
+      // Each contact still needs its own withTenant call (a short,
+      // per-pair transaction) so RLS sees app.current_api_key_id — this is
+      // still many small independent transactions, not the one big shared
+      // one the comment above rules out.
       async function upsertOne(c: { email: string; first_name?: string | null; last_name?: string | null; custom_fields?: Record<string, string> }): Promise<boolean> {
         const email = c.email.toLowerCase();
         try {
-          const contact = await prisma.contact.upsert({
-            where: { apiKeyId_email: { apiKeyId, email } },
-            create: {
-              apiKeyId, email,
-              firstName: c.first_name ?? null,
-              lastName: c.last_name ?? null,
-              customFields: (c.custom_fields ?? {}) as Prisma.InputJsonValue,
-            },
-            update: {
-              ...(c.first_name != null && { firstName: c.first_name }),
-              ...(c.last_name != null && { lastName: c.last_name }),
-            },
-            select: { id: true },
-          });
-
-          if (resolvedListId) {
-            await prisma.contactListMembership.upsert({
-              where: { contactId_listId: { contactId: contact.id, listId: resolvedListId } },
-              create: { contactId: contact.id, listId: resolvedListId, status: 'subscribed' },
-              update: {},
+          await withTenant(apiKeyId, async (tx) => {
+            const contact = await tx.contact.upsert({
+              where: { apiKeyId_email: { apiKeyId, email } },
+              create: {
+                apiKeyId, email,
+                firstName: c.first_name ?? null,
+                lastName: c.last_name ?? null,
+                customFields: (c.custom_fields ?? {}) as Prisma.InputJsonValue,
+              },
+              update: {
+                ...(c.first_name != null && { firstName: c.first_name }),
+                ...(c.last_name != null && { lastName: c.last_name }),
+              },
+              select: { id: true },
             });
-          }
+
+            if (resolvedListId) {
+              await tx.contactListMembership.upsert({
+                where: { contactId_listId: { contactId: contact.id, listId: resolvedListId } },
+                create: { contactId: contact.id, listId: resolvedListId, status: 'subscribed' },
+                update: {},
+              });
+            }
+          });
           return true;
         } catch {
           return false;
@@ -620,21 +692,21 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
       if (suppressions.length > 0) {
         for (let i = 0; i < suppressions.length; i += SUPPRESSION_BATCH) {
           const batch = suppressions.slice(i, i + SUPPRESSION_BATCH);
-          await prisma.$executeRaw`
+          await withTenant(apiKeyId, (tx) => tx.$executeRaw`
             INSERT INTO suppressions (email, reason, "createdAt")
             SELECT unnest(${batch.map(s => s.email.toLowerCase())}::text[]),
                    unnest(${batch.map(s => s.reason ?? 'unsubscribed')}::text[]),
                    now()
-            ON CONFLICT (email) DO NOTHING`;
+            ON CONFLICT (email) DO NOTHING`);
           suppressionsAdded += batch.length;
         }
       }
 
       if (resolvedListId) {
-        await prisma.mailingList.update({
+        await withTenant(apiKeyId, (tx) => tx.mailingList.update({
           where: { id: resolvedListId },
           data: { contactCount: imported },
-        }).catch(() => {});
+        })).catch(() => {});
       }
 
       return reply.send({

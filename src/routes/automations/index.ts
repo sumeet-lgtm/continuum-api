@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withRlsBypass } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
 const stepSchema = z.object({
@@ -141,7 +142,9 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     const { event, email, data } = parsed.data;
 
     // Check suppression
-    const suppressed = await prisma.suppression.findUnique({ where: { email } });
+    // Suppression is deliberately global — not scoped to this apiKeyId — so
+    // withRlsBypass, not withTenant.
+    const suppressed = await withRlsBypass((tx) => tx.suppression.findUnique({ where: { email } }));
     if (suppressed) {
       return reply.status(200).send({ enrolled: false, reason: 'suppressed' });
     }

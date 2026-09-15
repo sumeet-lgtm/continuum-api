@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { config } from '../config.js';
 import { deriveImapHost, IMAP_PORT } from '../lib/imapHost.js';
+import { withTenant, withRlsBypass, type PrismaTx } from '../lib/tenantContext.js';
 
 // Diagnostic-only: node-imap's own connect error swallows which cert was
 // actually presented, so a self-signed-cert failure gives no way to tell
@@ -53,14 +54,20 @@ async function classifyReplyBody(body: string): Promise<{ category: string; conf
 }
 
 // Auto-enroll a lead in any REPLIED-triggered subsequences of the parent sequence
-async function triggerSubsequences(parentSequenceId: string, email: string, triggerEvent: string, variables: Record<string, unknown>): Promise<void> {
-  const subsequences = await prisma.sequence.findMany({
+//
+// Takes `tx` rather than opening its own withTenant() transaction: every
+// caller already runs inside a withTenant(mailbox.apiKeyId, ...) block for
+// this same reply, and a nested $transaction here would risk a deadlock /
+// undefined-behavior situation with the outer one. The caller threads its
+// own tx down instead.
+async function triggerSubsequences(tx: PrismaTx, parentSequenceId: string, email: string, triggerEvent: string, variables: Record<string, unknown>): Promise<void> {
+  const subsequences = await tx.sequence.findMany({
     where: { parentSequenceId, triggerEvent },
     include: { steps: { orderBy: { stepOrder: 'asc' } } },
   });
 
   for (const sub of subsequences) {
-    const existing = await prisma.sequenceEnrollment.findUnique({
+    const existing = await tx.sequenceEnrollment.findUnique({
       where: { sequenceId_email: { sequenceId: sub.id, email } },
     });
     if (existing) continue;
@@ -68,7 +75,7 @@ async function triggerSubsequences(parentSequenceId: string, email: string, trig
     const delay = (sub.triggerDelayDays ?? 0) * 24 * 60 * 60 * 1000;
     const nextSendAt = sub.steps.length > 0 ? new Date(Date.now() + delay) : null;
 
-    await prisma.sequenceEnrollment.create({
+    await tx.sequenceEnrollment.create({
       data: { sequenceId: sub.id, email, variables: variables as never, nextSendAt, status: 'active', currentStep: 0 },
     }).catch(() => { /* ignore if already exists */ });
 
@@ -85,7 +92,7 @@ function timeoutAfter(ms: number, label: string): Promise<never> {
 }
 
 async function pollOneMailbox(mailbox: {
-  id: string; type: string; host: string | null; port: number | null;
+  id: string; apiKeyId: string; type: string; host: string | null; port: number | null;
   username: string; passwordEnc: string | null; oauthTokenEnc: string | null;
 }): Promise<void> {
   let connection: Awaited<ReturnType<typeof import('imap-simple').connect>> | null = null;
@@ -180,18 +187,24 @@ async function pollOneMailbox(mailbox: {
           // enrollment for the same address (e.g. two accounts both
           // emailing the same person), silently pausing the wrong
           // sequence and misattributing the reply.
-          const enrollment = await prisma.sequenceEnrollment.findFirst({
-            where: { email: fromEmail.toLowerCase(), status: 'active', mailboxId: mailbox.id },
-            select: { id: true, sequenceId: true, status: true, variables: true },
+          const { enrollment, seq } = await withTenant(mailbox.apiKeyId, async (tx) => {
+            const enrollment = await tx.sequenceEnrollment.findFirst({
+              where: { email: fromEmail.toLowerCase(), status: 'active', mailboxId: mailbox.id },
+              select: { id: true, sequenceId: true, status: true, variables: true },
+            });
+
+            const seq = enrollment
+              ? await tx.sequence.findUnique({
+                  where: { id: enrollment.sequenceId },
+                  select: { stopOnReply: true, apiKeyId: true },
+                })
+              : null;
+
+            return { enrollment, seq };
           });
 
           if (enrollment) {
             enrollmentId = enrollment.id;
-
-            const seq = await prisma.sequence.findUnique({
-              where: { id: enrollment.sequenceId },
-              select: { stopOnReply: true, apiKeyId: true },
-            });
 
             // AI classify the reply to determine intent
             const classification = bodySnippet
@@ -206,18 +219,20 @@ async function pollOneMailbox(mailbox: {
             // active and the lead isn't treated as having replied.
             if (classification.category === 'out_of_office') {
               const resumeAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
-              await prisma.sequenceEnrollment.update({
-                where: { id: enrollment.id },
-                data: { nextSendAt: resumeAt },
-              }).catch(() => {});
-              await prisma.replyEvent.create({
-                data: {
-                  mailboxId: mailbox.id, fromEmail: fromEmail.toLowerCase(),
-                  inReplyToMessageId: inReplyTo || null, messageId: messageId || null,
-                  enrollmentId: enrollment.id,
-                  subject: subject || null, bodySnippet: bodySnippet || null,
-                },
-              }).catch(() => {});
+              await withTenant(mailbox.apiKeyId, async (tx) => {
+                await tx.sequenceEnrollment.update({
+                  where: { id: enrollment.id },
+                  data: { nextSendAt: resumeAt },
+                }).catch(() => {});
+                await tx.replyEvent.create({
+                  data: {
+                    mailboxId: mailbox.id, fromEmail: fromEmail.toLowerCase(),
+                    inReplyToMessageId: inReplyTo || null, messageId: messageId || null,
+                    enrollmentId: enrollment.id,
+                    subject: subject || null, bodySnippet: bodySnippet || null,
+                  },
+                }).catch(() => {});
+              });
               logger.info({ fromEmail, resumeAt }, 'OOO detected — pausing enrollment for 3 days');
               continue;
             }
@@ -233,62 +248,64 @@ async function pollOneMailbox(mailbox: {
               : classification.category === 'unsubscribe' ? 'unsubscribed'
               : (isHardStop || seq?.stopOnReply) ? 'replied' : 'active';
 
-            await prisma.sequenceEnrollment.update({
-              where: { id: enrollment.id },
-              data: { status: enrollmentStatus, repliedAt: new Date() },
+            await withTenant(mailbox.apiKeyId, async (tx) => {
+              await tx.sequenceEnrollment.update({
+                where: { id: enrollment.id },
+                data: { status: enrollmentStatus, repliedAt: new Date() },
+              });
+
+              // Scoped to this reply's own tenant (seq.apiKeyId) — without it, a
+              // reply to one tenant's outreach would silently overwrite a
+              // DIFFERENT tenant's Lead record for the same prospect email
+              // (two accounts emailing the same person is common), corrupting
+              // that other tenant's lead status/repliedAt. If the sequence
+              // lookup above came back empty, skip rather than fall back to an
+              // unscoped update.
+              if (seq?.apiKeyId) {
+                await tx.lead.updateMany({
+                  where: { email: fromEmail.toLowerCase(), apiKeyId: seq.apiKeyId },
+                  data: {
+                    status: classification.category === 'interested' ? 'interested'
+                      : classification.category === 'not_interested' ? 'not_interested'
+                      : classification.category === 'unsubscribe' ? 'unsubscribed'
+                      : classification.category === 'bounced' ? 'bounced'
+                      : 'replied',
+                    repliedAt: new Date(),
+                  },
+                }).catch(() => {});
+              }
+
+              // Only a genuine reply should re-enroll the lead in REPLIED-triggered
+              // subsequences — a bounce or unsubscribe isn't a signal to follow up.
+              if (!isHardStop) {
+                const vars = (enrollment.variables as Record<string, unknown>) ?? {};
+                await triggerSubsequences(tx, enrollment.sequenceId, fromEmail.toLowerCase(), 'REPLIED', vars);
+              }
+
+              // Unsubscribe or bounce (an NDR landing in the inbox — the only
+              // bounce signal a mailbox-based SMTP send ever produces, since it
+              // never goes through SES/SNS) both go on the shared suppression
+              // list so no other sequence or campaign can reach this address
+              // either. Missing the bounce case here meant an address that
+              // hard-bounced through a connected mailbox stayed fully sendable
+              // everywhere else — the exact gap this list exists to close.
+              if (classification.category === 'unsubscribe' || classification.category === 'bounced') {
+                await tx.suppression.upsert({
+                  where: { email: fromEmail.toLowerCase() },
+                  update: {},
+                  create: {
+                    email: fromEmail.toLowerCase(),
+                    reason: classification.category === 'unsubscribe' ? 'unsubscribed' : 'hard_bounce',
+                    apiKeyId: seq?.apiKeyId ?? '',
+                  },
+                }).catch(() => {});
+              }
             });
-
-            // Scoped to this reply's own tenant (seq.apiKeyId) — without it, a
-            // reply to one tenant's outreach would silently overwrite a
-            // DIFFERENT tenant's Lead record for the same prospect email
-            // (two accounts emailing the same person is common), corrupting
-            // that other tenant's lead status/repliedAt. If the sequence
-            // lookup above came back empty, skip rather than fall back to an
-            // unscoped update.
-            if (seq?.apiKeyId) {
-              await prisma.lead.updateMany({
-                where: { email: fromEmail.toLowerCase(), apiKeyId: seq.apiKeyId },
-                data: {
-                  status: classification.category === 'interested' ? 'interested'
-                    : classification.category === 'not_interested' ? 'not_interested'
-                    : classification.category === 'unsubscribe' ? 'unsubscribed'
-                    : classification.category === 'bounced' ? 'bounced'
-                    : 'replied',
-                  repliedAt: new Date(),
-                },
-              }).catch(() => {});
-            }
-
-            // Only a genuine reply should re-enroll the lead in REPLIED-triggered
-            // subsequences — a bounce or unsubscribe isn't a signal to follow up.
-            if (!isHardStop) {
-              const vars = (enrollment.variables as Record<string, unknown>) ?? {};
-              await triggerSubsequences(enrollment.sequenceId, fromEmail.toLowerCase(), 'REPLIED', vars);
-            }
-
-            // Unsubscribe or bounce (an NDR landing in the inbox — the only
-            // bounce signal a mailbox-based SMTP send ever produces, since it
-            // never goes through SES/SNS) both go on the shared suppression
-            // list so no other sequence or campaign can reach this address
-            // either. Missing the bounce case here meant an address that
-            // hard-bounced through a connected mailbox stayed fully sendable
-            // everywhere else — the exact gap this list exists to close.
-            if (classification.category === 'unsubscribe' || classification.category === 'bounced') {
-              await prisma.suppression.upsert({
-                where: { email: fromEmail.toLowerCase() },
-                update: {},
-                create: {
-                  email: fromEmail.toLowerCase(),
-                  reason: classification.category === 'unsubscribe' ? 'unsubscribed' : 'hard_bounce',
-                  apiKeyId: seq?.apiKeyId ?? '',
-                },
-              }).catch(() => {});
-            }
           }
         }
 
         // Persist reply event
-        await prisma.replyEvent.create({
+        await withTenant(mailbox.apiKeyId, (tx) => tx.replyEvent.create({
           data: {
             mailboxId: mailbox.id,
             fromEmail: fromEmail.toLowerCase(),
@@ -298,7 +315,7 @@ async function pollOneMailbox(mailbox: {
             subject: subject || null,
             bodySnippet: bodySnippet || null,
           },
-        }).catch(() => {});
+        })).catch(() => {});
       }
 
   } catch (err) {
@@ -315,10 +332,10 @@ async function pollOneMailbox(mailbox: {
     // this product is trying not to be. Keep it in our own logs (for
     // support/debugging) without surfacing it to the customer until the
     // underlying IMAP restriction is actually fixed.
-    await prisma.mailbox.update({
+    await withTenant(mailbox.apiKeyId, (tx) => tx.mailbox.update({
       where: { id: mailbox.id },
       data: { lastCheckedAt: new Date() },
-    }).catch(() => {});
+    })).catch(() => {});
   } finally {
     // Always close, even on a mid-poll failure — an un-ended connection
     // left open on every error was a real, plausible contributor to the
@@ -338,15 +355,15 @@ async function pollMailboxes(): Promise<void> {
 
   // Polls every tenant's connected mailbox for new replies; every downstream
   // write below (replyEvent, sequenceEnrollment, lead, suppression) is
-  // scoped via this row's own mailbox.id/apiKeyId.
-  // tenant-sweep: see comment above
-  const mailboxes = await prisma.mailbox.findMany({
+  // scoped via this row's own mailbox.id/apiKeyId. withRlsBypass, not
+  // withTenant: this sweep must see every tenant's mailboxes, not just one.
+  const mailboxes = await withRlsBypass((tx) => tx.mailbox.findMany({
     where: {
       status: 'active',
       OR: [{ passwordEnc: { not: null } }, { oauthTokenEnc: { not: null } }],
     },
-    select: { id: true, type: true, host: true, port: true, username: true, passwordEnc: true, oauthTokenEnc: true },
-  });
+    select: { id: true, apiKeyId: true, type: true, host: true, port: true, username: true, passwordEnc: true, oauthTokenEnc: true },
+  }));
 
   logger.info({ mailboxCount: mailboxes.length }, 'IMAP tick starting');
 

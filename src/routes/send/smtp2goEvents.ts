@@ -10,6 +10,7 @@ import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 import {
   suppress, trackSoftBounce, correctOnGroundTruth, checkComplaintRate,
 } from '../../lib/bounceHandling.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 
 // ─── SMTP2GO event shape ────────────────────────────────────────────────────
 //
@@ -59,9 +60,10 @@ export async function smtp2goEventsRoute(fastify: FastifyInstance): Promise<void
       // Reverse lookup keyed by smtp2goMessageId, which is globally @unique
       // on SendMessage (schema.prisma) — apiKeyId isn't known yet at this
       // point, this lookup is how it gets resolved, and uniqueness
-      // guarantees no cross-tenant ambiguity.
-      // tenant-sweep: see comment above
-      const sendMessage = await prisma.sendMessage.findFirst({ where: { smtp2goMessageId: emailId } });
+      // guarantees no cross-tenant ambiguity. withRlsBypass, not withTenant
+      // — RLS would otherwise hide this row entirely with no session
+      // context set, breaking every SMTP2GO webhook.
+      const sendMessage = await withRlsBypass((tx) => tx.sendMessage.findFirst({ where: { smtp2goMessageId: emailId } }));
       if (!sendMessage) {
         // Not one of ours (or arrived before the row committed) — ack, don't retry forever.
         logger.info({ emailId, eventType }, 'SMTP2GO event for unknown sendMessage — acking');
@@ -94,7 +96,7 @@ async function handleSmtp2goEvent(
     await prisma.sendEvent.create({
       data: { sendMessageId, type: 'bounced', rawPayload: event as object },
     });
-    await prisma.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'bounced' } });
+    await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'bounced' } }));
 
     if (email) {
       if (event.bounce === 'hard') {
@@ -120,7 +122,7 @@ async function handleSmtp2goEvent(
     await prisma.sendEvent.create({
       data: { sendMessageId, type: 'complained', rawPayload: event as object },
     });
-    await prisma.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'complained' } });
+    await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'complained' } }));
 
     if (email) {
       await suppress(email, 'complaint', apiKeyId);
@@ -140,7 +142,7 @@ async function handleSmtp2goEvent(
     await prisma.sendEvent.create({
       data: { sendMessageId, type: 'delivered', rawPayload: event as object },
     });
-    await prisma.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'delivered' } });
+    await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'delivered' } }));
 
     if (email) {
       const payload: EmailDeliveredPayload = {

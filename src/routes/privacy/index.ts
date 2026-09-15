@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 
 interface DataSubjectQuery { email?: string; }
 interface DataSubjectBody { email?: string; }
@@ -19,42 +20,47 @@ export async function privacyRoutes(fastify: FastifyInstance): Promise<void> {
       const apiKeyId = request.apiKey.id;
       const lc = email.toLowerCase();
 
-      const [contact, verifications, messages, suppression, leads, seqEnrollments, autoEnrollments, campaignRecipients] =
+      const [[contact, messages, leads, seqEnrollments, campaignRecipients], verifications, suppression, autoEnrollments] =
         await Promise.all([
-          prisma.contact.findFirst({
-            where: { email: { equals: lc, mode: 'insensitive' }, apiKeyId },
-            select: { id: true, email: true, firstName: true, lastName: true, createdAt: true },
-          }),
+          withTenant(apiKeyId, (tx) => Promise.all([
+            tx.contact.findFirst({
+              where: { email: { equals: lc, mode: 'insensitive' }, apiKeyId },
+              select: { id: true, email: true, firstName: true, lastName: true, createdAt: true },
+            }),
+            tx.sendMessage.count({
+              where: { apiKeyId, to: { equals: lc, mode: 'insensitive' } },
+            }),
+            tx.lead.count({
+              where: { email: { equals: lc, mode: 'insensitive' }, apiKeyId },
+            }),
+            tx.sequenceEnrollment.count({
+              where: {
+                email: { equals: lc, mode: 'insensitive' },
+                sequence: { apiKeyId },
+              },
+            }),
+            tx.campaignRecipient.count({
+              where: {
+                email: { equals: lc, mode: 'insensitive' },
+                campaign: { apiKeyId },
+              },
+            }),
+          ])),
           prisma.verification.count({
             where: { email: { equals: lc, mode: 'insensitive' }, apiKeyId },
           }),
-          prisma.sendMessage.count({
-            where: { apiKeyId, to: { equals: lc, mode: 'insensitive' } },
-          }),
           // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
-          prisma.suppression.findFirst({
+          // withRlsBypass (not withTenant): a GDPR data-subject lookup must report
+          // whether this address is suppressed platform-wide, regardless of which
+          // tenant's send caused the suppression.
+          withRlsBypass((tx) => tx.suppression.findFirst({
             where: { email: { equals: lc, mode: 'insensitive' } },
             select: { reason: true, createdAt: true },
-          }),
-          prisma.lead.count({
-            where: { email: { equals: lc, mode: 'insensitive' }, apiKeyId },
-          }),
-          prisma.sequenceEnrollment.count({
-            where: {
-              email: { equals: lc, mode: 'insensitive' },
-              sequence: { apiKeyId },
-            },
-          }),
+          })),
           prisma.automationEnrollment.count({
             where: {
               email: { equals: lc, mode: 'insensitive' },
               automation: { apiKeyId },
-            },
-          }),
-          prisma.campaignRecipient.count({
-            where: {
-              email: { equals: lc, mode: 'insensitive' },
-              campaign: { apiKeyId },
             },
           }),
         ]);
@@ -92,43 +98,45 @@ export async function privacyRoutes(fastify: FastifyInstance): Promise<void> {
 
       // Delete in dependency order (children before parents)
       // 1. Mailing list memberships (FK: contactId → Contact)
-      await prisma.contactListMembership.deleteMany({
+      await withTenant(apiKeyId, (tx) => tx.contactListMembership.deleteMany({
         where: { contact: { email: { equals: email, mode: 'insensitive' }, apiKeyId } },
-      });
+      }));
 
       // 2. Parallel erasure of direct-apiKeyId records
-      await Promise.all([
-        prisma.contact.deleteMany({
+      await withTenant(apiKeyId, (tx) => Promise.all([
+        tx.contact.deleteMany({
           where: { email: { equals: email, mode: 'insensitive' }, apiKeyId },
         }),
         prisma.verification.deleteMany({
           where: { email: { equals: email, mode: 'insensitive' }, apiKeyId },
         }),
-        prisma.lead.deleteMany({
+        tx.lead.deleteMany({
           where: { email: { equals: email, mode: 'insensitive' }, apiKeyId },
         }),
-      ]);
+      ]));
 
       // 3. Erase enrollment records (joined through parent)
-      await Promise.all([
-        prisma.sequenceEnrollment.deleteMany({
+      await withTenant(apiKeyId, (tx) => Promise.all([
+        tx.sequenceEnrollment.deleteMany({
           where: { email: { equals: email, mode: 'insensitive' }, sequence: { apiKeyId } },
         }),
         prisma.automationEnrollment.deleteMany({
           where: { email: { equals: email, mode: 'insensitive' }, automation: { apiKeyId } },
         }),
-        prisma.campaignRecipient.deleteMany({
+        tx.campaignRecipient.deleteMany({
           where: { email: { equals: email, mode: 'insensitive' }, campaign: { apiKeyId } },
         }),
-      ]);
+      ]));
 
       // 4. Add to suppression list (prevent future sends — use 'manual' as the closest reason)
       // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
-      const existing = await prisma.suppression.findFirst({ where: { email } });
+      // withRlsBypass: the existence check and the unattributed (apiKeyId-less) create
+      // both need to see/affect the platform-wide list, not just this tenant's rows.
+      const existing = await withRlsBypass((tx) => tx.suppression.findFirst({ where: { email } }));
       if (!existing) {
-        await prisma.suppression.create({
+        await withRlsBypass((tx) => tx.suppression.create({
           data: { email, reason: 'manual' },
-        });
+        }));
       }
 
       return reply.status(200).send({

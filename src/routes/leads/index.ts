@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { config } from '../../config.js';
 
@@ -70,31 +70,35 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const { email, first_name, last_name, company, title, tags, custom_variables, sequence_id } = parsed.data;
 
-    const lead = await prisma.lead.upsert({
-      where: { apiKeyId_email: { apiKeyId, email } },
-      create: { apiKeyId, email, firstName: first_name ?? null, lastName: last_name ?? null, company: company ?? null, title: title ?? null, tags: tags ?? [], customVars: (custom_variables ?? {}) as Prisma.InputJsonValue },
-      update: {
-        ...(first_name !== undefined ? { firstName: first_name } : {}),
-        ...(last_name !== undefined ? { lastName: last_name } : {}),
-        ...(company !== undefined ? { company } : {}),
-        ...(title !== undefined ? { title } : {}),
-        ...(tags !== undefined ? { tags } : {}),
-        ...(custom_variables !== undefined ? { customVars: custom_variables as Prisma.InputJsonValue } : {}),
-      },
-      select: { id: true, email: true, firstName: true, lastName: true, company: true, tags: true, status: true, createdAt: true },
-    });
+    const lead = await withTenant(apiKeyId, async (tx) => {
+      const lead = await tx.lead.upsert({
+        where: { apiKeyId_email: { apiKeyId, email } },
+        create: { apiKeyId, email, firstName: first_name ?? null, lastName: last_name ?? null, company: company ?? null, title: title ?? null, tags: tags ?? [], customVars: (custom_variables ?? {}) as Prisma.InputJsonValue },
+        update: {
+          ...(first_name !== undefined ? { firstName: first_name } : {}),
+          ...(last_name !== undefined ? { lastName: last_name } : {}),
+          ...(company !== undefined ? { company } : {}),
+          ...(title !== undefined ? { title } : {}),
+          ...(tags !== undefined ? { tags } : {}),
+          ...(custom_variables !== undefined ? { customVars: custom_variables as Prisma.InputJsonValue } : {}),
+        },
+        select: { id: true, email: true, firstName: true, lastName: true, company: true, tags: true, status: true, createdAt: true },
+      });
 
-    // Auto-enroll in sequence if provided
-    if (sequence_id) {
-      const seq = await prisma.sequence.findFirst({ where: { id: sequence_id, apiKeyId } });
-      if (seq) {
-        await prisma.sequenceEnrollment.upsert({
-          where: { sequenceId_email: { sequenceId: sequence_id, email } },
-          create: { sequenceId: sequence_id, email, status: 'active', nextSendAt: new Date() },
-          update: {},
-        });
+      // Auto-enroll in sequence if provided
+      if (sequence_id) {
+        const seq = await tx.sequence.findFirst({ where: { id: sequence_id, apiKeyId } });
+        if (seq) {
+          await tx.sequenceEnrollment.upsert({
+            where: { sequenceId_email: { sequenceId: sequence_id, email } },
+            create: { sequenceId: sequence_id, email, status: 'active', nextSendAt: new Date() },
+            update: {},
+          });
+        }
       }
-    }
+
+      return lead;
+    });
 
     return reply.status(201).send(lead);
   });
@@ -114,11 +118,16 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
       const parsed = leadSchema.safeParse(raw);
       if (!parsed.success) continue;
       const { email, first_name, last_name, company, title, custom_variables } = parsed.data;
-      await prisma.lead.upsert({
+      // Each lead gets its own withTenant call (a short, independent
+      // transaction) — this loop was already sequential with no
+      // cross-item atomicity, so it doesn't need one big transaction
+      // wrapping all up-to-400 leads; RLS just needs the session var set
+      // per query.
+      await withTenant(apiKeyId, (tx) => tx.lead.upsert({
         where: { apiKeyId_email: { apiKeyId, email } },
         create: { apiKeyId, email, firstName: first_name ?? null, lastName: last_name ?? null, company: company ?? null, title: title ?? null, customVars: (custom_variables ?? {}) as Prisma.InputJsonValue },
         update: {},
-      });
+      }));
       created++;
     }
 
@@ -137,15 +146,15 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
     if (q.email) where['email'] = { contains: q.email.toLowerCase(), mode: 'insensitive' };
     if (q.tag) where['tags'] = { has: q.tag };
 
-    const [items, total] = await Promise.all([
-      prisma.lead.findMany({
+    const [items, total] = await withTenant(apiKeyId, (tx) => Promise.all([
+      tx.lead.findMany({
         where: where as never,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit, take: limit,
         select: { id: true, email: true, firstName: true, lastName: true, company: true, title: true, tags: true, status: true, createdAt: true },
       }),
-      prisma.lead.count({ where: where as never }),
-    ]);
+      tx.lead.count({ where: where as never }),
+    ]));
     return reply.status(200).send({ data: items, total, page, limit });
   });
 
@@ -153,10 +162,10 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/leads/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const lead = await prisma.lead.findFirst({
+    const lead = await withTenant(apiKeyId, (tx) => tx.lead.findFirst({
       where: { id, apiKeyId },
       select: { id: true, email: true, firstName: true, lastName: true, company: true, title: true, tags: true, status: true, customVars: true, repliedAt: true, unsubscribedAt: true, createdAt: true, updatedAt: true },
-    });
+    }));
     if (!lead) throw Errors.notFound('Lead not found.');
     return reply.status(200).send(lead);
   });
@@ -165,34 +174,39 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/leads/:id/activity', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const lead = await prisma.lead.findFirst({ where: { id, apiKeyId } });
-    if (!lead) throw Errors.notFound('Lead not found.');
 
-    const [sends, replyEvents, enrollments] = await Promise.all([
-      prisma.sendMessage.findMany({
-        where: { to: lead.email, apiKeyId },
-        orderBy: { createdAt: 'desc' },
-        take: 100,
-        select: {
-          id: true, subject: true, status: true, createdAt: true, sentAt: true, sequenceStepId: true,
-          trackingEvents: { select: { id: true, type: true, linkUrl: true, occurredAt: true }, orderBy: { occurredAt: 'asc' } },
-        },
-      }),
-      prisma.replyEvent.findMany({
-        where: { fromEmail: lead.email, mailbox: { apiKeyId } },
-        orderBy: { receivedAt: 'desc' },
-        take: 50,
-        select: { id: true, subject: true, bodySnippet: true, status: true, receivedAt: true, enrollmentId: true },
-      }),
-      prisma.sequenceEnrollment.findMany({
-        where: { email: lead.email, sequence: { apiKeyId } },
-        orderBy: { enrolledAt: 'desc' },
-        select: {
-          id: true, sequenceId: true, status: true, currentStep: true, nextSendAt: true, enrolledAt: true, completedAt: true, repliedAt: true,
-          sequence: { select: { id: true, name: true } },
-        },
-      }),
-    ]);
+    const { lead, sends, replyEvents, enrollments } = await withTenant(apiKeyId, async (tx) => {
+      const lead = await tx.lead.findFirst({ where: { id, apiKeyId } });
+      if (!lead) throw Errors.notFound('Lead not found.');
+
+      const [sends, replyEvents, enrollments] = await Promise.all([
+        tx.sendMessage.findMany({
+          where: { to: lead.email, apiKeyId },
+          orderBy: { createdAt: 'desc' },
+          take: 100,
+          select: {
+            id: true, subject: true, status: true, createdAt: true, sentAt: true, sequenceStepId: true,
+            trackingEvents: { select: { id: true, type: true, linkUrl: true, occurredAt: true }, orderBy: { occurredAt: 'asc' } },
+          },
+        }),
+        tx.replyEvent.findMany({
+          where: { fromEmail: lead.email, mailbox: { apiKeyId } },
+          orderBy: { receivedAt: 'desc' },
+          take: 50,
+          select: { id: true, subject: true, bodySnippet: true, status: true, receivedAt: true, enrollmentId: true },
+        }),
+        tx.sequenceEnrollment.findMany({
+          where: { email: lead.email, sequence: { apiKeyId } },
+          orderBy: { enrolledAt: 'desc' },
+          select: {
+            id: true, sequenceId: true, status: true, currentStep: true, nextSendAt: true, enrolledAt: true, completedAt: true, repliedAt: true,
+            sequence: { select: { id: true, name: true } },
+          },
+        }),
+      ]);
+
+      return { lead, sends, replyEvents, enrollments };
+    });
 
     // Build unified timeline
     const timeline: Array<{ type: string; occurredAt: string; data: Record<string, unknown> }> = [];
@@ -216,18 +230,22 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.patch('/leads/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const lead = await prisma.lead.findFirst({ where: { id, apiKeyId } });
-    if (!lead) throw Errors.notFound('Lead not found.');
     const body = request.body as Record<string, unknown>;
-    const updated = await prisma.lead.update({
-      where: { id },
-      data: {
-        ...(body['first_name'] !== undefined && { firstName: body['first_name'] as string }),
-        ...(body['last_name'] !== undefined && { lastName: body['last_name'] as string }),
-        ...(body['company'] !== undefined && { company: body['company'] as string }),
-        ...(body['title'] !== undefined && { title: body['title'] as string }),
-        ...(body['custom_variables'] !== undefined ? { customVars: body['custom_variables'] as Prisma.InputJsonValue } : {}),
-      },
+
+    const updated = await withTenant(apiKeyId, async (tx) => {
+      const lead = await tx.lead.findFirst({ where: { id, apiKeyId } });
+      if (!lead) throw Errors.notFound('Lead not found.');
+
+      return tx.lead.update({
+        where: { id },
+        data: {
+          ...(body['first_name'] !== undefined && { firstName: body['first_name'] as string }),
+          ...(body['last_name'] !== undefined && { lastName: body['last_name'] as string }),
+          ...(body['company'] !== undefined && { company: body['company'] as string }),
+          ...(body['title'] !== undefined && { title: body['title'] as string }),
+          ...(body['custom_variables'] !== undefined ? { customVars: body['custom_variables'] as Prisma.InputJsonValue } : {}),
+        },
+      });
     });
     return reply.status(200).send(updated);
   });
@@ -242,16 +260,18 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
       throw Errors.validationFailed([{ field: 'status', message: `Must be one of: ${VALID_STATUSES.join(', ')}` }]);
     }
 
-    const lead = await prisma.lead.findFirst({ where: { id, apiKeyId } });
-    if (!lead) throw Errors.notFound('Lead not found.');
+    const updated = await withTenant(apiKeyId, async (tx) => {
+      const lead = await tx.lead.findFirst({ where: { id, apiKeyId } });
+      if (!lead) throw Errors.notFound('Lead not found.');
 
-    const updated = await prisma.lead.update({
-      where: { id },
-      data: {
-        status: body.status,
-        ...(body.status === 'unsubscribed' && { unsubscribedAt: new Date() }),
-        ...(body.status === 'replied' && { repliedAt: new Date() }),
-      },
+      return tx.lead.update({
+        where: { id },
+        data: {
+          status: body.status,
+          ...(body.status === 'unsubscribed' && { unsubscribedAt: new Date() }),
+          ...(body.status === 'replied' && { repliedAt: new Date() }),
+        },
+      });
     });
     return reply.status(200).send(updated);
   });
@@ -262,9 +282,13 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const body = request.body as { tags?: string[] };
     if (!Array.isArray(body.tags)) throw Errors.validationFailed([{ field: 'tags', message: 'tags must be an array' }]);
-    const lead = await prisma.lead.findFirst({ where: { id, apiKeyId } });
-    if (!lead) throw Errors.notFound('Lead not found.');
-    const updated = await prisma.lead.update({ where: { id }, data: { tags: body.tags.slice(0, 20).map(t => t.trim()).filter(Boolean) } });
+    const tags = body.tags;
+
+    const updated = await withTenant(apiKeyId, async (tx) => {
+      const lead = await tx.lead.findFirst({ where: { id, apiKeyId } });
+      if (!lead) throw Errors.notFound('Lead not found.');
+      return tx.lead.update({ where: { id }, data: { tags: tags.slice(0, 20).map(t => t.trim()).filter(Boolean) } });
+    });
     return reply.status(200).send(updated);
   });
 
@@ -272,9 +296,11 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.delete('/leads/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const lead = await prisma.lead.findFirst({ where: { id, apiKeyId } });
-    if (!lead) throw Errors.notFound('Lead not found.');
-    await prisma.lead.delete({ where: { id } });
+    await withTenant(apiKeyId, async (tx) => {
+      const lead = await tx.lead.findFirst({ where: { id, apiKeyId } });
+      if (!lead) throw Errors.notFound('Lead not found.');
+      await tx.lead.delete({ where: { id } });
+    });
     return reply.status(200).send({ deleted: true, id });
   });
 
@@ -292,16 +318,17 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
     let leads: Array<{ id: string; email: string; firstName: string | null; lastName: string | null; company: string | null; title: string | null }>;
 
     if (body.all) {
-      leads = await prisma.lead.findMany({
+      leads = await withTenant(apiKeyId, (tx) => tx.lead.findMany({
         where: { apiKeyId },
         select: { id: true, email: true, firstName: true, lastName: true, company: true, title: true },
         take: MAX_BATCH,
-      });
+      }));
     } else if (body.leadIds && body.leadIds.length > 0) {
-      leads = await prisma.lead.findMany({
-        where: { id: { in: body.leadIds.slice(0, MAX_BATCH) }, apiKeyId },
+      const leadIds = body.leadIds.slice(0, MAX_BATCH);
+      leads = await withTenant(apiKeyId, (tx) => tx.lead.findMany({
+        where: { id: { in: leadIds }, apiKeyId },
         select: { id: true, email: true, firstName: true, lastName: true, company: true, title: true },
-      });
+      }));
     } else {
       return reply.status(400).send({ error: 'Provide leadIds[] or all: true' });
     }
@@ -342,17 +369,23 @@ Return only valid JSON, no explanation.`;
         const jsonMatch = raw.match(/\{[\s\S]*\}/);
         const generated = JSON.parse(jsonMatch ? jsonMatch[0] : raw) as Record<string, string>;
 
-        // Merge with existing customVars (don't overwrite non-AI fields)
-        const existing = await prisma.lead.findUnique({
-          where: { id: lead.id },
-          select: { customVars: true },
-        });
-        const existingVars = (existing?.customVars as Record<string, unknown>) ?? {};
-        const merged = { ...existingVars, ...generated };
+        // Merge with existing customVars (don't overwrite non-AI fields).
+        // This DB read+write pair is scoped in its own withTenant call,
+        // kept outside the external Anthropic fetch above so a
+        // transaction is never held open across a third-party network
+        // call.
+        await withTenant(apiKeyId, async (tx) => {
+          const existing = await tx.lead.findUnique({
+            where: { id: lead.id },
+            select: { customVars: true },
+          });
+          const existingVars = (existing?.customVars as Record<string, unknown>) ?? {};
+          const merged = { ...existingVars, ...generated };
 
-        await prisma.lead.update({
-          where: { id: lead.id },
-          data: { customVars: merged as never },
+          await tx.lead.update({
+            where: { id: lead.id },
+            data: { customVars: merged as never },
+          });
         });
         enriched++;
       } catch {
@@ -364,6 +397,8 @@ Return only valid JSON, no explanation.`;
   });
 
   // GET /v1/leads/import/apify/preview?datasetId=X  (or runId=X)
+  // No RLS-covered model calls here — only the Apify HTTP fetch and local
+  // mapping — so this handler is left unwrapped per the conversion rules.
   fastify.get('/leads/import/apify/preview', { preHandler: [requireAuth] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const q = request.query as { datasetId?: string; runId?: string };
     let datasetId = q.datasetId?.trim();
@@ -408,7 +443,13 @@ Return only valid JSON, no explanation.`;
         if (!mapped.email) { skipped++; continue; }
         const email = mapped.email.toLowerCase();
 
-        await prisma.lead.upsert({
+        // Each write keeps its own withTenant call and its own .catch,
+        // exactly mirroring the two independent (non-transactional)
+        // statements this loop body had before — pairing them into one
+        // shared transaction would change the error-isolation behavior
+        // (a failed enrollment upsert would then roll back an already
+        // -successful lead upsert, which never happened previously).
+        await withTenant(apiKeyId, (tx) => tx.lead.upsert({
           where: { apiKeyId_email: { apiKeyId, email } },
           create: {
             apiKeyId, email,
@@ -419,15 +460,15 @@ Return only valid JSON, no explanation.`;
             customVars: {} as Prisma.InputJsonValue,
           },
           update: {},
-        }).catch(() => { skipped++; return; });
+        })).catch(() => { skipped++; return; });
         imported++;
 
         if (sequenceId) {
-          await prisma.sequenceEnrollment.upsert({
+          await withTenant(apiKeyId, (tx) => tx.sequenceEnrollment.upsert({
             where: { sequenceId_email: { sequenceId, email } },
             create: { sequenceId, email, status: 'active', nextSendAt: new Date() },
             update: {},
-          }).catch(() => {});
+          })).catch(() => {});
         }
       }
 
@@ -445,15 +486,19 @@ Return only valid JSON, no explanation.`;
     const apiKeyId = request.apiKey.id;
     const email = q.email.trim().toLowerCase();
 
-    const lead = await prisma.lead.findUnique({
-      where: { apiKeyId_email: { apiKeyId, email } },
-    });
-    if (!lead) throw Errors.notFound('Lead not found.');
+    const { lead, enrollments } = await withTenant(apiKeyId, async (tx) => {
+      const lead = await tx.lead.findUnique({
+        where: { apiKeyId_email: { apiKeyId, email } },
+      });
+      if (!lead) throw Errors.notFound('Lead not found.');
 
-    // Fetch enrollments separately (no Prisma back-relation on Lead)
-    const enrollments = await prisma.sequenceEnrollment.findMany({
-      where: { email, sequence: { apiKeyId } },
-      select: { sequenceId: true, status: true, currentStep: true, nextSendAt: true },
+      // Fetch enrollments separately (no Prisma back-relation on Lead)
+      const enrollments = await tx.sequenceEnrollment.findMany({
+        where: { email, sequence: { apiKeyId } },
+        select: { sequenceId: true, status: true, currentStep: true, nextSendAt: true },
+      });
+
+      return { lead, enrollments };
     });
 
     return reply.status(200).send({ ...lead, enrollments });

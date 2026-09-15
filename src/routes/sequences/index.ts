@@ -9,6 +9,7 @@ import { logger } from '../../lib/logger.js';
 import { requireMonthlyQuota, incrementUsageBy } from '../../plugins/usageMeter.js';
 import { deriveSequenceSegments } from '../../lib/sequenceSegments.js';
 import { generateSegmentEmail } from '../../lib/emailGenerator.js';
+import { withTenant } from '../../lib/tenantContext.js';
 
 const GROWTH_PLANS = new Set(['growth', 'scale']);
 
@@ -80,7 +81,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const { name, mailbox_id, from_name, from_email, track_opens, track_clicks, stop_on_reply, stop_on_open, stop_on_click, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
 
-    const seq = await prisma.sequence.create({
+    const seq = await withTenant(apiKeyId, (tx) => tx.sequence.create({
       data: {
         apiKeyId, name, mailboxId: mailbox_id ?? null, fromName: from_name, fromEmail: from_email,
         trackOpens: track_opens, trackClicks: track_clicks, stopOnReply: stop_on_reply,
@@ -89,20 +90,20 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
         sendStartHour: send_start_hour, sendEndHour: send_end_hour, timezone,
       },
       select: { id: true, name: true, status: true, fromEmail: true, createdAt: true },
-    });
+    }));
     return reply.status(201).send(seq);
   });
 
   // GET /v1/sequences
   fastify.get('/sequences', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const apiKeyId = request.apiKey.id;
-    const sequences = await prisma.sequence.findMany({
+    const sequences = await withTenant(apiKeyId, (tx) => tx.sequence.findMany({
       where: { apiKeyId },
       orderBy: { createdAt: 'desc' },
       include: {
         _count: { select: { steps: true, enrollments: true } },
       },
-    });
+    }));
     return reply.status(200).send({ data: sequences });
   });
 
@@ -110,11 +111,14 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/sequences/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const seq = await prisma.sequence.findFirst({
-      where: { id, apiKeyId },
-      include: { steps: { orderBy: { stepOrder: 'asc' } }, _count: { select: { enrollments: true } } },
+    const seq = await withTenant(apiKeyId, async (tx) => {
+      const found = await tx.sequence.findFirst({
+        where: { id, apiKeyId },
+        include: { steps: { orderBy: { stepOrder: 'asc' } }, _count: { select: { enrollments: true } } },
+      });
+      if (!found) throw Errors.notFound('Sequence not found.');
+      return found;
     });
-    if (!seq) throw Errors.notFound('Sequence not found.');
     return reply.status(200).send(seq);
   });
 
@@ -122,26 +126,28 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.patch('/sequences/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
-    const parsed = createSchema.partial().safeParse(request.body);
-    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
-    const { name, mailbox_id, from_name, from_email, track_opens, track_clicks, stop_on_reply, stop_on_open, stop_on_click, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
-    const updateData: Record<string, unknown> = {};
-    if (name !== undefined) updateData['name'] = name;
-    if (mailbox_id !== undefined) updateData['mailboxId'] = mailbox_id;
-    if (from_name !== undefined) updateData['fromName'] = from_name;
-    if (from_email !== undefined) updateData['fromEmail'] = from_email;
-    if (track_opens !== undefined) updateData['trackOpens'] = track_opens;
-    if (track_clicks !== undefined) updateData['trackClicks'] = track_clicks;
-    if (stop_on_reply !== undefined) updateData['stopOnReply'] = stop_on_reply;
-    if (stop_on_open !== undefined) updateData['stopOnOpen'] = stop_on_open;
-    if (stop_on_click !== undefined) updateData['stopOnClick'] = stop_on_click;
-    if (send_days !== undefined) updateData['sendDays'] = send_days;
-    if (send_start_hour !== undefined) updateData['sendStartHour'] = send_start_hour;
-    if (send_end_hour !== undefined) updateData['sendEndHour'] = send_end_hour;
-    if (timezone !== undefined) updateData['timezone'] = timezone;
-    const updated = await prisma.sequence.update({ where: { id }, data: updateData as never, select: { id: true, name: true, status: true } });
+    const updated = await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+      const parsed = createSchema.partial().safeParse(request.body);
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+      const { name, mailbox_id, from_name, from_email, track_opens, track_clicks, stop_on_reply, stop_on_open, stop_on_click, send_days, send_start_hour, send_end_hour, timezone } = parsed.data;
+      const updateData: Record<string, unknown> = {};
+      if (name !== undefined) updateData['name'] = name;
+      if (mailbox_id !== undefined) updateData['mailboxId'] = mailbox_id;
+      if (from_name !== undefined) updateData['fromName'] = from_name;
+      if (from_email !== undefined) updateData['fromEmail'] = from_email;
+      if (track_opens !== undefined) updateData['trackOpens'] = track_opens;
+      if (track_clicks !== undefined) updateData['trackClicks'] = track_clicks;
+      if (stop_on_reply !== undefined) updateData['stopOnReply'] = stop_on_reply;
+      if (stop_on_open !== undefined) updateData['stopOnOpen'] = stop_on_open;
+      if (stop_on_click !== undefined) updateData['stopOnClick'] = stop_on_click;
+      if (send_days !== undefined) updateData['sendDays'] = send_days;
+      if (send_start_hour !== undefined) updateData['sendStartHour'] = send_start_hour;
+      if (send_end_hour !== undefined) updateData['sendEndHour'] = send_end_hour;
+      if (timezone !== undefined) updateData['timezone'] = timezone;
+      return tx.sequence.update({ where: { id }, data: updateData as never, select: { id: true, name: true, status: true } });
+    });
     return reply.status(200).send(updated);
   });
 
@@ -149,9 +155,11 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.delete('/sequences/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
-    await prisma.sequence.delete({ where: { id } });
+    await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+      await tx.sequence.delete({ where: { id } });
+    });
     return reply.status(200).send({ deleted: true, id });
   });
 
@@ -162,8 +170,10 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = stepSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+    });
 
     const lastStep = await prisma.sequenceStep.findFirst({ where: { sequenceId: id }, orderBy: { stepOrder: 'desc' } });
     const stepOrder = (lastStep?.stepOrder ?? 0) + 1;
@@ -187,8 +197,10 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/sequences/:id/steps', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+    });
     const steps = await prisma.sequenceStep.findMany({ where: { sequenceId: id }, orderBy: { stepOrder: 'asc' } });
     return reply.status(200).send({ data: steps });
   });
@@ -197,8 +209,10 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.patch('/sequences/:id/steps/:stepId', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id, stepId } = request.params as { id: string; stepId: string };
     const apiKeyId = request.apiKey.id;
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+    });
     const step = await prisma.sequenceStep.findFirst({ where: { id: stepId, sequenceId: id } });
     if (!step) throw Errors.notFound('Step not found.');
 
@@ -227,8 +241,10 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.delete('/sequences/:id/steps/:stepId', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id, stepId } = request.params as { id: string; stepId: string };
     const apiKeyId = request.apiKey.id;
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+    });
     await prisma.sequenceStep.delete({ where: { id: stepId } });
     return reply.status(200).send({ deleted: true, id: stepId });
   });
@@ -240,96 +256,103 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = enrollSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
-
     const body = request.body as { emails?: string[]; list_id?: string; variables?: Record<string, string>; force_move?: boolean };
 
-    let emails: string[] = parsed.data.emails ?? [];
+    const result = await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
 
-    if (parsed.data.list_id) {
-      const members = await prisma.contactListMembership.findMany({
-        where: { listId: parsed.data.list_id, status: 'subscribed', list: { apiKeyId } },
-        include: { contact: { select: { email: true } } },
-      });
-      emails = [...new Set([...emails, ...members.map(m => m.contact.email)])];
-    }
+      let emails: string[] = parsed.data.emails ?? [];
 
-    const firstStep = await prisma.sequenceStep.findFirst({ where: { sequenceId: id }, orderBy: { stepOrder: 'asc' } });
-    const nextSendAt = firstStep ? new Date() : null;
-
-    let enrolled = 0;
-    const conflicts: Array<{ email: string; conflictSequenceId: string; conflictSequenceName: string }> = [];
-    // Real bug, found and fixed 2026-09-14: an unenroll (DELETE
-    // /contacts/:email) soft-flags the row as 'unsubscribed' rather than
-    // deleting it, since 'unsubscribed' carries real compliance meaning
-    // and re-subscribing someone on a plain re-POST would be worse than
-    // this endpoint silently no-op'ing. But it WAS silently no-op'ing —
-    // `enrolled: 0` with an empty conflicts array gave the caller no way
-    // to tell "already active" apart from "explicitly unsubscribed" apart
-    // from "sequence completed, most a customer would expect to just work
-    // again." Surfacing the skip reason lets the dashboard show something
-    // honest instead of a bare, unexplained zero.
-    const skipped: Array<{ email: string; reason: string }> = [];
-
-    for (const email of emails) {
-      const existing = await prisma.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: id, email } } });
-      if (existing) {
-        skipped.push({ email, reason: existing.status === 'unsubscribed' ? 'previously_unsubscribed' : `already_${existing.status}` });
-        continue;
+      if (parsed.data.list_id) {
+        const members = await tx.contactListMembership.findMany({
+          where: { listId: parsed.data.list_id, status: 'subscribed', list: { apiKeyId } },
+          include: { contact: { select: { email: true } } },
+        });
+        emails = [...new Set([...emails, ...members.map(m => m.contact.email)])];
       }
 
-      // Cross-sequence exclusivity: one active sequence per lead
-      if (!body.force_move) {
-        // Scoped to this account's own sequences only — without sequence: { apiKeyId },
-        // this could both false-positive-block an enrollment because of some OTHER
-        // tenant's unrelated active enrollment for the same email, and leak that
-        // other tenant's private sequence name/id back in the conflict response.
-        const conflict = await prisma.sequenceEnrollment.findFirst({
-          where: { email, status: 'active', NOT: { sequenceId: id }, sequence: { apiKeyId } },
-          select: { sequenceId: true, sequence: { select: { name: true } } },
-        });
-        if (conflict) {
-          conflicts.push({ email, conflictSequenceId: conflict.sequenceId, conflictSequenceName: conflict.sequence?.name ?? conflict.sequenceId });
+      const firstStep = await prisma.sequenceStep.findFirst({ where: { sequenceId: id }, orderBy: { stepOrder: 'asc' } });
+      const nextSendAt = firstStep ? new Date() : null;
+
+      let enrolled = 0;
+      const conflicts: Array<{ email: string; conflictSequenceId: string; conflictSequenceName: string }> = [];
+      // Real bug, found and fixed 2026-09-14: an unenroll (DELETE
+      // /contacts/:email) soft-flags the row as 'unsubscribed' rather than
+      // deleting it, since 'unsubscribed' carries real compliance meaning
+      // and re-subscribing someone on a plain re-POST would be worse than
+      // this endpoint silently no-op'ing. But it WAS silently no-op'ing —
+      // `enrolled: 0` with an empty conflicts array gave the caller no way
+      // to tell "already active" apart from "explicitly unsubscribed" apart
+      // from "sequence completed, most a customer would expect to just work
+      // again." Surfacing the skip reason lets the dashboard show something
+      // honest instead of a bare, unexplained zero.
+      const skipped: Array<{ email: string; reason: string }> = [];
+
+      for (const email of emails) {
+        const existing = await tx.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: id, email } } });
+        if (existing) {
+          skipped.push({ email, reason: existing.status === 'unsubscribed' ? 'previously_unsubscribed' : `already_${existing.status}` });
           continue;
         }
-      }
-      if (body.force_move) {
-        // Deactivate any other active enrollment so this one becomes the sole active sequence
-        await prisma.sequenceEnrollment.updateMany({
-          where: { email, status: 'active', NOT: { sequenceId: id }, sequence: { apiKeyId } },
-          data: { status: 'paused' },
+
+        // Cross-sequence exclusivity: one active sequence per lead
+        if (!body.force_move) {
+          // Scoped to this account's own sequences only — without sequence: { apiKeyId },
+          // this could both false-positive-block an enrollment because of some OTHER
+          // tenant's unrelated active enrollment for the same email, and leak that
+          // other tenant's private sequence name/id back in the conflict response.
+          const conflict = await tx.sequenceEnrollment.findFirst({
+            where: { email, status: 'active', NOT: { sequenceId: id }, sequence: { apiKeyId } },
+            select: { sequenceId: true, sequence: { select: { name: true } } },
+          });
+          if (conflict) {
+            conflicts.push({ email, conflictSequenceId: conflict.sequenceId, conflictSequenceName: conflict.sequence?.name ?? conflict.sequenceId });
+            continue;
+          }
+        }
+        if (body.force_move) {
+          // Deactivate any other active enrollment so this one becomes the sole active sequence
+          await tx.sequenceEnrollment.updateMany({
+            where: { email, status: 'active', NOT: { sequenceId: id }, sequence: { apiKeyId } },
+            data: { status: 'paused' },
+          });
+        }
+
+        await tx.sequenceEnrollment.create({
+          data: { sequenceId: id, email, variables: parsed.data.variables ?? {}, nextSendAt, status: 'active', currentStep: 0 },
         });
+        enrolled++;
       }
 
-      await prisma.sequenceEnrollment.create({
-        data: { sequenceId: id, email, variables: parsed.data.variables ?? {}, nextSendAt, status: 'active', currentStep: 0 },
-      });
-      enrolled++;
-    }
+      return { enrolled, total: emails.length, conflicts, skipped };
+    });
 
-    return reply.status(200).send({ enrolled, total: emails.length, conflicts, skipped });
+    return reply.status(200).send(result);
   });
 
   // GET /v1/sequences/:id/contacts — enrollment status
   fastify.get('/sequences/:id/contacts', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
-
     const q = request.query as { status?: string; page?: string; limit?: string };
     const page = Math.max(1, parseInt(q.page ?? '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
-    const [items, total] = await Promise.all([
-      prisma.sequenceEnrollment.findMany({
-        where: { sequenceId: id, ...(q.status ? { status: q.status } : {}) },
-        orderBy: { enrolledAt: 'desc' },
-        skip: (page - 1) * limit, take: limit,
-      }),
-      prisma.sequenceEnrollment.count({ where: { sequenceId: id } }),
-    ]);
+    const { items, total } = await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+
+      const [items, total] = await Promise.all([
+        tx.sequenceEnrollment.findMany({
+          where: { sequenceId: id, ...(q.status ? { status: q.status } : {}) },
+          orderBy: { enrolledAt: 'desc' },
+          skip: (page - 1) * limit, take: limit,
+        }),
+        tx.sequenceEnrollment.count({ where: { sequenceId: id } }),
+      ]);
+      return { items, total };
+    });
     return reply.status(200).send({ data: items, total, page, limit });
   });
 
@@ -338,9 +361,11 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const { id, email: rawEmail } = request.params as { id: string; email: string };
     const email = decodeURIComponent(rawEmail).toLowerCase();
     const apiKeyId = request.apiKey.id;
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
-    await prisma.sequenceEnrollment.update({ where: { sequenceId_email: { sequenceId: id, email } }, data: { status: 'unsubscribed' } });
+    await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+      await tx.sequenceEnrollment.update({ where: { sequenceId_email: { sequenceId: id, email } }, data: { status: 'unsubscribed' } });
+    });
     return reply.status(200).send({ unenrolled: true, email });
   });
 
@@ -348,18 +373,20 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/sequences/:id/duplicate', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId }, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
+    const copy = await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId }, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
 
-    const copy = await prisma.sequence.create({
-      data: {
-        apiKeyId, name: `${seq.name} (Copy)`, mailboxId: seq.mailboxId,
-        fromName: seq.fromName, fromEmail: seq.fromEmail,
-        trackOpens: seq.trackOpens, trackClicks: seq.trackClicks, stopOnReply: seq.stopOnReply,
-        sendDays: seq.sendDays, sendStartHour: seq.sendStartHour, sendEndHour: seq.sendEndHour, timezone: seq.timezone,
-        steps: { create: seq.steps.map(s => ({ stepOrder: s.stepOrder, delayDays: s.delayDays, delayHours: s.delayHours, subject: s.subject, htmlBody: s.htmlBody, textBody: s.textBody, condition: s.condition })) },
-      },
-      select: { id: true, name: true, createdAt: true },
+      return tx.sequence.create({
+        data: {
+          apiKeyId, name: `${seq.name} (Copy)`, mailboxId: seq.mailboxId,
+          fromName: seq.fromName, fromEmail: seq.fromEmail,
+          trackOpens: seq.trackOpens, trackClicks: seq.trackClicks, stopOnReply: seq.stopOnReply,
+          sendDays: seq.sendDays, sendStartHour: seq.sendStartHour, sendEndHour: seq.sendEndHour, timezone: seq.timezone,
+          steps: { create: seq.steps.map(s => ({ stepOrder: s.stepOrder, delayDays: s.delayDays, delayHours: s.delayHours, subject: s.subject, htmlBody: s.htmlBody, textBody: s.textBody, condition: s.condition })) },
+        },
+        select: { id: true, name: true, createdAt: true },
+      });
     });
     return reply.status(201).send(copy);
   });
@@ -381,7 +408,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const body = request.body as { from_name?: string; from_email?: string; mailbox_id?: string } | undefined;
     const steps = tmpl.steps as Array<{ delayDays?: number; delay_days?: number; delayHours?: number; delay_hours?: number; subject: string; htmlBody?: string; html_body?: string; condition?: string; stepOrder?: number }>;
 
-    const seq = await prisma.sequence.create({
+    const seq = await withTenant(apiKeyId, (tx) => tx.sequence.create({
       data: {
         apiKeyId, name: tmpl.name, mailboxId: body?.mailbox_id ?? null,
         fromName: body?.from_name ?? 'Sender', fromEmail: body?.from_email ?? 'sender@example.com',
@@ -397,7 +424,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
         },
       },
       select: { id: true, name: true, status: true, createdAt: true },
-    });
+    }));
     return reply.status(201).send(seq);
   });
 
@@ -416,8 +443,10 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const { id, stepId } = request.params as { id: string; stepId: string };
     const apiKeyId = request.apiKey.id;
 
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+    });
 
     const step = await prisma.sequenceStep.findFirst({ where: { id: stepId, sequenceId: id } });
     if (!step) throw Errors.notFound('Step not found.');
@@ -439,8 +468,10 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const { id, stepId } = request.params as { id: string; stepId: string };
     const apiKeyId = request.apiKey.id;
 
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+    });
 
     const variants = await prisma.sequenceVariant.findMany({
       where: { stepId },
@@ -455,8 +486,10 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const { id, stepId, variantId } = request.params as { id: string; stepId: string; variantId: string };
     const apiKeyId = request.apiKey.id;
 
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
+    await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+    });
 
     const variant = await prisma.sequenceVariant.findFirst({ where: { id: variantId, stepId } });
     if (!variant) throw Errors.notFound('Variant not found.');
@@ -474,26 +507,28 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const parent = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!parent) throw Errors.notFound('Parent sequence not found.');
+    const child = await withTenant(apiKeyId, async (tx) => {
+      const parent = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!parent) throw Errors.notFound('Parent sequence not found.');
 
-    const parsed = subsequenceSchema.safeParse(request.body);
-    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+      const parsed = subsequenceSchema.safeParse(request.body);
+      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
-    const { name, trigger_event, trigger_delay_days, mailbox_id, from_name, from_email, track_opens, track_clicks, stop_on_reply } = parsed.data;
+      const { name, trigger_event, trigger_delay_days, mailbox_id, from_name, from_email, track_opens, track_clicks, stop_on_reply } = parsed.data;
 
-    const child = await prisma.sequence.create({
-      data: {
-        apiKeyId, name,
-        parentSequenceId: id,
-        triggerEvent: trigger_event,
-        triggerDelayDays: trigger_delay_days,
-        mailboxId: mailbox_id ?? parent.mailboxId,
-        fromName: from_name, fromEmail: from_email,
-        trackOpens: track_opens, trackClicks: track_clicks, stopOnReply: stop_on_reply,
-        sendDays: parent.sendDays, sendStartHour: parent.sendStartHour, sendEndHour: parent.sendEndHour, timezone: parent.timezone,
-      },
-      select: { id: true, name: true, status: true, parentSequenceId: true, triggerEvent: true, triggerDelayDays: true, createdAt: true },
+      return tx.sequence.create({
+        data: {
+          apiKeyId, name,
+          parentSequenceId: id,
+          triggerEvent: trigger_event,
+          triggerDelayDays: trigger_delay_days,
+          mailboxId: mailbox_id ?? parent.mailboxId,
+          fromName: from_name, fromEmail: from_email,
+          trackOpens: track_opens, trackClicks: track_clicks, stopOnReply: stop_on_reply,
+          sendDays: parent.sendDays, sendStartHour: parent.sendStartHour, sendEndHour: parent.sendEndHour, timezone: parent.timezone,
+        },
+        select: { id: true, name: true, status: true, parentSequenceId: true, triggerEvent: true, triggerDelayDays: true, createdAt: true },
+      });
     });
     return reply.status(201).send(child);
   });
@@ -503,15 +538,17 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const parent = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!parent) throw Errors.notFound('Sequence not found.');
+    const subsequences = await withTenant(apiKeyId, async (tx) => {
+      const parent = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!parent) throw Errors.notFound('Sequence not found.');
 
-    const subsequences = await prisma.sequence.findMany({
-      where: { parentSequenceId: id, apiKeyId },
-      include: {
-        _count: { select: { steps: true, enrollments: true } },
-      },
-      orderBy: { createdAt: 'asc' },
+      return tx.sequence.findMany({
+        where: { parentSequenceId: id, apiKeyId },
+        include: {
+          _count: { select: { steps: true, enrollments: true } },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
     });
     return reply.status(200).send({ data: subsequences });
   });
@@ -523,63 +560,73 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const body = request.body as { subsequence_id?: string } | undefined;
 
-    const parent = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!parent) throw Errors.notFound('Sequence not found.');
+    const result = await withTenant(apiKeyId, async (tx) => {
+      const parent = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!parent) throw Errors.notFound('Sequence not found.');
 
-    const enrollment = await prisma.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: id, email } } });
-    if (!enrollment) throw Errors.notFound('Lead not enrolled in this sequence.');
+      const enrollment = await tx.sequenceEnrollment.findUnique({ where: { sequenceId_email: { sequenceId: id, email } } });
+      if (!enrollment) throw Errors.notFound('Lead not enrolled in this sequence.');
 
-    // Find the target subsequence
-    const whereSubseq = body?.subsequence_id
-      ? { id: body.subsequence_id, parentSequenceId: id, apiKeyId }
-      : { parentSequenceId: id, apiKeyId };
+      // Find the target subsequence
+      const whereSubseq = body?.subsequence_id
+        ? { id: body.subsequence_id, parentSequenceId: id, apiKeyId }
+        : { parentSequenceId: id, apiKeyId };
 
-    const subsequence = await prisma.sequence.findFirst({ where: whereSubseq, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
-    if (!subsequence) throw Errors.notFound('Subsequence not found.');
+      const subsequence = await tx.sequence.findFirst({ where: whereSubseq, include: { steps: { orderBy: { stepOrder: 'asc' } } } });
+      if (!subsequence) throw Errors.notFound('Subsequence not found.');
 
-    // Enroll lead in the subsequence if not already enrolled
-    const existingSubEnrollment = await prisma.sequenceEnrollment.findUnique({
-      where: { sequenceId_email: { sequenceId: subsequence.id, email } },
+      // Enroll lead in the subsequence if not already enrolled
+      const existingSubEnrollment = await tx.sequenceEnrollment.findUnique({
+        where: { sequenceId_email: { sequenceId: subsequence.id, email } },
+      });
+
+      if (existingSubEnrollment) {
+        return { alreadyEnrolled: true as const, enrollmentId: existingSubEnrollment.id };
+      }
+
+      const firstStep = subsequence.steps[0];
+      const nextSendAt = firstStep
+        ? new Date(Date.now() + ((subsequence.triggerDelayDays ?? 0) * 24 * 60 * 60 * 1000))
+        : null;
+
+      const subEnrollment = await tx.sequenceEnrollment.create({
+        data: {
+          sequenceId: subsequence.id, email,
+          variables: enrollment.variables ?? {},
+          nextSendAt, status: 'active', currentStep: 0,
+        },
+        select: { id: true, sequenceId: true, email: true, status: true, nextSendAt: true },
+      });
+
+      return { alreadyEnrolled: false as const, enrollment: subEnrollment };
     });
 
-    if (existingSubEnrollment) {
-      return reply.status(200).send({ already_enrolled: true, enrollment_id: existingSubEnrollment.id });
+    if (result.alreadyEnrolled) {
+      return reply.status(200).send({ already_enrolled: true, enrollment_id: result.enrollmentId });
     }
-
-    const firstStep = subsequence.steps[0];
-    const nextSendAt = firstStep
-      ? new Date(Date.now() + ((subsequence.triggerDelayDays ?? 0) * 24 * 60 * 60 * 1000))
-      : null;
-
-    const subEnrollment = await prisma.sequenceEnrollment.create({
-      data: {
-        sequenceId: subsequence.id, email,
-        variables: enrollment.variables ?? {},
-        nextSendAt, status: 'active', currentStep: 0,
-      },
-      select: { id: true, sequenceId: true, email: true, status: true, nextSendAt: true },
-    });
-
-    return reply.status(201).send({ enrolled: true, enrollment: subEnrollment });
+    return reply.status(201).send({ enrolled: true, enrollment: result.enrollment });
   });
 
   // GET /v1/sequences/:id/stats
   fastify.get('/sequences/:id/stats', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const seq = await prisma.sequence.findFirst({ where: { id, apiKeyId } });
-    if (!seq) throw Errors.notFound('Sequence not found.');
 
     const steps = await prisma.sequenceStep.findMany({ where: { sequenceId: id }, select: { id: true } });
     const stepIds = steps.map(s => s.id);
 
-    const [enrollmentGroups, sentCount, openCount, clickCount, replyCount] = await Promise.all([
-      prisma.sequenceEnrollment.groupBy({ by: ['status'], where: { sequenceId: id }, _count: { _all: true } }),
-      stepIds.length > 0 ? prisma.sendMessage.count({ where: { sequenceStepId: { in: stepIds } } }) : Promise.resolve(0),
-      stepIds.length > 0 ? prisma.trackingEvent.count({ where: { type: 'open', isLikelyBot: false, sendMessage: { sequenceStepId: { in: stepIds } } } }) : Promise.resolve(0),
-      stepIds.length > 0 ? prisma.trackingEvent.count({ where: { type: 'click', isLikelyBot: false, sendMessage: { sequenceStepId: { in: stepIds } } } }) : Promise.resolve(0),
-      prisma.replyEvent.count({ where: { enrollment: { sequenceId: id } } }),
-    ]);
+    const [enrollmentGroups, sentCount, openCount, clickCount, replyCount] = await withTenant(apiKeyId, async (tx) => {
+      const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
+      if (!seq) throw Errors.notFound('Sequence not found.');
+
+      return Promise.all([
+        tx.sequenceEnrollment.groupBy({ by: ['status'], where: { sequenceId: id }, _count: { _all: true } }),
+        stepIds.length > 0 ? tx.sendMessage.count({ where: { sequenceStepId: { in: stepIds } } }) : Promise.resolve(0),
+        stepIds.length > 0 ? prisma.trackingEvent.count({ where: { type: 'open', isLikelyBot: false, sendMessage: { sequenceStepId: { in: stepIds } } } }) : Promise.resolve(0),
+        stepIds.length > 0 ? prisma.trackingEvent.count({ where: { type: 'click', isLikelyBot: false, sendMessage: { sequenceStepId: { in: stepIds } } } }) : Promise.resolve(0),
+        tx.replyEvent.count({ where: { enrollment: { sequenceId: id } } }),
+      ]);
+    });
 
     const byStatus: Record<string, number> = {};
     for (const g of enrollmentGroups) byStatus[g.status] = g._count._all;
@@ -611,12 +658,12 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/tasks', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const apiKeyId = request.apiKey.id;
 
-    const enrollments = await prisma.sequenceEnrollment.findMany({
+    const enrollments = await withTenant(apiKeyId, (tx) => tx.sequenceEnrollment.findMany({
       where: { status: 'awaiting_manual_action', sequence: { apiKeyId } },
       include: { sequence: { select: { id: true, name: true, steps: { orderBy: { stepOrder: 'asc' } } } } },
       orderBy: { enrolledAt: 'asc' },
       take: 200,
-    });
+    }));
 
     const tasks = enrollments.map((e) => {
       const step = e.sequence.steps[e.currentStep];
@@ -648,32 +695,34 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       const { id, enrollmentId } = request.params as { id: string; enrollmentId: string };
       const apiKeyId = request.apiKey.id;
 
-      const seq = await prisma.sequence.findFirst({
-        where: { id, apiKeyId },
-        include: { steps: { orderBy: { stepOrder: 'asc' } } },
-      });
-      if (!seq) throw Errors.notFound('Sequence not found.');
+      const updated = await withTenant(apiKeyId, async (tx) => {
+        const seq = await tx.sequence.findFirst({
+          where: { id, apiKeyId },
+          include: { steps: { orderBy: { stepOrder: 'asc' } } },
+        });
+        if (!seq) throw Errors.notFound('Sequence not found.');
 
-      const enrollment = await prisma.sequenceEnrollment.findFirst({
-        where: { id: enrollmentId, sequenceId: id, status: 'awaiting_manual_action' },
-      });
-      if (!enrollment) throw Errors.notFound('Pending task not found for this enrollment.');
+        const enrollment = await tx.sequenceEnrollment.findFirst({
+          where: { id: enrollmentId, sequenceId: id, status: 'awaiting_manual_action' },
+        });
+        if (!enrollment) throw Errors.notFound('Pending task not found for this enrollment.');
 
-      const nextStepIndex = enrollment.currentStep + 1;
-      const nextStep = seq.steps[nextStepIndex];
-      const nextSendAt = nextStep
-        ? new Date(Date.now() + (nextStep.delayDays * 24 * 60 * 60 * 1000) + (nextStep.delayHours * 60 * 60 * 1000))
-        : null;
-      const isLastStep = nextStep === undefined;
+        const nextStepIndex = enrollment.currentStep + 1;
+        const nextStep = seq.steps[nextStepIndex];
+        const nextSendAt = nextStep
+          ? new Date(Date.now() + (nextStep.delayDays * 24 * 60 * 60 * 1000) + (nextStep.delayHours * 60 * 60 * 1000))
+          : null;
+        const isLastStep = nextStep === undefined;
 
-      const updated = await prisma.sequenceEnrollment.update({
-        where: { id: enrollmentId },
-        data: {
-          currentStep: nextStepIndex,
-          nextSendAt,
-          status: isLastStep ? 'completed' : 'active',
-          ...(isLastStep && { completedAt: new Date() }),
-        },
+        return tx.sequenceEnrollment.update({
+          where: { id: enrollmentId },
+          data: {
+            currentStep: nextStepIndex,
+            nextSendAt,
+            status: isLastStep ? 'completed' : 'active',
+            ...(isLastStep && { completedAt: new Date() }),
+          },
+        });
       });
 
       return reply.status(200).send({ completed: true, enrollment: updated });
@@ -716,7 +765,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
 
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const sequence = await prisma.sequence.findFirst({ where: { id, apiKeyId }, select: { id: true } });
+    const sequence = await withTenant(apiKeyId, (tx) => tx.sequence.findFirst({ where: { id, apiKeyId }, select: { id: true } }));
     if (!sequence) throw Errors.notFound('Sequence not found.');
 
     const parsed = seqGenerateCopySchema.safeParse(request.body);

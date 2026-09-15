@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { getSalesforceAccessToken } from '../lib/oauth/salesforce.js';
 import { findLeadByEmail, createLead, updateLead, logActivity, queryLeadsById, SalesforceApiError, applyFieldMappings, type SalesforceFieldMapping } from '../lib/salesforceApi.js';
+import { withTenant } from '../lib/tenantContext.js';
 
 interface SalesforceSyncTickPayload {
   tick: true;
@@ -35,7 +36,7 @@ async function pushLeadsForConnection(
   const syncedByEmail = new Map(existingSyncs.map((s) => [s.leadEmail, s]));
 
   // New leads (never synced) + leads updated since their last push.
-  const candidates = await prisma.lead.findMany({
+  const candidates = await withTenant(apiKeyId, (tx) => tx.lead.findMany({
     where: {
       apiKeyId,
       OR: [
@@ -46,7 +47,7 @@ async function pushLeadsForConnection(
       ],
     },
     take: 200,
-  });
+  }));
 
   let pushed = 0;
   let errors = 0;
@@ -109,17 +110,17 @@ async function pushRepliesForConnection(
   accessToken: string,
   since: Date | null,
 ): Promise<number> {
-  const mailboxIds = (await prisma.mailbox.findMany({ where: { apiKeyId }, select: { id: true } })).map((m) => m.id);
+  const mailboxIds = (await withTenant(apiKeyId, (tx) => tx.mailbox.findMany({ where: { apiKeyId }, select: { id: true } }))).map((m) => m.id);
   if (mailboxIds.length === 0) return 0;
 
-  const replies = await prisma.replyEvent.findMany({
+  const replies = await withTenant(apiKeyId, (tx) => tx.replyEvent.findMany({
     where: {
       mailboxId: { in: mailboxIds },
       receivedAt: since ? { gt: since } : undefined,
     },
     orderBy: { receivedAt: 'asc' },
     take: 200,
-  });
+  }));
   if (replies.length === 0) return 0;
 
   const syncs = await prisma.salesforceLeadSync.findMany({
@@ -175,17 +176,17 @@ async function pullStatusForConnection(apiKeyId: string, instanceUrl: string, ac
 
     const shouldStop = record.IsConverted || (record.Status && SF_STOP_STATUSES.has(record.Status.toLowerCase()));
     if (shouldStop) {
-      await prisma.lead.updateMany({
+      await withTenant(apiKeyId, (tx) => tx.lead.updateMany({
         where: { apiKeyId, email: sync.leadEmail },
         data: { status: record.IsConverted ? 'converted' : 'do_not_contact' },
-      }).catch(() => {});
+      })).catch(() => {});
       // Pause any sequence still actively emailing this address — a rep
       // marking a lead unqualified/converted in Salesforce should stop
       // Continuum's own outreach the same way an in-app status change would.
-      await prisma.sequenceEnrollment.updateMany({
+      await withTenant(apiKeyId, (tx) => tx.sequenceEnrollment.updateMany({
         where: { email: sync.leadEmail, status: 'active', sequence: { apiKeyId } },
         data: { status: 'paused' },
-      }).catch(() => {});
+      })).catch(() => {});
     }
     updated++;
   }
