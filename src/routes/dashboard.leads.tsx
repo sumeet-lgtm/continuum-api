@@ -61,6 +61,14 @@ function LeadsPage() {
   const [enrolling, setEnrolling] = useState(false);
   const [enrollResult, setEnrollResult] = useState<{ enrolled: number; total: number; conflicts: number } | null>(null);
 
+  // Outbound Agent — draft a sequence for the selected leads (pending_approval,
+  // reviewed on the dedicated Outbound Agent page before anything sends)
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentAbout, setAgentAbout] = useState("");
+  const [agentFromName, setAgentFromName] = useState("");
+  const [agentFromEmail, setAgentFromEmail] = useState("");
+  const [agentDrafting, setAgentDrafting] = useState(false);
+
   // AI Enrichment (Clay-like)
   const [enrichOpen, setEnrichOpen] = useState(false);
   const [enrichSelected, setEnrichSelected] = useState<string[]>([]);
@@ -299,6 +307,26 @@ function LeadsPage() {
     }
   };
 
+  const draftWithOutboundAgent = async () => {
+    if (!primaryKey?.keyRaw || selectedLeads.length === 0 || !agentAbout.trim() || !agentFromName.trim() || !agentFromEmail.trim()) return;
+    setAgentDrafting(true);
+    try {
+      await api.withKey.post(
+        "/v1/agent-runs",
+        { pillar: "outbound", leadIds: selectedLeads, about: agentAbout, fromName: agentFromName, fromEmail: agentFromEmail },
+        primaryKey.keyRaw,
+      );
+      toast.success("Drafting a sequence — review it on the Outbound Agent page shortly.");
+      setAgentOpen(false);
+      setAgentAbout(""); setAgentFromName(""); setAgentFromEmail("");
+      setSelectedLeads([]);
+    } catch (e: unknown) {
+      toast.error((e as Error).message || "Couldn't start the agent");
+    } finally {
+      setAgentDrafting(false);
+    }
+  };
+
   const toggleSelect = (id: string) =>
     setSelectedLeads((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
 
@@ -315,10 +343,16 @@ function LeadsPage() {
         <div className="flex gap-2">
           <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFileSelect} />
           {selectedLeads.length > 0 && (
-            <Button variant="outline" size="sm" className="gap-1.5 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/30" onClick={openEnrollModal}>
-              <GitBranch className="h-4 w-4" />
-              Enroll {selectedLeads.length} in sequence
-            </Button>
+            <>
+              <Button variant="outline" size="sm" className="gap-1.5 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/30" onClick={openEnrollModal}>
+                <GitBranch className="h-4 w-4" />
+                Enroll {selectedLeads.length} in sequence
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setAgentOpen(true)}>
+                <Wand2 className="h-4 w-4" />
+                Draft with Outbound Agent
+              </Button>
+            </>
           )}
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setFinderOpen((o) => !o); setFinderPreview(null); }}>
             <Search className="h-4 w-4" /> Find Leads
@@ -634,6 +668,51 @@ function LeadsPage() {
               {enrolling ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Enrolling…</> : <><GitBranch className="h-3.5 w-3.5" /> Enroll leads</>}
             </Button>
             <Button variant="outline" onClick={() => { setEnrollOpen(false); setEnrollResult(null); }}>Done</Button>
+          </div>
+        </div>
+      )}
+
+      {agentOpen && (
+        <div className="rounded-lg border border-border bg-card p-5 space-y-4 max-w-lg">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold flex items-center gap-1.5">
+                <Wand2 className="h-4 w-4 text-indigo-500" />
+                Draft with Outbound Agent
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Drafts a multi-step sequence for {selectedLeads.length} selected lead{selectedLeads.length === 1 ? "" : "s"}, grounded in their real
+                title/company/industry. Nothing sends until you review and approve it on the Outbound Agent page.
+              </p>
+            </div>
+            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setAgentOpen(false)}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">What's this about?</Label>
+            <Input
+              placeholder="e.g. a pentesting-as-a-service tool for security teams at Series B+ companies"
+              value={agentAbout}
+              onChange={(e) => setAgentAbout(e.target.value)}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">From name</Label>
+              <Input placeholder="Ada Lovelace" value={agentFromName} onChange={(e) => setAgentFromName(e.target.value)} className="h-8 text-sm" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">From email</Label>
+              <Input placeholder="ada@acme.com" value={agentFromEmail} onChange={(e) => setAgentFromEmail(e.target.value)} className="h-8 text-sm" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={draftWithOutboundAgent} disabled={agentDrafting || !agentAbout.trim() || !agentFromName.trim() || !agentFromEmail.trim()} className="gap-1.5">
+              {agentDrafting ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting…</> : <><Wand2 className="h-3.5 w-3.5" /> Draft sequence</>}
+            </Button>
+            <Button variant="outline" onClick={() => setAgentOpen(false)}>Cancel</Button>
           </div>
         </div>
       )}

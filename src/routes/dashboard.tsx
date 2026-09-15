@@ -275,6 +275,7 @@ const NAV: NavItem[] = [
     icon: GitBranch,
     children: [
       { to: "/dashboard/sequences", label: "Sequences", icon: GitBranch, exact: true },
+      { to: "/dashboard/outbound-agent", label: "Outbound Agent", icon: Bot },
       { to: "/dashboard/tasks", label: "Tasks", icon: CheckSquare },
       { to: "/dashboard/accounts", label: "Target Accounts", icon: Building2 },
       { to: "/dashboard/inbox", label: "Unified Inbox", icon: Inbox },

@@ -50,6 +50,7 @@ import { Route as DashboardMigrateRouteImport } from './routes/dashboard.migrate
 import { Route as DashboardMonitoringRouteImport } from './routes/dashboard.monitoring'
 import { Route as DashboardNurtureAgentRouteImport } from './routes/dashboard.nurture-agent'
 import { Route as DashboardOrganizationRouteImport } from './routes/dashboard.organization'
+import { Route as DashboardOutboundAgentRouteImport } from './routes/dashboard.outbound-agent'
 import { Route as DashboardPhoneRouteImport } from './routes/dashboard.phone'
 import { Route as DashboardPlaygroundRouteImport } from './routes/dashboard.playground'
 import { Route as DashboardPrivacyRouteImport } from './routes/dashboard.privacy'
@@ -279,6 +280,11 @@ const DashboardOrganizationRoute = DashboardOrganizationRouteImport.update({
   path: '/organization',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardOutboundAgentRoute = DashboardOutboundAgentRouteImport.update({
+  id: '/outbound-agent',
+  path: '/outbound-agent',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardPhoneRoute = DashboardPhoneRouteImport.update({
   id: '/phone',
   path: '/phone',
@@ -436,6 +442,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/monitoring': typeof DashboardMonitoringRoute
   '/dashboard/nurture-agent': typeof DashboardNurtureAgentRoute
   '/dashboard/organization': typeof DashboardOrganizationRoute
+  '/dashboard/outbound-agent': typeof DashboardOutboundAgentRoute
   '/dashboard/phone': typeof DashboardPhoneRoute
   '/dashboard/playground': typeof DashboardPlaygroundRoute
   '/dashboard/privacy': typeof DashboardPrivacyRoute
@@ -501,6 +508,7 @@ export interface FileRoutesByTo {
   '/dashboard/monitoring': typeof DashboardMonitoringRoute
   '/dashboard/nurture-agent': typeof DashboardNurtureAgentRoute
   '/dashboard/organization': typeof DashboardOrganizationRoute
+  '/dashboard/outbound-agent': typeof DashboardOutboundAgentRoute
   '/dashboard/phone': typeof DashboardPhoneRoute
   '/dashboard/playground': typeof DashboardPlaygroundRoute
   '/dashboard/privacy': typeof DashboardPrivacyRoute
@@ -568,6 +576,7 @@ export interface FileRoutesById {
   '/dashboard/monitoring': typeof DashboardMonitoringRoute
   '/dashboard/nurture-agent': typeof DashboardNurtureAgentRoute
   '/dashboard/organization': typeof DashboardOrganizationRoute
+  '/dashboard/outbound-agent': typeof DashboardOutboundAgentRoute
   '/dashboard/phone': typeof DashboardPhoneRoute
   '/dashboard/playground': typeof DashboardPlaygroundRoute
   '/dashboard/privacy': typeof DashboardPrivacyRoute
@@ -636,6 +645,7 @@ export interface FileRouteTypes {
     | '/dashboard/monitoring'
     | '/dashboard/nurture-agent'
     | '/dashboard/organization'
+    | '/dashboard/outbound-agent'
     | '/dashboard/phone'
     | '/dashboard/playground'
     | '/dashboard/privacy'
@@ -701,6 +711,7 @@ export interface FileRouteTypes {
     | '/dashboard/monitoring'
     | '/dashboard/nurture-agent'
     | '/dashboard/organization'
+    | '/dashboard/outbound-agent'
     | '/dashboard/phone'
     | '/dashboard/playground'
     | '/dashboard/privacy'
@@ -767,6 +778,7 @@ export interface FileRouteTypes {
     | '/dashboard/monitoring'
     | '/dashboard/nurture-agent'
     | '/dashboard/organization'
+    | '/dashboard/outbound-agent'
     | '/dashboard/phone'
     | '/dashboard/playground'
     | '/dashboard/privacy'
@@ -1094,6 +1106,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardOrganizationRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/outbound-agent': {
+      id: '/dashboard/outbound-agent'
+      path: '/outbound-agent'
+      fullPath: '/dashboard/outbound-agent'
+      preLoaderRoute: typeof DashboardOutboundAgentRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/phone': {
       id: '/dashboard/phone'
       path: '/phone'
@@ -1313,6 +1332,7 @@ interface DashboardRouteChildren {
   DashboardMonitoringRoute: typeof DashboardMonitoringRoute
   DashboardNurtureAgentRoute: typeof DashboardNurtureAgentRoute
   DashboardOrganizationRoute: typeof DashboardOrganizationRoute
+  DashboardOutboundAgentRoute: typeof DashboardOutboundAgentRoute
   DashboardPhoneRoute: typeof DashboardPhoneRoute
   DashboardPlaygroundRoute: typeof DashboardPlaygroundRoute
   DashboardPrivacyRoute: typeof DashboardPrivacyRoute
@@ -1369,6 +1389,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardMonitoringRoute: DashboardMonitoringRoute,
   DashboardNurtureAgentRoute: DashboardNurtureAgentRoute,
   DashboardOrganizationRoute: DashboardOrganizationRoute,
+  DashboardOutboundAgentRoute: DashboardOutboundAgentRoute,
   DashboardPhoneRoute: DashboardPhoneRoute,
   DashboardPlaygroundRoute: DashboardPlaygroundRoute,
   DashboardPrivacyRoute: DashboardPrivacyRoute,
