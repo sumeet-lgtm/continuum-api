@@ -117,7 +117,7 @@ function MailboxesPage() {
       // the route creates the mailbox row either way and reports the real
       // outcome via status/lastErrorMsg in the body. This was showing
       // "Mailbox connected" on a flat-out bad-password rejection.
-      const result = await api.withKey.post<{ status: string; lastErrorMsg?: string | null }>("/v1/mailboxes", {
+      const result = await api.withKey.post<{ id: string; type: string; username: string; dailyLimit: number; status: string; lastErrorMsg?: string | null }>("/v1/mailboxes", {
         type: form.type,
         host: form.host || undefined,
         port: form.port ? parseInt(form.port) : undefined,
@@ -131,6 +131,7 @@ function MailboxesPage() {
         toast.success("Mailbox connected");
       }
       setConnectMode(null);
+      setMailboxes((prev) => [{ ...result, sentToday: 0, lastCheckedAt: null }, ...prev]);
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }

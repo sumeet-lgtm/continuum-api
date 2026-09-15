@@ -117,7 +117,7 @@ function FinderAgentPage() {
     if (!apiKey?.keyRaw || titles.length === 0) return;
     setCreating(true);
     try {
-      await api.withKey.post(
+      const created = await api.withKey.post<AgentRun>(
         "/v1/agent-runs",
         {
           pillar: "lead_finding",
@@ -135,7 +135,8 @@ function FinderAgentPage() {
       toast.success("Watch created — first search starts within a few minutes.");
       setOpen(false);
       setTitles([]); setIndustries([]); setCountries([]); setTotalResults(100); setSequenceId(""); setInterval(168);
-      await load();
+      setRuns((prev) => [created, ...prev]);
+      load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't create the agent");
     }

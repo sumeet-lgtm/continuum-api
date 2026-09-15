@@ -59,11 +59,12 @@ function OutboundAgentPage() {
     try {
       await api.withKey.post(`/v1/agent-runs/${run.id}/approve`, {}, apiKey.keyRaw);
       toast.success("Approved — leads enrolled, sending on schedule.");
+      setRuns((prev) => prev.map((r) => r.id === run.id ? { ...r, status: "completed" } : r));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't approve the sequence");
     }
     setActing(null);
-    await load();
+    load();
   };
 
   const reject = async (run: AgentRun) => {
@@ -72,11 +73,12 @@ function OutboundAgentPage() {
     setActing(run.id);
     try {
       await api.withKey.post(`/v1/agent-runs/${run.id}/cancel`, {}, apiKey.keyRaw);
+      setRuns((prev) => prev.map((r) => r.id === run.id ? { ...r, status: "cancelled" } : r));
     } catch {
       toast.error("Couldn't discard the draft");
     }
     setActing(null);
-    await load();
+    load();
   };
 
   return (

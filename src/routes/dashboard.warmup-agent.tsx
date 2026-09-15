@@ -72,11 +72,12 @@ function WarmupAgentPage() {
     if (!apiKey?.keyRaw || !mailboxId) return;
     setCreating(true);
     try {
-      await api.withKey.post("/v1/agent-runs", { pillar: "warmup", mailboxId }, apiKey.keyRaw);
+      const created = await api.withKey.post<AgentRun>("/v1/agent-runs", { pillar: "warmup", mailboxId }, apiKey.keyRaw);
       toast.success("Warmup agent created — checks in daily.");
       setOpen(false);
       setMailboxId("");
-      await load();
+      setRuns((prev) => [created, ...prev]);
+      load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't create the agent");
     }

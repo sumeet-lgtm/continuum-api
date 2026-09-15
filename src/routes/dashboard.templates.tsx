@@ -353,12 +353,13 @@ function TemplatesPage() {
     setSaving(true);
     const html_body = createMode === "visual" ? blocksToHtml(createBlocks) : form.html;
     try {
-      await api.withKey.post("/v1/templates", { name: form.name, subject: form.subject, preheader: form.preheader || undefined, html_body }, primaryKey.keyRaw);
+      const created = await api.withKey.post<Template>("/v1/templates", { name: form.name, subject: form.subject, preheader: form.preheader || undefined, html_body }, primaryKey.keyRaw);
       toast.success("Template created");
       setCreating(false);
       setForm({ name: "", subject: "", preheader: "", html: "" });
       setCreateBlocks(defaultBlocks());
       setCreateMode("visual");
+      setTemplates((prev) => [{ ...created, htmlBody: html_body }, ...prev]);
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }

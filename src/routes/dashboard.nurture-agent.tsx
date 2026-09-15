@@ -97,7 +97,7 @@ function NurtureAgentPage() {
     if (!apiKey?.keyRaw || !listId || !about.trim() || !fromName.trim() || !fromEmail.trim()) return;
     setCreating(true);
     try {
-      await api.withKey.post(
+      const created = await api.withKey.post<AgentRun>(
         "/v1/agent-runs",
         { pillar: "nurture", listId, about, fromName, fromEmail, autoSend, ...(tone && { tone }) },
         apiKey.keyRaw,
@@ -105,7 +105,8 @@ function NurtureAgentPage() {
       toast.success("Drafting now — check back in a moment to review.");
       setOpen(false);
       setListId(""); setAbout(""); setFromName(""); setFromEmail(""); setTone(""); setAutoSend(false);
-      await load();
+      setRuns((prev) => [created, ...prev]);
+      load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't create the agent");
     }

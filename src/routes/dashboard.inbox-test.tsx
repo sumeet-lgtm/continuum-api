@@ -64,13 +64,14 @@ function InboxTestPage() {
     }
     setRunning(true);
     try {
-      await api.withKey.post("/v1/inbox-test", {
+      const created = await api.withKey.post<InboxTest>("/v1/inbox-test", {
         from_name: form.fromName,
         from_email: form.fromEmail,
         subject: form.subject,
         html_body: form.htmlBody,
       }, primaryKey.keyRaw);
       toast.success("Test running — results available in ~2 minutes. Refresh to check.");
+      setTests((prev) => [created, ...prev]);
       load();
     } catch (e: unknown) {
       toast.error((e as Error).message);

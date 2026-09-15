@@ -73,7 +73,7 @@ function AccountsPage() {
     if (!primaryKey?.keyRaw || !form.name.trim()) return;
     setSaving(true);
     try {
-      await api.withKey.post("/v1/accounts", {
+      const created = await api.withKey.post<Account>("/v1/accounts", {
         name: form.name.trim(),
         domain: form.domain.trim() || undefined,
         industry: form.industry || undefined,
@@ -85,6 +85,8 @@ function AccountsPage() {
       toast.success("Account created.");
       setShowNew(false);
       setForm({ name: "", domain: "", industry: "", employees: "", website: "", city: "", country: "" });
+      setAccounts((prev) => [{ ...created, _count: { leads: 0 } }, ...prev]);
+      setTotal((prev) => prev + 1);
       load();
     } catch (e: unknown) {
       toast.error((e as Error).message ?? "Failed to create account.");

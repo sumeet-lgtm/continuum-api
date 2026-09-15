@@ -96,7 +96,7 @@ function ContactsPage() {
     if (!form.email) { toast.error("Email is required"); return; }
     setSaving(true);
     try {
-      await api.withKey.post(`/v1/lists/${selectedList}/contacts`, {
+      const res = await api.withKey.post<{ contact_id: string; membership_id: string; email: string; status: string }>(`/v1/lists/${selectedList}/contacts`, {
         email: form.email,
         first_name: form.firstName || undefined,
         last_name: form.lastName || undefined,
@@ -105,6 +105,22 @@ function ContactsPage() {
       toast.success("Contact subscribed");
       setAdding(false);
       setForm({ email: "", firstName: "", lastName: "" });
+      setContacts((prev) => {
+        const created: Contact = {
+          id: res.membership_id,
+          email: res.email,
+          firstName: form.firstName || null,
+          lastName: form.lastName || null,
+          status: res.status,
+          subscribedAt: new Date().toISOString(),
+          customFields: {},
+        };
+        const idx = prev.findIndex((c) => c.email === created.email);
+        if (idx === -1) return [created, ...prev];
+        const next = [...prev];
+        next[idx] = created;
+        return next;
+      });
       loadContacts();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }

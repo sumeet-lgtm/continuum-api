@@ -69,10 +69,18 @@ function SuppressionsPage() {
     if (!primaryKey?.keyRaw || !email.trim()) return;
     setSaving(true);
     try {
-      await api.withKey.post("/v1/suppressions", { email: email.trim(), reason }, primaryKey.keyRaw);
+      const created = await api.withKey.post<Suppression>("/v1/suppressions", { email: email.trim(), reason }, primaryKey.keyRaw);
       toast.success(`${email} added to suppression list`);
       setAdding(false);
       setEmail("");
+      setSuppressions((prev) => {
+        const idx = prev.findIndex((s) => s.email === created.email);
+        if (idx === -1) return [created, ...prev];
+        const next = [...prev];
+        next[idx] = created;
+        return next;
+      });
+      setTotal((prev) => prev + 1);
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }

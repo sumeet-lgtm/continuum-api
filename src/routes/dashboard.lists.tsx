@@ -551,10 +551,11 @@ function ListsPage() {
     if (!primaryKey?.keyRaw) return;
     setSaving(true);
     try {
-      await api.withKey.post("/v1/lists", { name: form.name, description: form.description || undefined }, primaryKey.keyRaw);
+      const created = await api.withKey.post<MailingList>("/v1/lists", { name: form.name, description: form.description || undefined }, primaryKey.keyRaw);
       toast.success("List created");
       setCreating(false);
       setForm({ name: "", description: "" });
+      setLists((prev) => [created, ...prev]);
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }

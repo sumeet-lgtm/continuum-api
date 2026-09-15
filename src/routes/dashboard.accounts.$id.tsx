@@ -77,9 +77,11 @@ function AccountDetailPage() {
     if (!primaryKey?.keyRaw || !account) return;
     setSaving(true);
     try {
-      await api.withKey.patch(`/v1/accounts/${id}`, editForm, primaryKey.keyRaw);
+      const updated = await api.withKey.patch<Account>(`/v1/accounts/${id}`, editForm, primaryKey.keyRaw);
       toast.success("Account updated.");
       setEditing(false);
+      setAccount(updated);
+      setEditForm(updated);
       load();
     } catch { toast.error("Save failed."); }
     finally { setSaving(false); }

@@ -266,10 +266,12 @@ function SequencesPage() {
     setSaving(true);
     try {
       const selectedMailbox = mailboxes.find((m) => m.id === form.mailboxId);
-      await api.withKey.post("/v1/sequences", {
+      const fromName = form.fromName || selectedMailbox?.username?.split("@")[0] || form.fromName;
+      const fromEmail = form.fromEmail || selectedMailbox?.username || form.fromEmail;
+      const created = await api.withKey.post<Pick<Sequence, "id" | "name" | "status" | "fromEmail" | "createdAt">>("/v1/sequences", {
         name: form.name,
-        from_name: form.fromName || selectedMailbox?.username?.split("@")[0] || form.fromName,
-        from_email: form.fromEmail || selectedMailbox?.username || form.fromEmail,
+        from_name: fromName,
+        from_email: fromEmail,
         ...(form.mailboxId ? { mailbox_id: form.mailboxId } : {}),
         stop_on_reply: true,
         track_opens: form.trackOpens,
@@ -281,6 +283,10 @@ function SequencesPage() {
       toast.success("Sequence created");
       setCreating(false);
       setForm({ name: "", fromName: "", fromEmail: "", mailboxId: "", sendDays: DEFAULT_DAYS, sendStartHour: "8", sendEndHour: "17", trackOpens: true, trackClicks: true });
+      setSequences((prev) => [
+        { ...created, fromName, trackOpens: form.trackOpens, trackClicks: form.trackClicks, stopOnReply: true, _count: { steps: 0, enrollments: 0 } },
+        ...prev,
+      ]);
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }

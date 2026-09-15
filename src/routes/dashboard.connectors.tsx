@@ -326,7 +326,7 @@ function PaymentConnectorCard({
   sequences: Sequence[];
   allRules: ConnectorRule[];
   allEvents: ConnectorEvent[];
-  onRulesChange: () => void;
+  onRulesChange: (created?: ConnectorRule) => void;
 }) {
   const meta = CONNECTOR_META[connector];
   const webhookUrl = `${API_BASE}/v1/connectors/${connector}/webhook`;
@@ -364,7 +364,7 @@ function PaymentConnectorCard({
   const addRule = async () => {
     setAddingRule(true);
     try {
-      await api.withKey.post("/v1/connectors/rules", {
+      const created = await api.withKey.post<ConnectorRule>("/v1/connectors/rules", {
         connector,
         event_type: newEvent,
         action: newAction,
@@ -372,7 +372,7 @@ function PaymentConnectorCard({
         sequence_id: newAction === "enroll_sequence" ? (newSequenceId || null) : null,
       }, apiKey);
       toast.success("Rule added");
-      onRulesChange();
+      onRulesChange(created);
     } catch {
       toast.error("Failed to add rule");
     } finally {
@@ -592,6 +592,22 @@ function ConnectorsPage() {
     setEvents(e.data ?? []);
   }, [primaryKey]);
 
+  // POST /v1/connectors/rules is an upsert keyed on (connector, event_type) —
+  // replace a matching row rather than prepend, so re-saving an existing
+  // rule doesn't show a duplicate until the background refetch corrects it.
+  const handleRulesChange = useCallback((created?: ConnectorRule) => {
+    if (created) {
+      setRules((prev) => {
+        const idx = prev.findIndex((r) => r.connector === created.connector && r.event_type === created.event_type);
+        if (idx === -1) return [created, ...prev];
+        const next = [...prev];
+        next[idx] = created;
+        return next;
+      });
+    }
+    fetchRulesAndEvents();
+  }, [fetchRulesAndEvents]);
+
   useEffect(() => {
     if (!primaryKey?.keyRaw) return;
     setLoadingData(true);
@@ -638,7 +654,7 @@ function ConnectorsPage() {
                 sequences={sequences}
                 allRules={rules}
                 allEvents={events}
-                onRulesChange={fetchRulesAndEvents}
+                onRulesChange={handleRulesChange}
               />
             ))}
           </div>

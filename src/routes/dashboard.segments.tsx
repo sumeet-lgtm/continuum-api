@@ -140,6 +140,7 @@ function SegmentsPage() {
       toast.success("Segment created");
       setCreating(false);
       setForm({ name: "", listId: "", rules: [emptyRule()] });
+      setSegments((prev) => [data as Segment, ...prev]);
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }

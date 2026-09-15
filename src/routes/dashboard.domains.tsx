@@ -126,6 +126,7 @@ function DomainsPage() {
       setNewDnsRecords(res.dns_records);
       setAdding(false);
       setDomainName("");
+      setDomains((prev) => [res, ...prev]);
       load();
     } catch (e: unknown) {
       toast.error((e as Error).message);

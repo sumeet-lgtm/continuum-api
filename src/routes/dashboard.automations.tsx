@@ -133,7 +133,7 @@ function AutomationsPage() {
     }
     setSaving(true);
     try {
-      await api.withKey.post("/v1/automations", {
+      const created = await api.withKey.post<Omit<Automation, "_count">>("/v1/automations", {
         name: name.trim(),
         trigger_event: triggerEvent,
         steps: steps.map((s) => ({
@@ -150,6 +150,7 @@ function AutomationsPage() {
       setTriggerPreset(TRIGGER_PRESETS[0].value);
       setTriggerCustom("");
       setSteps([{ delayHours: "0", subject: "", htmlBody: "", fromName: "", fromEmail: "" }]);
+      setAutomations((prev) => [{ ...created, _count: { enrollments: 0 } }, ...prev]);
       load();
     } catch (e: unknown) {
       toast.error((e as Error).message);

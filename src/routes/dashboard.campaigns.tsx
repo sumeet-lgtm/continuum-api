@@ -390,6 +390,7 @@ function CampaignsPage() {
     try {
       await api.withKey.post(`/v1/campaigns/${c.id}/resume`, {}, primaryKey.keyRaw);
       toast.success("Campaign resumed");
+      setCampaigns((prev) => prev.map((x) => x.id === c.id ? { ...x, status: "sending" } : x));
       load();
     } catch { toast.error("Could not resume campaign"); }
     finally { setResumingCampaign(null); }
@@ -504,16 +505,34 @@ function CampaignsPage() {
       payload.send_end_hour = parseInt(form.sendEndHour, 10);
       payload.timezone = form.timezone;
       const campaign = await api.withKey.post<{ id: string }>("/v1/campaigns", payload, primaryKey.keyRaw);
+      let status = "draft";
       if (!asDraft && !form.scheduledAt) {
         await api.withKey.post(`/v1/campaigns/${campaign.id}/send`, {}, primaryKey.keyRaw);
         toast.success("Campaign queued for sending");
+        status = "sending";
       } else if (!asDraft && form.scheduledAt) {
         await api.withKey.post(`/v1/campaigns/${campaign.id}/send`, {}, primaryKey.keyRaw);
         toast.success(`Campaign scheduled for ${new Date(form.scheduledAt).toLocaleString()}`);
+        status = "scheduled";
       } else {
         toast.success("Campaign saved as draft");
       }
       setCreating(false);
+      setCampaigns((prev) => [{
+        id: campaign.id,
+        fromName: form.fromName,
+        fromEmail: form.fromEmail,
+        subject: form.subject,
+        subjectB: form.subjectB || null,
+        status,
+        totalRecipients: 0,
+        sentCount: 0, openCount: 0, clickCount: 0, openCountB: 0, clickCountB: 0,
+        bounceCount: 0, complaintCount: 0,
+        trackOpens: form.trackOpens, trackClicks: form.trackClicks,
+        createdAt: new Date().toISOString(),
+        scheduledAt: !asDraft && form.scheduledAt ? new Date(form.scheduledAt).toISOString() : null,
+        sentAt: null,
+      }, ...prev]);
       resetForm();
       load();
     } catch (e: unknown) {
@@ -581,12 +600,25 @@ function CampaignsPage() {
 
   const duplicate = async (id: string) => {
     if (!primaryKey?.keyRaw) return;
+    const source = campaigns.find((c) => c.id === id);
     try {
-      await fetch(`https://api.continuumapi.com/v1/campaigns/${id}/duplicate`, {
+      const res = await fetch(`https://api.continuumapi.com/v1/campaigns/${id}/duplicate`, {
         method: "POST",
         headers: { "X-API-Key": primaryKey.keyRaw! },
       });
+      if (!res.ok) throw new Error(`Failed to duplicate campaign (${res.status})`);
+      const copy = await res.json() as { id: string; status: string; createdAt: string };
       toast.success("Campaign duplicated as draft");
+      if (source) {
+        setCampaigns((prev) => [{
+          ...source,
+          id: copy.id,
+          status: copy.status,
+          createdAt: copy.createdAt,
+          totalRecipients: 0, sentCount: 0, openCount: 0, clickCount: 0, openCountB: 0, clickCountB: 0,
+          bounceCount: 0, complaintCount: 0, scheduledAt: null, sentAt: null,
+        }, ...prev]);
+      }
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
   };

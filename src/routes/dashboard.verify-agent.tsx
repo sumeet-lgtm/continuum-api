@@ -80,7 +80,7 @@ function VerificationAgentPage() {
     if (!apiKey?.keyRaw || !listId) return;
     setCreating(true);
     try {
-      await api.withKey.post(
+      const created = await api.withKey.post<AgentRun>(
         "/v1/agent-runs",
         { listId, intervalHours: interval, autoRemoveInvalid: autoRemove },
         apiKey.keyRaw,
@@ -90,7 +90,8 @@ function VerificationAgentPage() {
       setListId("");
       setInterval(24);
       setAutoRemove(false);
-      await load();
+      setRuns((prev) => [created, ...prev]);
+      load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't create the agent");
     }
