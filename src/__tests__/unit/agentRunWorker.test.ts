@@ -34,6 +34,18 @@ vi.mock('../../engine/index.js', () => ({
   verifyEmail: vi.fn(),
 }));
 
+vi.mock('../../lib/campaignSegments.js', () => ({
+  deriveListSegments: vi.fn(),
+}));
+
+vi.mock('../../lib/emailGenerator.js', () => ({
+  generateSegmentEmail: vi.fn(),
+}));
+
+vi.mock('../../lib/nurtureAgent.js', () => ({
+  createAndSendCampaignFromDraft: vi.fn(),
+}));
+
 vi.mock('bullmq', () => ({
   Worker: vi.fn().mockImplementation(() => ({ on: vi.fn(), close: vi.fn() })),
   Queue:  vi.fn().mockImplementation(() => ({ add: vi.fn(), close: vi.fn() })),
@@ -48,7 +60,7 @@ import {
   MAX_CONSECUTIVE_FAILURES,
   JITTER_FACTOR,
 } from '../../workers/agentRunWorker.js';
-import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS } from '../../types/agentRun.js';
+import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig } from '../../types/agentRun.js';
 
 // ─── calcNextCheckAt — scheduling with jitter (same formula as monitorWorker) ──
 
@@ -161,5 +173,59 @@ describe('parseVerificationAgentConfig', () => {
   it('DEFAULT_VERIFICATION_CUTOFF_DAYS is a positive integer', () => {
     expect(Number.isInteger(DEFAULT_VERIFICATION_CUTOFF_DAYS)).toBe(true);
     expect(DEFAULT_VERIFICATION_CUTOFF_DAYS).toBeGreaterThan(0);
+  });
+});
+
+// ─── Nurture agent config parsing ─────────────────────────────────────────────
+
+describe('parseNurtureAgentConfig', () => {
+  const minimal = { listId: 'list_1', about: 'a security tool for CISOs', fromName: 'Ada', fromEmail: 'ada@acme.com' };
+
+  it('accepts a minimal valid config', () => {
+    expect(parseNurtureAgentConfig(minimal)).toEqual(minimal);
+  });
+
+  it('defaults to no autoSend field when omitted (caller treats missing as false)', () => {
+    const cfg = parseNurtureAgentConfig(minimal);
+    expect(cfg?.autoSend).toBeUndefined();
+  });
+
+  it('carries through optional sender, tone, replyTo, autoSend', () => {
+    const cfg = parseNurtureAgentConfig({
+      ...minimal,
+      sender: { name: 'Ada', company: 'Acme' },
+      tone: 'technical',
+      replyTo: 'support@acme.com',
+      autoSend: true,
+    });
+    expect(cfg).toEqual({
+      ...minimal,
+      sender: { name: 'Ada', company: 'Acme' },
+      tone: 'technical',
+      replyTo: 'support@acme.com',
+      autoSend: true,
+    });
+  });
+
+  it('carries through a previously-written draft and campaignId (worker re-kick idempotency)', () => {
+    const draft = { subject: 'Hi', htmlBody: '<p>hi</p>', textBody: 'hi', segmentLabel: 'All contacts', matchCount: 42 };
+    const cfg = parseNurtureAgentConfig({ ...minimal, draft, campaignId: 'camp_1' });
+    expect(cfg?.draft).toEqual(draft);
+    expect(cfg?.campaignId).toBe('camp_1');
+  });
+
+  it('rejects missing required fields', () => {
+    expect(parseNurtureAgentConfig({})).toBeNull();
+    expect(parseNurtureAgentConfig({ listId: 'list_1' })).toBeNull();
+    expect(parseNurtureAgentConfig({ listId: 'list_1', about: 'x' })).toBeNull();
+    expect(parseNurtureAgentConfig({ listId: 'list_1', about: 'x', fromName: 'Ada' })).toBeNull();
+    expect(parseNurtureAgentConfig({ ...minimal, about: '' })).toBeNull();
+    expect(parseNurtureAgentConfig({ ...minimal, fromEmail: '' })).toBeNull();
+  });
+
+  it('rejects non-object input', () => {
+    expect(parseNurtureAgentConfig(null)).toBeNull();
+    expect(parseNurtureAgentConfig(undefined)).toBeNull();
+    expect(parseNurtureAgentConfig('list_1')).toBeNull();
   });
 });

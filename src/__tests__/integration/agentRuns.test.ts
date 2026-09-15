@@ -13,7 +13,7 @@ vi.mock('../../lib/prisma.js', () => ({
       create: vi.fn(),
       update: vi.fn(),
     },
-    agentRunEvent: { findMany: vi.fn(), count: vi.fn() },
+    agentRunEvent: { findMany: vi.fn(), count: vi.fn(), create: vi.fn() },
     mailingList: { findFirst: vi.fn() },
     webhook: { findMany: vi.fn().mockResolvedValue([]) },
     $disconnect: vi.fn(),
@@ -78,9 +78,14 @@ vi.mock('../../engine/smtp.js', () => ({
   }),
 }));
 
+vi.mock('../../lib/nurtureAgent.js', () => ({
+  createAndSendCampaignFromDraft: vi.fn().mockResolvedValue('camp-mock-1'),
+}));
+
 import { buildApp } from '../../server.js';
 import { prisma } from '../../lib/prisma.js';
 import { agentRunQueue } from '../../lib/queue.js';
+import { createAndSendCampaignFromDraft } from '../../lib/nurtureAgent.js';
 
 const mockFindKey       = vi.mocked(prisma.apiKey.findUnique);
 const mockRunCount      = vi.mocked(prisma.agentRun.count);
@@ -90,8 +95,10 @@ const mockRunCreate     = vi.mocked(prisma.agentRun.create);
 const mockRunUpdate     = vi.mocked(prisma.agentRun.update);
 const mockEventFindMany = vi.mocked(prisma.agentRunEvent.findMany);
 const mockEventCount    = vi.mocked(prisma.agentRunEvent.count);
+const mockEventCreate   = vi.mocked(prisma.agentRunEvent.create);
 const mockListFind      = vi.mocked(prisma.mailingList.findFirst);
 const mockQueueAdd      = vi.mocked(agentRunQueue.add);
+const mockCreateAndSend = vi.mocked(createAndSendCampaignFromDraft);
 
 // ─── Test API key ─────────────────────────────────────────────────────────────
 
@@ -390,5 +397,114 @@ describe('POST /v1/agent-runs/:id/trigger', () => {
       { agentRunId: 'run-001' },
       expect.objectContaining({ priority: 1 }),
     );
+  });
+});
+
+// ─── POST /v1/agent-runs — nurture pillar ───────────────────────────────────
+
+function makeNurtureAgentRun(overrides: Record<string, unknown> = {}) {
+  return makeAgentRun({
+    pillar: 'nurture',
+    config: { listId: 'list-001', about: 'a new security feature', fromName: 'Ada', fromEmail: 'ada@acme.com', autoSend: false },
+    intervalHours: null,
+    nextCheckAt: null,
+    ...overrides,
+  });
+}
+
+describe('POST /v1/agent-runs — nurture pillar', () => {
+  beforeEach(() => {
+    mockRunCount.mockResolvedValue(0);
+    mockListFind.mockResolvedValue({ id: 'list-001' });
+    mockRunCreate.mockResolvedValue(makeNurtureAgentRun());
+  });
+
+  it('creates a nurture run and immediately enqueues a kick job (one-shot, not tick-scheduled)', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'nurture', listId: 'list-001', about: 'a new security feature', fromName: 'Ada', fromEmail: 'ada@acme.com' }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().pillar).toBe('nurture');
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      'agent-run-kick',
+      { agentRunId: 'run-001' },
+      expect.any(Object),
+    );
+  });
+
+  it('returns 422 when about/fromName/fromEmail are missing', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'nurture', listId: 'list-001' }),
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it('defaults autoSend to false (human-in-the-loop by default)', async () => {
+    await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'nurture', listId: 'list-001', about: 'x', fromName: 'Ada', fromEmail: 'ada@acme.com' }),
+    });
+    const createCall = mockRunCreate.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+    expect((createCall.data['config'] as Record<string, unknown>)['autoSend']).toBe(false);
+  });
+
+  it('a request with no pillar field still defaults to verification (backward compatible)', async () => {
+    mockRunCreate.mockResolvedValue(makeAgentRun());
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ listId: 'list-001' }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().pillar).toBe('verification');
+  });
+});
+
+// ─── POST /v1/agent-runs/:id/approve ────────────────────────────────────────
+
+describe('POST /v1/agent-runs/:id/approve', () => {
+  it('returns 404 for unknown agent run', async () => {
+    mockRunFindFirst.mockResolvedValue(null);
+    const res = await app.inject({ method: 'POST', url: '/v1/agent-runs/nope/approve', headers: AUTH });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 422 for a verification-pillar run (no approval step outside nurture)', async () => {
+    mockRunFindFirst.mockResolvedValue(makeAgentRun({ status: 'pending_approval' }));
+    const res = await app.inject({ method: 'POST', url: '/v1/agent-runs/run-001/approve', headers: AUTH });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it('returns 422 when the run is not pending_approval', async () => {
+    mockRunFindFirst.mockResolvedValue(makeNurtureAgentRun({ status: 'active' }));
+    const res = await app.inject({ method: 'POST', url: '/v1/agent-runs/run-001/approve', headers: AUTH });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it('returns 422 when pending_approval but has no draft yet', async () => {
+    mockRunFindFirst.mockResolvedValue(makeNurtureAgentRun({ status: 'pending_approval' }));
+    const res = await app.inject({ method: 'POST', url: '/v1/agent-runs/run-001/approve', headers: AUTH });
+    expect(res.statusCode).toBe(422);
+    expect(mockCreateAndSend).not.toHaveBeenCalled();
+  });
+
+  it('creates and sends the campaign, marks the run completed, on a valid approval', async () => {
+    const draft = { subject: 'New feature!', htmlBody: '<p>hi</p>', textBody: 'hi', segmentLabel: 'All contacts', matchCount: 120 };
+    mockRunFindFirst.mockResolvedValue(makeNurtureAgentRun({ status: 'pending_approval', config: { listId: 'list-001', about: 'x', fromName: 'Ada', fromEmail: 'ada@acme.com', draft } }));
+    mockRunUpdate.mockResolvedValue(makeNurtureAgentRun({ status: 'completed', completedAt: new Date() }));
+
+    const res = await app.inject({ method: 'POST', url: '/v1/agent-runs/run-001/approve', headers: AUTH });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockCreateAndSend).toHaveBeenCalledWith('key-agent-001', expect.objectContaining({ draft }));
+    expect(res.json().campaignId).toBe('camp-mock-1');
+    expect(mockEventCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ eventType: 'sent', agentRunId: 'run-001' }),
+    }));
   });
 });

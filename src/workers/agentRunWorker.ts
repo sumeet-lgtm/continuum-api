@@ -4,11 +4,11 @@
  * Tick loop for the shared cross-pillar `AgentRun` primitive — mechanics
  * copied directly from workers/monitorWorker.ts (due-detection, per-row
  * Redis lock, ±10% jitter, exponential backoff + auto-pause after repeated
- * failures). Only the `verification` pillar is implemented; other
+ * failures). Verification and Nurture pillars are implemented; the other
  * AgentPillar values are accepted by the schema but not yet processed here
  * — see prisma/schema.prisma and the plan this was built from.
  *
- * Email Verification pillar, per tick:
+ * Email Verification pillar, per tick (recurring, cron-scheduled):
  *   1. Find contacts on the watched list never verified, or not verified in
  *      `cutoffDays` (default 30).
  *   2. Verify each through the existing engine (verifyEmail — same function
@@ -18,6 +18,11 @@
  *      (status change, never a hard delete).
  *   5. Emit an AgentRunEvent summarizing the tick — this is what the
  *      dashboard's activity feed renders.
+ *
+ * Nurture pillar (one-shot, kicked once at creation — see processNurtureTick
+ * below): draft copy via the existing AI generation flow, then either wait
+ * at pending_approval for a human, or (autoSend) hand straight to the
+ * existing, already-hardened Campaign/campaignWorker.ts send pipeline.
  */
 
 import { Worker, Queue, type Job } from 'bullmq';
@@ -30,8 +35,13 @@ import { getPlanLimit, incrementUsageBy } from '../plugins/usageMeter.js';
 import { config } from '../config.js';
 import { logger, type Logger } from '../lib/logger.js';
 import { initSentry, installCrashReporting } from '../lib/sentry.js';
-import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS } from '../types/agentRun.js';
+import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig } from '../types/agentRun.js';
 import type { AgentRunTickPayload, AgentRunKickPayload } from '../types/job.js';
+import { deriveListSegments } from '../lib/campaignSegments.js';
+import { generateSegmentEmail } from '../lib/emailGenerator.js';
+import { createAndSendCampaignFromDraft } from '../lib/nurtureAgent.js';
+
+const GROWTH_PLANS = new Set(['growth', 'scale']);
 
 if (process.env['NODE_ENV'] !== 'test') {
   initSentry('worker-agent-run');
@@ -64,7 +74,7 @@ async function runAgentTick(_job: Job<AgentRunTickPayload>): Promise<void> {
         pausedAt: null,
         nextCheckAt: { lte: now },
       },
-      select: { id: true, apiKeyId: true, config: true, intervalHours: true, consecutiveFailures: true },
+      select: { id: true, apiKeyId: true, pillar: true, config: true, intervalHours: true, consecutiveFailures: true },
       orderBy: { nextCheckAt: 'asc' },
       take: TICK_BATCH_SIZE,
     }),
@@ -88,7 +98,7 @@ async function runKick(job: Job<AgentRunKickPayload>): Promise<void> {
 
   const run = await prisma.agentRun.findUnique({
     where: { id: agentRunId },
-    select: { id: true, apiKeyId: true, config: true, intervalHours: true, consecutiveFailures: true, status: true, pausedAt: true },
+    select: { id: true, apiKeyId: true, pillar: true, config: true, intervalHours: true, consecutiveFailures: true, status: true, pausedAt: true },
   });
 
   if (!run) {
@@ -116,6 +126,7 @@ async function processJob(job: Job<AgentRunJobData>): Promise<void> {
 interface AgentRunRecord {
   id: string;
   apiKeyId: string;
+  pillar: string;
   config: unknown;
   intervalHours: number | null;
   consecutiveFailures: number;
@@ -124,7 +135,7 @@ interface AgentRunRecord {
 async function processAgentRun(run: AgentRunRecord): Promise<void> {
   const lockKey = redisKey.agentRunLock(run.id);
   const lockValue = `worker:${process.pid}:${Date.now()}`;
-  const log = logger.child({ agentRunId: run.id, apiKeyId: run.apiKeyId });
+  const log = logger.child({ agentRunId: run.id, apiKeyId: run.apiKeyId, pillar: run.pillar });
 
   const acquired = await redis.set(lockKey, lockValue, { nx: true, px: LOCK_TTL_MS });
   if (!acquired) {
@@ -133,7 +144,17 @@ async function processAgentRun(run: AgentRunRecord): Promise<void> {
   }
 
   try {
-    await processVerificationTick(run, log);
+    if (run.pillar === 'verification') {
+      await processVerificationTick(run, log);
+    } else if (run.pillar === 'nurture') {
+      await processNurtureTick(run, log);
+    } else {
+      log.error({ pillar: run.pillar }, 'Agent run has an unsupported pillar — no worker implements it yet');
+      await prisma.agentRun.update({
+        where: { id: run.id },
+        data: { status: 'failed', errorMessage: `Pillar "${run.pillar}" is not implemented yet.` },
+      });
+    }
   } finally {
     const current = await redis.get(lockKey);
     if (current === lockValue) {
@@ -320,6 +341,101 @@ async function handleTickFailure(
     log.warn({ consecutiveFailures: newFailures }, 'Agent run auto-paused after too many consecutive failures');
     await emitEvent(run.id, 'auto_paused', `Auto-paused after ${newFailures} consecutive failures. Fix the issue and resume.`);
   }
+}
+
+// ─── Nurture pillar (one-shot: draft → approve → send) ─────────────────────────
+// Not tick-scheduled — only ever reached via the 'agent-run-kick' job fired
+// once at creation (and again from POST /:id/approve if a future retry path
+// needs it), never by runAgentTick's due-detection sweep (which filters
+// pillar: 'verification' only).
+
+async function processNurtureTick(run: AgentRunRecord, log: Logger): Promise<void> {
+  const cfg = parseNurtureAgentConfig(run.config);
+  if (!cfg) {
+    log.error({ config: run.config }, 'Agent run has invalid config — failing');
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { status: 'failed', errorMessage: 'Invalid or missing nurture config (listId, about, fromName, fromEmail required)' },
+    });
+    return;
+  }
+
+  // Idempotency: a stray re-kick of a run that already drafted or sent
+  // should never re-generate or re-send.
+  if (cfg.campaignId) return;
+  if (cfg.draft) {
+    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'pending_approval' } });
+    return;
+  }
+
+  try {
+    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'running', startedAt: new Date() } });
+
+    const key = await prisma.apiKey.findUnique({ where: { id: run.apiKeyId }, select: { plan: true } });
+    if (!GROWTH_PLANS.has(key?.plan ?? 'free')) {
+      throw new Error('The Nurture Agent requires a Growth or Scale plan (same gate as AI campaign copy generation).');
+    }
+    if (!config.AI_PERSONALIZATION_ENABLED) throw new Error('AI features are not enabled on this account.');
+    const anthropicKey = config.ANTHROPIC_API_KEY;
+    if (!anthropicKey) throw new Error('AI copy generation is not configured on this deployment.');
+
+    const { totalContacts, segments } = await deriveListSegments(run.apiKeyId, [cfg.listId], 1);
+    if (totalContacts === 0 || segments.length === 0 || !segments[0]) {
+      throw new Error('This list has no subscribed contacts to draft for.');
+    }
+    const segment = segments[0];
+
+    const email = await generateSegmentEmail(anthropicKey, {
+      about: cfg.about,
+      segment,
+      ...(cfg.sender !== undefined && { sender: cfg.sender }),
+      ...(cfg.tone !== undefined && { tone: cfg.tone }),
+    });
+    await incrementUsageBy(run.apiKeyId, 1);
+
+    const draft = {
+      subject: email.subject,
+      htmlBody: email.htmlBody,
+      textBody: email.textBody,
+      segmentLabel: email.segmentLabel,
+      matchCount: email.matchCount,
+    };
+    const newConfig = { ...(run.config as object), draft };
+
+    if (cfg.autoSend) {
+      const campaignId = await createAndSendCampaignFromDraft(run.apiKeyId, { ...cfg, draft });
+      await prisma.agentRun.update({
+        where: { id: run.id },
+        data: { status: 'completed', completedAt: new Date(), config: { ...newConfig, campaignId } },
+      });
+      await emitEvent(run.id, 'sent', `Drafted and sent to ${draft.matchCount.toLocaleString()} contacts (auto-send enabled).`, { campaignId, subject: draft.subject });
+      log.info({ listId: cfg.listId, campaignId }, 'Nurture agent auto-sent');
+    } else {
+      await prisma.agentRun.update({
+        where: { id: run.id },
+        data: { status: 'pending_approval', config: newConfig },
+      });
+      await emitEvent(
+        run.id,
+        'drafted',
+        `Draft ready for ${draft.matchCount.toLocaleString()} contacts — review and approve to send.`,
+        { subject: draft.subject, preview: draft.textBody.slice(0, 280) },
+      );
+      log.info({ listId: cfg.listId, matchCount: draft.matchCount }, 'Nurture agent draft ready for approval');
+    }
+  } catch (err) {
+    await handleNurtureFailure(run, err, log);
+  }
+}
+
+async function handleNurtureFailure(run: AgentRunRecord, err: unknown, log: Logger): Promise<void> {
+  const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+  log.error({ err }, 'Nurture agent run failed');
+  await prisma.agentRun.update({
+    where: { id: run.id },
+    data: { status: 'failed', errorMessage: errorMsg.slice(0, 500) },
+  });
+  await emitEvent(run.id, 'error', `Draft failed: ${errorMsg.slice(0, 200)}`);
 }
 
 async function emitEvent(

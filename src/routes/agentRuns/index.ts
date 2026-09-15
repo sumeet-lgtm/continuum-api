@@ -8,17 +8,20 @@ import { withTenant } from '../../lib/tenantContext.js';
 import { agentRunQueue } from '../../lib/queue.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
+import { createAndSendCampaignFromDraft } from '../../lib/nurtureAgent.js';
+import { parseNurtureAgentConfig } from '../../types/agentRun.js';
 import type { AgentRunKickPayload } from '../../types/job.js';
 
-// Only 'verification' is buildable today — the other AgentPillar enum
+// Verification and Nurture are buildable today — the other AgentPillar enum
 // values exist in the schema for the pillars on the roadmap, but creating
 // a run for them isn't supported by any worker yet.
-const SUPPORTED_PILLARS = ['verification'] as const;
+const SUPPORTED_PILLARS = ['verification', 'nurture'] as const;
 
 const VALID_INTERVALS = [1, 6, 12, 24, 48, 72, 168] as const;
+const TONE_VALUES = ['professional', 'casual', 'direct', 'technical'] as const;
 
-const createSchema = z.object({
-  pillar: z.enum(SUPPORTED_PILLARS).default('verification'),
+const verificationCreateSchema = z.object({
+  pillar: z.literal('verification').default('verification'),
   name: z.string().max(200).optional(),
   listId: z.string({ required_error: 'listId is required' }).min(1),
   intervalHours: z
@@ -31,6 +34,36 @@ const createSchema = z.object({
   autoRemoveInvalid: z.boolean().optional().default(false),
   cutoffDays: z.number().int().min(1).max(365).optional().default(30),
 });
+
+// One-shot: draft → (approve) → send. No intervalHours/nextCheckAt — the
+// worker is kicked once at creation instead of on a recurring cron tick.
+const nurtureCreateSchema = z.object({
+  pillar: z.literal('nurture'),
+  name: z.string().max(200).optional(),
+  listId: z.string({ required_error: 'listId is required' }).min(1),
+  about: z.string({ required_error: 'about is required' }).min(1).max(1000),
+  fromName: z.string({ required_error: 'fromName is required' }).min(1).max(200),
+  fromEmail: z.string({ required_error: 'fromEmail is required' }).email(),
+  replyTo: z.string().email().optional(),
+  sender: z.object({
+    name: z.string().max(200).optional(),
+    company: z.string().max(200).optional(),
+    product: z.string().max(200).optional(),
+  }).optional(),
+  tone: z.enum(TONE_VALUES).optional(),
+  // Off by default — the agent drafts and waits for a human to approve
+  // (POST /:id/approve) before anything actually sends.
+  autoSend: z.boolean().optional().default(false),
+});
+
+// z.discriminatedUnion needs the literal `pillar` key present in the raw
+// input to route to a branch — a request that omits it entirely (the
+// pre-nurture API shape, still supported) would match neither branch before
+// verificationCreateSchema's own .default() ever runs. Default it here.
+const createSchema = z.preprocess(
+  (val) => (val && typeof val === 'object' && !('pillar' in val) ? { ...val, pillar: 'verification' } : val),
+  z.discriminatedUnion('pillar', [verificationCreateSchema, nurtureCreateSchema]),
+);
 
 const updateSchema = z.object({
   status: z.enum(['active', 'paused']).optional(),
@@ -121,7 +154,7 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     const apiKeyId = request.apiKey.id;
-    const { pillar, name, listId, intervalHours, autoRemoveInvalid, cutoffDays } = parsed.data;
+    const { pillar, name, listId } = parsed.data;
 
     const runLimit = getAgentRunLimit(request.apiKey.plan);
     const existingCount = await prisma.agentRun.count({
@@ -142,23 +175,54 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
     );
     if (!list) throw Errors.notFound('Mailing list');
 
-    const nextCheckAt = new Date(Date.now() + intervalHours * 3600 * 1000);
+    let run: AgentRunSelectResult;
 
-    const run = await withTenant(apiKeyId, (tx) =>
-      tx.agentRun.create({
-        data: {
-          apiKeyId,
-          pillar,
-          name: name ?? null,
-          status: 'active',
-          config: { listId, autoRemoveInvalid, cutoffDays },
-          intervalHours,
-          nextCheckAt,
-          createdByEmail: request.apiKey.ownerId ?? null,
-        },
-        select: AGENT_RUN_SELECT,
-      }),
-    );
+    if (parsed.data.pillar === 'verification') {
+      const { intervalHours, autoRemoveInvalid, cutoffDays } = parsed.data;
+      const nextCheckAt = new Date(Date.now() + intervalHours * 3600 * 1000);
+      run = await withTenant(apiKeyId, (tx) =>
+        tx.agentRun.create({
+          data: {
+            apiKeyId,
+            pillar,
+            name: name ?? null,
+            status: 'active',
+            config: { listId, autoRemoveInvalid, cutoffDays },
+            intervalHours,
+            nextCheckAt,
+            createdByEmail: request.apiKey.ownerId ?? null,
+          },
+          select: AGENT_RUN_SELECT,
+        }),
+      ) as AgentRunSelectResult;
+    } else {
+      // Nurture: one-shot, no interval/nextCheckAt — kicked once, immediately.
+      const { about, fromName, fromEmail, replyTo, sender, tone, autoSend } = parsed.data;
+      run = await withTenant(apiKeyId, (tx) =>
+        tx.agentRun.create({
+          data: {
+            apiKeyId,
+            pillar,
+            name: name ?? null,
+            status: 'active',
+            config: {
+              listId, about, fromName, fromEmail, autoSend,
+              ...(replyTo !== undefined && { replyTo }),
+              ...(sender !== undefined && { sender }),
+              ...(tone !== undefined && { tone }),
+            },
+            createdByEmail: request.apiKey.ownerId ?? null,
+          },
+          select: AGENT_RUN_SELECT,
+        }),
+      ) as AgentRunSelectResult;
+
+      await agentRunQueue.add(
+        'agent-run-kick',
+        { agentRunId: run.id } as AgentRunKickPayload,
+        { jobId: `agent-run-kick-${run.id}-${Date.now()}` },
+      );
+    }
 
     logger.info({ agentRunId: run.id, apiKeyId, pillar, listId }, 'Agent run created');
     return reply.status(201).send(formatAgentRun(run as AgentRunSelectResult));
@@ -311,6 +375,56 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
 
     logger.info({ agentRunId: existing.id, apiKeyId }, 'Agent run cancelled');
     return reply.status(200).send(formatAgentRun(updated as AgentRunSelectResult));
+  });
+
+  // ── POST /v1/agent-runs/:id/approve ──────────────────────────────────────────
+  // Nurture-pillar-only: the human-in-the-loop gate. A drafted run sits at
+  // pending_approval until this is called (or config.autoSend was true at
+  // creation, which skips this entirely) — only after this does the real
+  // Campaign get created and handed to campaignWorker.ts to send.
+  fastify.post<{ Params: AgentRunParams }>('/agent-runs/:id/approve', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest<{ Params: AgentRunParams }>, reply: FastifyReply) => {
+    const apiKeyId = request.apiKey.id;
+    const run = await withTenant(apiKeyId, (tx) =>
+      tx.agentRun.findFirst({ where: { id: request.params.id, apiKeyId }, select: { id: true, pillar: true, status: true, config: true } }),
+    );
+    if (!run) throw Errors.notFound('Agent run');
+    if (run.pillar !== 'nurture') {
+      throw Errors.validationFailed({ pillar: 'Only nurture agent runs have an approval step.' });
+    }
+    if (run.status !== 'pending_approval') {
+      throw Errors.validationFailed({ status: `Agent run is "${run.status}", not awaiting approval.` });
+    }
+
+    const cfg = parseNurtureAgentConfig(run.config);
+    if (!cfg || !cfg.draft) {
+      throw Errors.validationFailed({ config: 'This run has no draft to approve.' });
+    }
+
+    const campaignId = await createAndSendCampaignFromDraft(apiKeyId, cfg);
+
+    const updated = await withTenant(apiKeyId, (tx) =>
+      tx.agentRun.update({
+        where: { id: run.id },
+        data: {
+          status: 'completed',
+          completedAt: new Date(),
+          config: { ...(run.config as object), campaignId },
+        },
+        select: AGENT_RUN_SELECT,
+      }),
+    );
+
+    await prisma.agentRunEvent.create({
+      data: {
+        agentRunId: run.id,
+        eventType: 'sent',
+        message: `Approved and sent to ${cfg.draft.matchCount.toLocaleString()} contacts.`,
+        data: { campaignId, subject: cfg.draft.subject },
+      },
+    });
+
+    logger.info({ agentRunId: run.id, apiKeyId, campaignId }, 'Nurture agent run approved and sent');
+    return reply.status(200).send({ ...formatAgentRun(updated as AgentRunSelectResult), campaignId });
   });
 
   // ── POST /v1/agent-runs/:id/trigger ──────────────────────────────────────────
