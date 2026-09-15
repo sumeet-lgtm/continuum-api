@@ -10,104 +10,23 @@ import { Prisma } from '@prisma/client';
 import { bulkQueue } from '../../lib/queue.js';
 import { uploadToStorage } from '../../lib/supabase.js';
 import { getPlanLimit, getFinderAffordability } from '../../plugins/usageMeter.js';
-import { normalizeFinderFilters } from '../../lib/apifyActorSchema.js';
+import {
+  getSearchToken,
+  buildFinderActorInput,
+  startFinderRun,
+  pollFinderRun,
+  fetchFinderDatasetRows,
+  computeResponseSignal,
+  mapLeadRow,
+} from '../../lib/finderSearch.js';
+
+// Re-exported for backward compatibility — computeResponseSignal/mapLeadRow
+// now live in lib/finderSearch.ts so the Lead Finding Agent worker
+// (workers/agentRunWorker.ts) can use them too, without importing a route
+// file as a library.
+export { computeResponseSignal, mapLeadRow };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-export function getSearchToken(): string {
-  const token = (config as Record<string, unknown>)['APIFY_API_TOKEN'] as string | undefined;
-  if (!token) {
-    throw new AppError(503, 'SERVICE_UNAVAILABLE', 'Lead Finder is not configured. Contact support.');
-  }
-  return token;
-}
-
-export function getSearchActorId(): string {
-  const actorId = (config as Record<string, unknown>)['APIFY_ACTOR_ID'] as string | undefined;
-  return actorId ?? 'kVYdvNOefemtiDXO5';
-}
-
-// Compute a "likely to respond" signal from Pipeline Labs fields.
-// High = likely responds to cold email; Low = hard to reach / unverified.
-export function computeResponseSignal(row: Record<string, unknown>): 'high' | 'medium' | 'low' {
-  let score = 0;
-  // Normalized so "catch-all"/"catch_all"/"catchAll" all match the same way —
-  // confirmed live against production that the actor actually returns
-  // "deliverable" (not "verified"/"valid" as this previously checked for),
-  // which meant every real lead's emailStatus silently contributed zero to
-  // its score regardless of how confident the actor itself was.
-  const emailStatus = typeof row.emailStatus === 'string' ? row.emailStatus.toLowerCase().replace(/[-_]/g, '') : '';
-  if (['verified', 'valid', 'deliverable'].includes(emailStatus)) score += 2;
-  else if (emailStatus === 'catchall') score += 1;
-
-  const seniority = typeof row.seniority === 'string' ? row.seniority.toLowerCase() : '';
-  if (['manager', 'director', 'senior', 'owner', 'partner'].includes(seniority)) score += 2;
-  else if (['vp', 'c_suite'].includes(seniority)) score += 0;
-  else score += 1;
-
-  const size = typeof row.companySize === 'string' ? row.companySize : '';
-  if (['11-50', '51-200', '201-500'].includes(size)) score += 1;
-
-  if (typeof row.linkedinUrl === 'string' && row.linkedinUrl.includes('linkedin')) score += 1;
-
-  if (score >= 4) return 'high';
-  if (score >= 2) return 'medium';
-  return 'low';
-}
-
-// Pipeline Labs actor output → Continuum lead shape
-export function mapLeadRow(row: Record<string, unknown>): {
-  email: string | null;
-  firstName: string | null;
-  lastName: string | null;
-  company: string | null;
-  title: string | null;
-  linkedinUrl: string | null;
-  location: string | null;
-  phone: string | null;
-  companyDomain: string | null;
-  companySize: string | null;
-  companyIndustry: string | null;
-  seniority: string | null;
-  emailStatus: string | null;
-  responseSignal: 'high' | 'medium' | 'low';
-} {
-  const str = (v: unknown): string | null =>
-    typeof v === 'string' && v.trim() ? v.trim() : null;
-
-  const city = str(row.personCity);
-  const state = str(row.personState);
-  const country = str(row.personCountry);
-  const locParts = [city, state, country].filter(Boolean);
-  const location = locParts.length > 0 ? locParts.join(', ') : null;
-
-  // fullName fallback split
-  let firstName = str(row.firstName);
-  let lastName = str(row.lastName);
-  if (!firstName && !lastName) {
-    const full = str(row.fullName) ?? '';
-    const parts = full.trim().split(' ');
-    firstName = parts[0] ?? null;
-    lastName = parts.slice(1).join(' ') || null;
-  }
-
-  return {
-    email: str(row.email),
-    firstName,
-    lastName,
-    company: str(row.companyName),
-    title: str(row.title) ?? str(row.position),
-    linkedinUrl: str(row.linkedinUrl),
-    location,
-    phone: str(row.phone),
-    companyDomain: str(row.companyDomain),
-    companySize: str(row.companySizeRange) ?? str(row.companySize),
-    companyIndustry: str(row.companyIndustry),
-    seniority: str(row.seniority),
-    emailStatus: str(row.emailStatus),
-    responseSignal: computeResponseSignal(row),
-  };
-}
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -117,9 +36,6 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
     '/finder/search',
     { preHandler: [requireAuth, requireRateLimit] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const token = getSearchToken();
-      const actorId = getSearchActorId();
-
       const body = request.body as {
         // Job title & role
         personTitleIncludes?: string[];
@@ -185,63 +101,17 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
 
       const totalResults = Math.min(Math.max(body.totalResults ?? 100, 1), 2500, maxAffordable);
 
-      // Build Pipeline Labs actor input — only include non-empty fields
-      const actorInput: Record<string, unknown> = { totalResults };
-
-      const addArr = (key: string, val?: string[]) => {
-        if (val?.length) actorInput[key] = val;
-      };
-      const addBool = (key: string, val?: boolean) => {
-        if (val !== undefined) actorInput[key] = val;
-      };
-      const addNum = (key: string, val?: number) => {
-        if (val !== undefined && val > 0) actorInput[key] = val;
-      };
-      const addStr = (key: string, val?: string) => {
-        if (val) actorInput[key] = val;
-      };
-
-      addArr('personTitleIncludes', body.personTitleIncludes);
-      addArr('personTitleExcludes', body.personTitleExcludes);
-      addBool('includeTitleVariants', body.includeTitleVariants);
-      addStr('roleMatchMode', body.roleMatchMode);
-      addBool('hasEmail', body.hasEmail);
-      addBool('hasPhone', body.hasPhone);
-      addArr('personLocationCityIncludes', body.personLocationCityIncludes);
-      addArr('companyNameIncludes', body.companyNameIncludes);
-      addArr('companyNameExcludes', body.companyNameExcludes);
-      addArr('companyKeywordIncludes', body.companyKeywordIncludes);
-      addArr('companyKeywordExcludes', body.companyKeywordExcludes);
-      addNum('companyEmployeeMin', body.companyEmployeeMin);
-      addNum('companyEmployeeMax', body.companyEmployeeMax);
-      addArr('companyDomainIncludes', body.companyDomainIncludes);
-      addArr('companyLocationCityIncludes', body.companyLocationCityIncludes);
-
+      // Build Pipeline Labs actor input — only include non-empty fields.
       // These fields are strict enums on the actor's side (industry, country,
       // seniority, function, company size, technologies, revenue, funding
       // stage) — a free-text value that doesn't match exactly used to fail
       // the whole search with an opaque Apify actor error (this is exactly
       // what happened investigating the Finder industry-filter gap: typing
       // "SaaS" instead of the actor's "Computer Software" broke the search
-      // with no useful message). Normalize against the actor's real,
-      // live-fetched enum list instead of forwarding raw user input.
-      const { actorInput: normalizedInput, rejectedByField, droppedByField } = await normalizeFinderFilters({
-        seniorityIncludes: body.seniorityIncludes,
-        seniorityExcludes: body.seniorityExcludes,
-        functionIncludes: body.functionIncludes,
-        functionExcludes: body.functionExcludes,
-        personLocationCountryIncludes: body.personLocationCountryIncludes,
-        personLocationCountryExcludes: body.personLocationCountryExcludes,
-        personLocationStateIncludes: body.personLocationStateIncludes,
-        companyIndustryIncludes: body.companyIndustryIncludes,
-        companyIndustryExcludes: body.companyIndustryExcludes,
-        companySizeIncludes: body.companySizeIncludes,
-        companyLocationCountryIncludes: body.companyLocationCountryIncludes,
-        companyLocationStateIncludes: body.companyLocationStateIncludes,
-        technologiesIncludes: body.technologiesIncludes,
-        annualRevenueIncludes: body.annualRevenueIncludes,
-        fundingStageIncludes: body.fundingStageIncludes,
-      });
+      // with no useful message). buildFinderActorInput normalizes against
+      // the actor's real, live-fetched enum list instead of forwarding raw
+      // user input.
+      const { actorInput, rejectedByField, droppedByField } = await buildFinderActorInput(body, totalResults);
 
       if (Object.keys(rejectedByField).length > 0) {
         const details = Object.entries(rejectedByField).map(([field, { invalid, validSample, totalValid }]) => ({
@@ -257,28 +127,8 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
         throw new AppError(422, 'VALIDATION_FAILED', details.map((d) => d.message).join(' '), details);
       }
 
-      for (const [field, values] of Object.entries(normalizedInput)) {
-        actorInput[field] = values;
-      }
       const droppedFields = Object.keys(droppedByField);
-
-      const runRes = await fetch(
-        `https://api.apify.com/v2/acts/${actorId}/runs?token=${token}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(actorInput),
-        },
-      );
-
-      if (!runRes.ok) {
-        const text = await runRes.text().catch(() => '');
-        throw Errors.internalError(`Failed to start search: ${text.slice(0, 200)}`);
-      }
-
-      const runData = await runRes.json() as { data?: { id?: string } };
-      const runId = runData?.data?.id;
-      if (!runId) throw Errors.internalError('Search could not be started. Try again.');
+      const runId = await startFinderRun(actorInput);
 
       return reply.status(202).send({
         runId,

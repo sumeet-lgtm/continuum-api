@@ -1,7 +1,9 @@
 // Shared shapes for AgentRun.config — pillar-specific input stored as JSON.
-// Verification and Nurture are implemented; the other AgentPillar values
-// are reserved for later pillars built on the same AgentRun/AgentRunEvent
-// primitive (see prisma/schema.prisma).
+// Verification, Nurture, and Lead Finding are implemented; the other
+// AgentPillar values are reserved for later pillars built on the same
+// AgentRun/AgentRunEvent primitive (see prisma/schema.prisma).
+
+import type { FinderSearchFilters } from '../lib/finderSearch.js';
 
 export interface VerificationAgentConfig {
   listId: string;
@@ -59,6 +61,43 @@ export interface NurtureAgentConfig {
     matchCount: number;
   };
   campaignId?: string; // set once the real Campaign is created
+}
+
+// ─── Lead Finding ────────────────────────────────────────────────────────────
+// Recurring watch (like Verification, not one-shot like Nurture): each tick
+// re-runs a saved Finder search (lib/finderSearch.ts — the same Apify/
+// Pipeline Labs flow behind the manual POST /v1/finder/search), verifies new
+// results through the existing engine, and imports only the ones never seen
+// before (deduped against existing Lead rows) — surfacing net-new matches
+// instead of re-showing the same people every cycle.
+//
+// A search run is async on Apify's side (searches take a minute or more), so
+// a tick can't just block waiting for it. Instead: tick N starts the search
+// and stores `pendingRunId`; the worker re-enqueues itself with a short
+// delay to poll; once Apify reports done, that tick does the dedup/verify/
+// import/enroll work, clears `pendingRunId`, and reschedules the normal
+// recurring interval. AgentRun.status stays 'active' throughout — only
+// `config.pendingRunId`'s presence marks "a search is in flight."
+
+export interface LeadFindingAgentConfig {
+  searchFilters: FinderSearchFilters;
+  // Optional: auto-enroll newly-found, verified leads into this sequence —
+  // the same auto-enroll option POST /v1/finder/jobs/:runId/import already
+  // exposes for a manual import, just applied automatically here.
+  sequenceId?: string;
+  // Worker-managed — not set by the caller at creation.
+  pendingRunId?: string;
+}
+
+export function parseLeadFindingAgentConfig(config: unknown): LeadFindingAgentConfig | null {
+  if (!config || typeof config !== 'object') return null;
+  const c = config as Record<string, unknown>;
+  if (!c['searchFilters'] || typeof c['searchFilters'] !== 'object') return null;
+
+  const result: LeadFindingAgentConfig = { searchFilters: c['searchFilters'] as FinderSearchFilters };
+  if (typeof c['sequenceId'] === 'string' && c['sequenceId'].length > 0) result.sequenceId = c['sequenceId'];
+  if (typeof c['pendingRunId'] === 'string' && c['pendingRunId'].length > 0) result.pendingRunId = c['pendingRunId'];
+  return result;
 }
 
 export function parseNurtureAgentConfig(config: unknown): NurtureAgentConfig | null {

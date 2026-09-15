@@ -11,11 +11,13 @@ import { logger } from '../../lib/logger.js';
 import { createAndSendCampaignFromDraft } from '../../lib/nurtureAgent.js';
 import { parseNurtureAgentConfig } from '../../types/agentRun.js';
 import type { AgentRunKickPayload } from '../../types/job.js';
+import type { FinderSearchFilters } from '../../lib/finderSearch.js';
+import { Prisma } from '@prisma/client';
 
-// Verification and Nurture are buildable today — the other AgentPillar enum
-// values exist in the schema for the pillars on the roadmap, but creating
-// a run for them isn't supported by any worker yet.
-const SUPPORTED_PILLARS = ['verification', 'nurture'] as const;
+// Verification, Nurture, and Lead Finding are buildable today — the other
+// AgentPillar enum values exist in the schema for the pillars on the
+// roadmap, but creating a run for them isn't supported by any worker yet.
+const SUPPORTED_PILLARS = ['verification', 'nurture', 'lead_finding'] as const;
 
 const VALID_INTERVALS = [1, 6, 12, 24, 48, 72, 168] as const;
 const TONE_VALUES = ['professional', 'casual', 'direct', 'technical'] as const;
@@ -56,13 +58,33 @@ const nurtureCreateSchema = z.object({
   autoSend: z.boolean().optional().default(false),
 });
 
+// Recurring, like verification — a saved search re-run on a cadence.
+// searchFilters is intentionally loose here (validated for real by
+// buildFinderActorInput's enum-normalization at tick time, the same
+// validation the manual POST /v1/finder/search route relies on) rather than
+// duplicated as a second, drifting zod schema for every one of its ~25
+// fields.
+const leadFindingCreateSchema = z.object({
+  pillar: z.literal('lead_finding'),
+  name: z.string().max(200).optional(),
+  searchFilters: z.record(z.unknown(), { required_error: 'searchFilters is required' }),
+  sequenceId: z.string().optional(),
+  intervalHours: z
+    .number()
+    .int()
+    .refine((v) => (VALID_INTERVALS as readonly number[]).includes(v), {
+      message: `intervalHours must be one of: ${VALID_INTERVALS.join(', ')}`,
+    })
+    .default(168), // weekly — a search is slower/costlier than a verification check
+});
+
 // z.discriminatedUnion needs the literal `pillar` key present in the raw
 // input to route to a branch — a request that omits it entirely (the
 // pre-nurture API shape, still supported) would match neither branch before
 // verificationCreateSchema's own .default() ever runs. Default it here.
 const createSchema = z.preprocess(
   (val) => (val && typeof val === 'object' && !('pillar' in val) ? { ...val, pillar: 'verification' } : val),
-  z.discriminatedUnion('pillar', [verificationCreateSchema, nurtureCreateSchema]),
+  z.discriminatedUnion('pillar', [verificationCreateSchema, nurtureCreateSchema, leadFindingCreateSchema]),
 );
 
 const updateSchema = z.object({
@@ -154,7 +176,7 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     const apiKeyId = request.apiKey.id;
-    const { pillar, name, listId } = parsed.data;
+    const { pillar, name } = parsed.data;
 
     const runLimit = getAgentRunLimit(request.apiKey.plan);
     const existingCount = await prisma.agentRun.count({
@@ -166,19 +188,18 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
       });
     }
 
-    // Root-cause pattern from the 2026-09-14 isolation incident: validate
-    // the referenced list belongs to this key BEFORE using it, not just
-    // scope the later read — an unscoped/unvalidated foreign id is exactly
-    // the bug class that caused that incident.
-    const list = await withTenant(apiKeyId, (tx) =>
-      tx.mailingList.findFirst({ where: { id: listId, apiKeyId }, select: { id: true } }),
-    );
-    if (!list) throw Errors.notFound('Mailing list');
-
     let run: AgentRunSelectResult;
 
     if (parsed.data.pillar === 'verification') {
-      const { intervalHours, autoRemoveInvalid, cutoffDays } = parsed.data;
+      const { listId, intervalHours, autoRemoveInvalid, cutoffDays } = parsed.data;
+
+      // Root-cause pattern from the 2026-09-14 isolation incident: validate
+      // the referenced list belongs to this key BEFORE using it, not just
+      // scope the later read — an unscoped/unvalidated foreign id is
+      // exactly the bug class that caused that incident.
+      const list = await withTenant(apiKeyId, (tx) => tx.mailingList.findFirst({ where: { id: listId, apiKeyId }, select: { id: true } }));
+      if (!list) throw Errors.notFound('Mailing list');
+
       const nextCheckAt = new Date(Date.now() + intervalHours * 3600 * 1000);
       run = await withTenant(apiKeyId, (tx) =>
         tx.agentRun.create({
@@ -195,9 +216,13 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
           select: AGENT_RUN_SELECT,
         }),
       ) as AgentRunSelectResult;
-    } else {
-      // Nurture: one-shot, no interval/nextCheckAt — kicked once, immediately.
-      const { about, fromName, fromEmail, replyTo, sender, tone, autoSend } = parsed.data;
+    } else if (parsed.data.pillar === 'nurture') {
+      // One-shot, no interval/nextCheckAt — kicked once, immediately.
+      const { listId, about, fromName, fromEmail, replyTo, sender, tone, autoSend } = parsed.data;
+
+      const list = await withTenant(apiKeyId, (tx) => tx.mailingList.findFirst({ where: { id: listId, apiKeyId }, select: { id: true } }));
+      if (!list) throw Errors.notFound('Mailing list');
+
       run = await withTenant(apiKeyId, (tx) =>
         tx.agentRun.create({
           data: {
@@ -222,9 +247,40 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
         { agentRunId: run.id } as AgentRunKickPayload,
         { jobId: `agent-run-kick-${run.id}-${Date.now()}` },
       );
+    } else {
+      // Lead Finding: recurring, like verification — no list to validate
+      // (it searches externally, not a Continuum mailing list), but if a
+      // sequenceId for auto-enroll was given, that DOES need the same
+      // ownership check.
+      const { searchFilters, sequenceId, intervalHours } = parsed.data;
+
+      if (sequenceId) {
+        const sequence = await withTenant(apiKeyId, (tx) => tx.sequence.findFirst({ where: { id: sequenceId, apiKeyId }, select: { id: true } }));
+        if (!sequence) throw Errors.notFound('Sequence');
+      }
+
+      const nextCheckAt = new Date(Date.now() + intervalHours * 3600 * 1000);
+      run = await withTenant(apiKeyId, (tx) =>
+        tx.agentRun.create({
+          data: {
+            apiKeyId,
+            pillar,
+            name: name ?? null,
+            status: 'active',
+            config: {
+              searchFilters: searchFilters as FinderSearchFilters,
+              ...(sequenceId !== undefined && { sequenceId }),
+            } as unknown as Prisma.InputJsonValue,
+            intervalHours,
+            nextCheckAt,
+            createdByEmail: request.apiKey.ownerId ?? null,
+          },
+          select: AGENT_RUN_SELECT,
+        }),
+      ) as AgentRunSelectResult;
     }
 
-    logger.info({ agentRunId: run.id, apiKeyId, pillar, listId }, 'Agent run created');
+    logger.info({ agentRunId: run.id, apiKeyId, pillar }, 'Agent run created');
     return reply.status(201).send(formatAgentRun(run as AgentRunSelectResult));
   });
 

@@ -15,6 +15,7 @@ vi.mock('../../lib/prisma.js', () => ({
     },
     agentRunEvent: { findMany: vi.fn(), count: vi.fn(), create: vi.fn() },
     mailingList: { findFirst: vi.fn() },
+    sequence: { findFirst: vi.fn() },
     webhook: { findMany: vi.fn().mockResolvedValue([]) },
     $disconnect: vi.fn(),
   },
@@ -97,6 +98,7 @@ const mockEventFindMany = vi.mocked(prisma.agentRunEvent.findMany);
 const mockEventCount    = vi.mocked(prisma.agentRunEvent.count);
 const mockEventCreate   = vi.mocked(prisma.agentRunEvent.create);
 const mockListFind      = vi.mocked(prisma.mailingList.findFirst);
+const mockSequenceFind  = vi.mocked(prisma.sequence.findFirst);
 const mockQueueAdd      = vi.mocked(agentRunQueue.add);
 const mockCreateAndSend = vi.mocked(createAndSendCampaignFromDraft);
 
@@ -506,5 +508,73 @@ describe('POST /v1/agent-runs/:id/approve', () => {
     expect(mockEventCreate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ eventType: 'sent', agentRunId: 'run-001' }),
     }));
+  });
+});
+
+// ─── POST /v1/agent-runs — lead_finding pillar ──────────────────────────────
+
+function makeLeadFindingAgentRun(overrides: Record<string, unknown> = {}) {
+  return makeAgentRun({
+    pillar: 'lead_finding',
+    config: { searchFilters: { personTitleIncludes: ['CISO'], totalResults: 100 } },
+    intervalHours: 168,
+    ...overrides,
+  });
+}
+
+describe('POST /v1/agent-runs — lead_finding pillar', () => {
+  beforeEach(() => {
+    mockRunCount.mockResolvedValue(0);
+    mockRunCreate.mockResolvedValue(makeLeadFindingAgentRun());
+  });
+
+  it('creates a lead-finding run without validating a mailing list (it searches externally)', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'lead_finding', searchFilters: { personTitleIncludes: ['CISO'] } }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().pillar).toBe('lead_finding');
+    expect(mockListFind).not.toHaveBeenCalled();
+  });
+
+  it('defaults intervalHours to 168 (weekly)', async () => {
+    await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'lead_finding', searchFilters: { personTitleIncludes: ['CISO'] } }),
+    });
+    const createCall = mockRunCreate.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+    expect(createCall.data['intervalHours']).toBe(168);
+  });
+
+  it('returns 422 when searchFilters is missing', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'lead_finding' }),
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it('validates sequenceId ownership when auto-enroll is configured', async () => {
+    mockSequenceFind.mockResolvedValue(null);
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'lead_finding', searchFilters: { personTitleIncludes: ['CISO'] }, sequenceId: 'someone-elses-sequence' }),
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('creates successfully when sequenceId belongs to this key', async () => {
+    mockSequenceFind.mockResolvedValue({ id: 'seq-001' });
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'lead_finding', searchFilters: { personTitleIncludes: ['CISO'] }, sequenceId: 'seq-001' }),
+    });
+    expect(res.statusCode).toBe(201);
   });
 });

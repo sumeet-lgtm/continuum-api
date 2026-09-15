@@ -23,23 +23,35 @@
  * below): draft copy via the existing AI generation flow, then either wait
  * at pending_approval for a human, or (autoSend) hand straight to the
  * existing, already-hardened Campaign/campaignWorker.ts send pipeline.
+ *
+ * Lead Finding pillar (recurring, like Verification — see
+ * processLeadFindingTick below): each tick re-runs a saved Finder search
+ * (lib/finderSearch.ts, the same Apify/Pipeline Labs flow behind manual
+ * search), which is itself async — a tick either starts a search or polls
+ * one already in flight (re-enqueuing itself with a short delay either way),
+ * and only once Apify reports done does it dedup/verify/import.
  */
 
-import { Worker, Queue, type Job } from 'bullmq';
-import { redisConnection, QUEUE_AGENT_RUN } from '../lib/queue.js';
+import { Worker, type Job } from 'bullmq';
+import { redisConnection, QUEUE_AGENT_RUN, agentRunQueue } from '../lib/queue.js';
 import { redis, redisKey } from '../lib/redis.js';
 import { prisma } from '../lib/prisma.js';
 import { withTenant, withRlsBypass } from '../lib/tenantContext.js';
 import { verifyEmail } from '../engine/index.js';
-import { getPlanLimit, incrementUsageBy } from '../plugins/usageMeter.js';
+import { getPlanLimit, incrementUsageBy, getFinderAffordability, incrementFinderUsage } from '../plugins/usageMeter.js';
 import { config } from '../config.js';
 import { logger, type Logger } from '../lib/logger.js';
 import { initSentry, installCrashReporting } from '../lib/sentry.js';
-import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig } from '../types/agentRun.js';
+import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig, parseLeadFindingAgentConfig } from '../types/agentRun.js';
 import type { AgentRunTickPayload, AgentRunKickPayload } from '../types/job.js';
 import { deriveListSegments } from '../lib/campaignSegments.js';
 import { generateSegmentEmail } from '../lib/emailGenerator.js';
 import { createAndSendCampaignFromDraft } from '../lib/nurtureAgent.js';
+import { buildFinderActorInput, startFinderRun, pollFinderRun, fetchFinderDatasetRows, mapLeadRow } from '../lib/finderSearch.js';
+import { Prisma } from '@prisma/client';
+
+const POLL_DELAY_MS = 30_000; // re-check an in-flight Apify search this often
+const FINDER_BATCH_SIZE = 25; // new leads verified+imported per tick, once a search completes
 
 const GROWTH_PLANS = new Set(['growth', 'scale']);
 
@@ -69,7 +81,7 @@ async function runAgentTick(_job: Job<AgentRunTickPayload>): Promise<void> {
   const dueRuns = await withRlsBypass((tx) =>
     tx.agentRun.findMany({
       where: {
-        pillar: 'verification',
+        pillar: { in: ['verification', 'lead_finding'] },
         status: 'active',
         pausedAt: null,
         nextCheckAt: { lte: now },
@@ -148,6 +160,8 @@ async function processAgentRun(run: AgentRunRecord): Promise<void> {
       await processVerificationTick(run, log);
     } else if (run.pillar === 'nurture') {
       await processNurtureTick(run, log);
+    } else if (run.pillar === 'lead_finding') {
+      await processLeadFindingTick(run, log);
     } else {
       log.error({ pillar: run.pillar }, 'Agent run has an unsupported pillar — no worker implements it yet');
       await prisma.agentRun.update({
@@ -438,6 +452,206 @@ async function handleNurtureFailure(run: AgentRunRecord, err: unknown, log: Logg
   await emitEvent(run.id, 'error', `Draft failed: ${errorMsg.slice(0, 200)}`);
 }
 
+// ─── Lead Finding pillar (recurring, async search across ticks) ───────────────
+
+async function processLeadFindingTick(run: AgentRunRecord, log: Logger): Promise<void> {
+  const intervalHours = run.intervalHours ?? 168; // weekly default — a search is expensive/slow, unlike a verification check
+  const cfg = parseLeadFindingAgentConfig(run.config);
+
+  if (!cfg) {
+    log.error({ config: run.config }, 'Agent run has invalid config — pausing');
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { status: 'failed', errorMessage: 'Invalid or missing lead-finding config (searchFilters required)', pausedAt: new Date() },
+    });
+    return;
+  }
+
+  try {
+    if (!cfg.pendingRunId) {
+      // Phase 1: no search in flight — start one, capped by what this key
+      // can currently afford (same check + cap the manual POST
+      // /v1/finder/search route applies).
+      const key = await prisma.apiKey.findUnique({
+        where: { id: run.apiKeyId },
+        select: { plan: true, monthlyLimit: true, currentMonthUsage: true, extraVerificationCredits: true, currentMonthFinderUsage: true },
+      });
+      const { maxAffordable } = getFinderAffordability(key ?? { plan: null });
+      if (maxAffordable === 0) {
+        const nextCheckAt = calcNextCheckAt(intervalHours);
+        await prisma.agentRun.update({ where: { id: run.id }, data: { nextCheckAt } });
+        await emitEvent(run.id, 'quota_exhausted', 'Monthly lead-finding quota exhausted — will retry next cycle.');
+        return;
+      }
+
+      const totalResults = Math.min(Math.max(cfg.searchFilters.totalResults ?? 100, 1), 2500, maxAffordable);
+      const { actorInput, rejectedByField } = await buildFinderActorInput(cfg.searchFilters, totalResults);
+      if (Object.keys(rejectedByField).length > 0) {
+        throw new Error(`Search filters are invalid: ${Object.keys(rejectedByField).join(', ')}`);
+      }
+
+      const apifyRunId = await startFinderRun(actorInput);
+      await prisma.agentRun.update({
+        where: { id: run.id },
+        data: { config: { ...(run.config as object), pendingRunId: apifyRunId } },
+      });
+      await emitEvent(run.id, 'search_started', 'Search started — checking back shortly.');
+      await agentRunQueue.add(
+        'agent-run-kick',
+        { agentRunId: run.id } as AgentRunKickPayload,
+        { delay: POLL_DELAY_MS, jobId: `agent-run-poll-${run.id}-${Date.now()}` },
+      );
+      return;
+    }
+
+    // Phase 2: a search is already in flight — poll it.
+    const poll = await pollFinderRun(cfg.pendingRunId);
+    if (poll.status === 'running') {
+      await agentRunQueue.add(
+        'agent-run-kick',
+        { agentRunId: run.id } as AgentRunKickPayload,
+        { delay: POLL_DELAY_MS, jobId: `agent-run-poll-${run.id}-${Date.now()}` },
+      );
+      return; // still waiting — no state change, no event noise per poll
+    }
+    if (poll.status === 'failed') {
+      throw new Error('Lead search failed on the provider side.');
+    }
+
+    // Phase 3: search succeeded — dedup, verify, import.
+    const rows = poll.datasetId ? await fetchFinderDatasetRows(poll.datasetId) : [];
+    const rowByEmail = new Map<string, Record<string, unknown>>();
+    for (const row of rows) {
+      if (typeof row.email === 'string' && row.email.trim()) rowByEmail.set(row.email.trim().toLowerCase(), row);
+    }
+    const candidateEmails = [...rowByEmail.keys()];
+
+    const clearPendingAndReschedule = async (extraConfig: Record<string, unknown> = {}) => {
+      const { pendingRunId: _drop, ...rest } = run.config as Record<string, unknown>;
+      const nextCheckAt = calcNextCheckAt(intervalHours);
+      await prisma.agentRun.update({
+        where: { id: run.id },
+        data: { lastCheckedAt: new Date(), nextCheckAt, consecutiveFailures: 0, config: { ...rest, ...extraConfig } as Prisma.InputJsonValue },
+      });
+    };
+
+    if (candidateEmails.length === 0) {
+      await clearPendingAndReschedule();
+      await emitEvent(run.id, 'tick_complete', 'Search complete — no matching leads found this cycle.');
+      return;
+    }
+
+    // Dedup against leads this account already has — only net-new matches count.
+    const existing = await withTenant(run.apiKeyId, (tx) => tx.lead.findMany({
+      where: { apiKeyId: run.apiKeyId, email: { in: candidateEmails } },
+      select: { email: true },
+    }));
+    const existingSet = new Set(existing.map((r) => r.email.toLowerCase()));
+    const newEmails = candidateEmails.filter((e) => !existingSet.has(e));
+
+    if (newEmails.length === 0) {
+      await clearPendingAndReschedule();
+      await emitEvent(run.id, 'tick_complete', `Search complete — ${candidateEmails.length} found, all already known.`);
+      return;
+    }
+
+    // Re-check affordability now (the search itself can run for a minute or
+    // more, and other Finder/verification activity on this key may have
+    // spent what was available at start time) — same re-check the manual
+    // status-poll route does before spending real verification credits.
+    const key2 = await prisma.apiKey.findUnique({
+      where: { id: run.apiKeyId },
+      select: { plan: true, monthlyLimit: true, currentMonthUsage: true, extraVerificationCredits: true, currentMonthFinderUsage: true },
+    });
+    const { maxAffordable: affordNow } = getFinderAffordability(key2 ?? { plan: null });
+    const batchCap = Math.min(FINDER_BATCH_SIZE, affordNow, newEmails.length);
+    const toProcess = newEmails.slice(0, batchCap);
+
+    let imported = 0;
+    let enrolled = 0;
+    let invalidCount = 0;
+    let verifiedCount = 0;
+
+    for (let i = 0; i < toProcess.length; i += VERIFY_CONCURRENCY) {
+      const chunk = toProcess.slice(i, i + VERIFY_CONCURRENCY);
+      const settled = await Promise.allSettled(
+        chunk.map(async (email) => {
+          const result = await verifyEmail({ email, apiKeyId: run.apiKeyId, bulkJobId: undefined, sourceIp: undefined });
+          return { email, result };
+        }),
+      );
+
+      for (const s of settled) {
+        if (s.status === 'rejected') continue;
+        verifiedCount++;
+        const { email, result } = s.value;
+        if (result.status !== 'valid' && result.status !== 'risky') { invalidCount++; continue; }
+
+        const row = rowByEmail.get(email);
+        if (!row) continue;
+        const mapped = mapLeadRow(row);
+
+        try {
+          await withTenant(run.apiKeyId, async (tx) => {
+            await tx.lead.upsert({
+              where: { apiKeyId_email: { apiKeyId: run.apiKeyId, email } },
+              create: {
+                apiKeyId: run.apiKeyId,
+                email,
+                firstName: mapped.firstName ?? null,
+                lastName: mapped.lastName ?? null,
+                company: mapped.company ?? null,
+                title: mapped.title ?? null,
+                customVars: {
+                  ...(mapped.linkedinUrl ? { linkedin_url: mapped.linkedinUrl } : {}),
+                  ...(mapped.phone ? { phone: mapped.phone } : {}),
+                  ...(mapped.companyDomain ? { company_domain: mapped.companyDomain } : {}),
+                  ...(mapped.companySize ? { company_size: mapped.companySize } : {}),
+                  ...(mapped.companyIndustry ? { industry: mapped.companyIndustry } : {}),
+                  ...(mapped.location ? { location: mapped.location } : {}),
+                  ...(mapped.seniority ? { seniority: mapped.seniority } : {}),
+                } as Prisma.InputJsonValue,
+              },
+              update: {},
+            });
+            imported++;
+
+            if (cfg.sequenceId) {
+              await tx.sequenceEnrollment
+                .upsert({
+                  where: { sequenceId_email: { sequenceId: cfg.sequenceId, email } },
+                  create: { sequenceId: cfg.sequenceId, email, status: 'active', nextSendAt: new Date() },
+                  update: {},
+                })
+                .then(() => { enrolled++; })
+                .catch(() => { /* best-effort, same as the manual import route */ });
+            }
+          });
+        } catch (err) {
+          log.warn({ err, email }, 'Lead finding agent: failed to import one lead');
+        }
+      }
+    }
+
+    if (verifiedCount > 0) await incrementFinderUsage(run.apiKeyId, verifiedCount);
+    await clearPendingAndReschedule();
+
+    const parts = [`Found ${candidateEmails.length}`, `${newEmails.length} new`, `${imported} imported`];
+    if (invalidCount) parts.push(`${invalidCount} failed verification`);
+    if (cfg.sequenceId) parts.push(`${enrolled} enrolled`);
+    if (newEmails.length > toProcess.length) parts.push(`${newEmails.length - toProcess.length} deferred to next cycle (quota)`);
+
+    await emitEvent(run.id, 'imported', parts.join(', '), { found: candidateEmails.length, new: newEmails.length, imported, enrolled, invalidCount });
+    log.info({ found: candidateEmails.length, newLeads: newEmails.length, imported, enrolled }, 'Lead finding agent tick complete');
+  } catch (err) {
+    // Clear pendingRunId on failure too — a permanently-stuck/failed Apify
+    // run must not wedge the watch into polling forever.
+    const { pendingRunId: _drop, ...rest } = (run.config as Record<string, unknown>) ?? {};
+    await prisma.agentRun.update({ where: { id: run.id }, data: { config: rest as Prisma.InputJsonValue } }).catch(() => {});
+    await handleTickFailure(run, intervalHours, err, log);
+  }
+}
+
 async function emitEvent(
   agentRunId: string,
   eventType: string,
@@ -465,10 +679,6 @@ export function calcNextCheckAt(intervalHours: number): Date {
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
 function startAgentRunWorker(): { close: () => Promise<void> } {
-  const agentRunQueue = new Queue<AgentRunJobData>(QUEUE_AGENT_RUN, {
-    connection: redisConnection,
-  });
-
   void agentRunQueue.add(
     'agent-run-tick',
     { batchSize: TICK_BATCH_SIZE },

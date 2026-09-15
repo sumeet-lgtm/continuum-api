@@ -28,6 +28,7 @@ vi.mock('../../lib/redis.js', () => ({
 vi.mock('../../lib/queue.js', () => ({
   QUEUE_AGENT_RUN: 'continuum-agent-run',
   redisConnection: {},
+  agentRunQueue: { add: vi.fn(), close: vi.fn() },
 }));
 
 vi.mock('../../engine/index.js', () => ({
@@ -46,6 +47,14 @@ vi.mock('../../lib/nurtureAgent.js', () => ({
   createAndSendCampaignFromDraft: vi.fn(),
 }));
 
+vi.mock('../../lib/finderSearch.js', () => ({
+  buildFinderActorInput: vi.fn(),
+  startFinderRun: vi.fn(),
+  pollFinderRun: vi.fn(),
+  fetchFinderDatasetRows: vi.fn(),
+  mapLeadRow: vi.fn(),
+}));
+
 vi.mock('bullmq', () => ({
   Worker: vi.fn().mockImplementation(() => ({ on: vi.fn(), close: vi.fn() })),
   Queue:  vi.fn().mockImplementation(() => ({ add: vi.fn(), close: vi.fn() })),
@@ -60,7 +69,7 @@ import {
   MAX_CONSECUTIVE_FAILURES,
   JITTER_FACTOR,
 } from '../../workers/agentRunWorker.js';
-import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig } from '../../types/agentRun.js';
+import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig, parseLeadFindingAgentConfig } from '../../types/agentRun.js';
 
 // ─── calcNextCheckAt — scheduling with jitter (same formula as monitorWorker) ──
 
@@ -227,5 +236,42 @@ describe('parseNurtureAgentConfig', () => {
     expect(parseNurtureAgentConfig(null)).toBeNull();
     expect(parseNurtureAgentConfig(undefined)).toBeNull();
     expect(parseNurtureAgentConfig('list_1')).toBeNull();
+  });
+});
+
+// ─── Lead Finding agent config parsing ────────────────────────────────────────
+
+describe('parseLeadFindingAgentConfig', () => {
+  const minimal = { searchFilters: { personTitleIncludes: ['CISO'], totalResults: 100 } };
+
+  it('accepts a minimal valid config', () => {
+    expect(parseLeadFindingAgentConfig(minimal)).toEqual(minimal);
+  });
+
+  it('carries through sequenceId when present', () => {
+    const cfg = parseLeadFindingAgentConfig({ ...minimal, sequenceId: 'seq_1' });
+    expect(cfg).toEqual({ ...minimal, sequenceId: 'seq_1' });
+  });
+
+  it('carries through a pendingRunId set by the worker (mid-search-cycle state)', () => {
+    const cfg = parseLeadFindingAgentConfig({ ...minimal, pendingRunId: 'apify_run_123' });
+    expect(cfg?.pendingRunId).toBe('apify_run_123');
+  });
+
+  it('rejects a missing or non-object searchFilters', () => {
+    expect(parseLeadFindingAgentConfig({})).toBeNull();
+    expect(parseLeadFindingAgentConfig({ searchFilters: 'not an object' })).toBeNull();
+    expect(parseLeadFindingAgentConfig({ searchFilters: null })).toBeNull();
+  });
+
+  it('rejects non-object input', () => {
+    expect(parseLeadFindingAgentConfig(null)).toBeNull();
+    expect(parseLeadFindingAgentConfig(undefined)).toBeNull();
+    expect(parseLeadFindingAgentConfig('list_1')).toBeNull();
+  });
+
+  it('ignores an empty-string sequenceId/pendingRunId rather than accepting it', () => {
+    const cfg = parseLeadFindingAgentConfig({ ...minimal, sequenceId: '', pendingRunId: '' });
+    expect(cfg).toEqual(minimal);
   });
 });
