@@ -258,6 +258,7 @@ const NAV: NavItem[] = [
     icon: Megaphone,
     children: [
       { to: "/dashboard/campaigns", label: "Campaigns", icon: Megaphone, exact: true },
+      { to: "/dashboard/nurture-agent", label: "Nurture Agent", icon: Bot },
       { to: "/dashboard/automations", label: "Automations", icon: Zap },
       { to: "/dashboard/lists", label: "Mailing Lists", icon: Users },
       { to: "/dashboard/contacts", label: "Contacts", icon: UserRound },
