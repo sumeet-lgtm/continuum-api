@@ -135,7 +135,7 @@ function LeadsPage() {
     if (!primaryKey?.keyRaw) return;
     setSaving(true);
     try {
-      await api.withKey.post("/v1/leads", {
+      const created = await api.withKey.post<Lead>("/v1/leads", {
         email: form.email,
         first_name: form.firstName || undefined,
         last_name: form.lastName || undefined,
@@ -145,6 +145,17 @@ function LeadsPage() {
       toast.success("Lead added");
       setAdding(false);
       setForm({ email: "", firstName: "", lastName: "", company: "", title: "" });
+      // Show it immediately rather than waiting on a full reload — POST
+      // /v1/leads is a real upsert (add or update-existing), so replace a
+      // matching email instead of appending a duplicate row.
+      setLeads((prev) => {
+        const idx = prev.findIndex((l) => l.email === created.email);
+        if (idx === -1) return [created, ...prev];
+        const next = [...prev];
+        next[idx] = created;
+        return next;
+      });
+      setTotal((prev) => prev + 1);
       load();
     } catch (e: unknown) { toast.error((e as Error).message); }
     finally { setSaving(false); }
