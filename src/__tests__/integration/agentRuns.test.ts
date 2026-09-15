@@ -17,6 +17,7 @@ vi.mock('../../lib/prisma.js', () => ({
     mailingList: { findFirst: vi.fn() },
     sequence: { findFirst: vi.fn() },
     mailbox: { findFirst: vi.fn() },
+    lead: { findMany: vi.fn() },
     webhook: { findMany: vi.fn().mockResolvedValue([]) },
     $disconnect: vi.fn(),
   },
@@ -84,10 +85,15 @@ vi.mock('../../lib/nurtureAgent.js', () => ({
   createAndSendCampaignFromDraft: vi.fn().mockResolvedValue('camp-mock-1'),
 }));
 
+vi.mock('../../lib/outboundAgent.js', () => ({
+  createSequenceAndEnrollFromDraft: vi.fn().mockResolvedValue({ sequenceId: 'seq-mock-1', enrolled: 2, skipped: 0, conflicts: 0 }),
+}));
+
 import { buildApp } from '../../server.js';
 import { prisma } from '../../lib/prisma.js';
 import { agentRunQueue } from '../../lib/queue.js';
 import { createAndSendCampaignFromDraft } from '../../lib/nurtureAgent.js';
+import { createSequenceAndEnrollFromDraft } from '../../lib/outboundAgent.js';
 
 const mockFindKey       = vi.mocked(prisma.apiKey.findUnique);
 const mockRunCount      = vi.mocked(prisma.agentRun.count);
@@ -101,8 +107,10 @@ const mockEventCreate   = vi.mocked(prisma.agentRunEvent.create);
 const mockListFind      = vi.mocked(prisma.mailingList.findFirst);
 const mockSequenceFind  = vi.mocked(prisma.sequence.findFirst);
 const mockMailboxFind   = vi.mocked(prisma.mailbox.findFirst);
+const mockLeadFindMany  = vi.mocked(prisma.lead.findMany);
 const mockQueueAdd      = vi.mocked(agentRunQueue.add);
 const mockCreateAndSend = vi.mocked(createAndSendCampaignFromDraft);
+const mockCreateAndEnroll = vi.mocked(createSequenceAndEnrollFromDraft);
 
 // ─── Test API key ─────────────────────────────────────────────────────────────
 
@@ -650,5 +658,105 @@ describe('POST /v1/agent-runs — warmup pillar', () => {
       payload: JSON.stringify({ pillar: 'warmup' }),
     });
     expect(res.statusCode).toBe(422);
+  });
+});
+
+// ─── POST /v1/agent-runs — outbound pillar ──────────────────────────────────
+
+function makeOutboundAgentRun(overrides: Record<string, unknown> = {}) {
+  return makeAgentRun({
+    pillar: 'outbound',
+    config: { leadIds: ['lead-001', 'lead-002'], about: 'a security tool for CISOs', fromName: 'Ada', fromEmail: 'ada@acme.com' },
+    intervalHours: null,
+    nextCheckAt: null,
+    ...overrides,
+  });
+}
+
+describe('POST /v1/agent-runs — outbound pillar', () => {
+  beforeEach(() => {
+    mockRunCount.mockResolvedValue(0);
+    mockLeadFindMany.mockResolvedValue([{ id: 'lead-001' }, { id: 'lead-002' }]);
+    mockRunCreate.mockResolvedValue(makeOutboundAgentRun());
+  });
+
+  it('creates an outbound run and immediately enqueues a kick job (one-shot, not tick-scheduled)', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'outbound', leadIds: ['lead-001', 'lead-002'], about: 'a security tool for CISOs', fromName: 'Ada', fromEmail: 'ada@acme.com' }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().pillar).toBe('outbound');
+    expect(mockQueueAdd).toHaveBeenCalledWith('agent-run-kick', { agentRunId: 'run-001' }, expect.any(Object));
+  });
+
+  it('returns 404 when none of the given leadIds belong to this key', async () => {
+    mockLeadFindMany.mockResolvedValue([]);
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'outbound', leadIds: ['someone-elses-lead'], about: 'x', fromName: 'Ada', fromEmail: 'ada@acme.com' }),
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 422 when only some of the given leadIds belong to this key', async () => {
+    mockLeadFindMany.mockResolvedValue([{ id: 'lead-001' }]); // only 1 of 2 found
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'outbound', leadIds: ['lead-001', 'lead-002'], about: 'x', fromName: 'Ada', fromEmail: 'ada@acme.com' }),
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it('returns 422 when leadIds is empty', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'outbound', leadIds: [], about: 'x', fromName: 'Ada', fromEmail: 'ada@acme.com' }),
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it('never accepts an autoSend field — this pillar has no such option', async () => {
+    await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'outbound', leadIds: ['lead-001'], about: 'x', fromName: 'Ada', fromEmail: 'ada@acme.com', autoSend: true }),
+    });
+    const createCall = mockRunCreate.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+    expect((createCall.data['config'] as Record<string, unknown>)['autoSend']).toBeUndefined();
+  });
+});
+
+// ─── POST /v1/agent-runs/:id/approve — outbound ─────────────────────────────
+
+describe('POST /v1/agent-runs/:id/approve — outbound', () => {
+  it('returns 422 when pending_approval but has no draft yet', async () => {
+    mockRunFindFirst.mockResolvedValue(makeOutboundAgentRun({ status: 'pending_approval' }));
+    const res = await app.inject({ method: 'POST', url: '/v1/agent-runs/run-001/approve', headers: AUTH });
+    expect(res.statusCode).toBe(422);
+    expect(mockCreateAndEnroll).not.toHaveBeenCalled();
+  });
+
+  it('enrolls the leads, marks the run completed, on a valid approval', async () => {
+    const draft = { sequenceName: 'Outreach (agent draft)', steps: [{ subject: 'Hi', htmlBody: '<p>hi</p>', textBody: 'hi', delayDays: 0 }], matchCount: 2 };
+    mockRunFindFirst.mockResolvedValue(makeOutboundAgentRun({
+      status: 'pending_approval',
+      config: { leadIds: ['lead-001', 'lead-002'], about: 'x', fromName: 'Ada', fromEmail: 'ada@acme.com', draft },
+    }));
+    mockRunUpdate.mockResolvedValue(makeOutboundAgentRun({ status: 'completed', completedAt: new Date() }));
+
+    const res = await app.inject({ method: 'POST', url: '/v1/agent-runs/run-001/approve', headers: AUTH });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockCreateAndEnroll).toHaveBeenCalledWith('key-agent-001', expect.objectContaining({ draft }));
+    expect(res.json().sequenceId).toBe('seq-mock-1');
+    expect(res.json().enrolled).toBe(2);
+    expect(mockEventCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ eventType: 'enrolled', agentRunId: 'run-001' }),
+    }));
   });
 });

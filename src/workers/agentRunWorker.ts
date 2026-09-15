@@ -39,6 +39,17 @@
  * writes (Mailbox.status, Mailbox.lastErrorMsg): hold the ramp (dailyRampUp
  * = 0) on any sign of trouble instead of blindly increasing through it, and
  * restore the configured baseline pace once healthy again.
+ *
+ * Outbound Email pillar (one-shot, kicked once at creation — see
+ * processOutboundTick below): the highest-risk pillar, so unlike Nurture
+ * there is no autoSend option at all — every run stops at pending_approval
+ * and stays there until a human calls POST /:id/approve. Drafts a
+ * multi-step sequence (generateSegmentEmail, same knowledge-base-grounded
+ * flow as Nurture, with stepContext set per touch) for a caller-supplied
+ * set of existing Leads (found via the Lead Finding pillar or a manual
+ * Finder import — this pillar does not search itself), then on approval
+ * hands enrollment straight to the existing, unmodified
+ * SequenceEnrollment/workers/sequenceWorker.ts pipeline.
  */
 
 import { Worker, type Job } from 'bullmq';
@@ -51,8 +62,9 @@ import { getPlanLimit, incrementUsageBy, getFinderAffordability, incrementFinder
 import { config } from '../config.js';
 import { logger, type Logger } from '../lib/logger.js';
 import { initSentry, installCrashReporting } from '../lib/sentry.js';
-import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig, parseLeadFindingAgentConfig, parseWarmupAgentConfig } from '../types/agentRun.js';
+import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig, parseLeadFindingAgentConfig, parseWarmupAgentConfig, parseOutboundAgentConfig } from '../types/agentRun.js';
 import type { AgentRunTickPayload, AgentRunKickPayload } from '../types/job.js';
+import { deriveSequenceSegments } from '../lib/sequenceSegments.js';
 import { deriveListSegments } from '../lib/campaignSegments.js';
 import { generateSegmentEmail } from '../lib/emailGenerator.js';
 import { createAndSendCampaignFromDraft } from '../lib/nurtureAgent.js';
@@ -173,6 +185,8 @@ async function processAgentRun(run: AgentRunRecord): Promise<void> {
       await processLeadFindingTick(run, log);
     } else if (run.pillar === 'warmup') {
       await processWarmupTick(run, log);
+    } else if (run.pillar === 'outbound') {
+      await processOutboundTick(run, log);
     } else {
       log.error({ pillar: run.pillar }, 'Agent run has an unsupported pillar — no worker implements it yet');
       await prisma.agentRun.update({
@@ -456,6 +470,103 @@ async function processNurtureTick(run: AgentRunRecord, log: Logger): Promise<voi
 async function handleNurtureFailure(run: AgentRunRecord, err: unknown, log: Logger): Promise<void> {
   const errorMsg = err instanceof Error ? err.message : 'Unknown error';
   log.error({ err }, 'Nurture agent run failed');
+  await prisma.agentRun.update({
+    where: { id: run.id },
+    data: { status: 'failed', errorMessage: errorMsg.slice(0, 500) },
+  });
+  await emitEvent(run.id, 'error', `Draft failed: ${errorMsg.slice(0, 200)}`);
+}
+
+// ─── Outbound Email pillar (one-shot, no autoSend — always ends at
+// pending_approval) ─────────────────────────────────────────────────────────
+
+async function processOutboundTick(run: AgentRunRecord, log: Logger): Promise<void> {
+  const cfg = parseOutboundAgentConfig(run.config);
+  if (!cfg) {
+    log.error({ config: run.config }, 'Agent run has invalid config — failing');
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { status: 'failed', errorMessage: 'Invalid or missing outbound config (leadIds, about, fromName, fromEmail required)' },
+    });
+    return;
+  }
+
+  // Idempotency: a stray re-kick of a run that already drafted or was
+  // approved should never re-generate or re-enroll.
+  if (cfg.sequenceId) return;
+  if (cfg.draft) {
+    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'pending_approval' } });
+    return;
+  }
+
+  try {
+    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'running', startedAt: new Date() } });
+
+    const key = await prisma.apiKey.findUnique({ where: { id: run.apiKeyId }, select: { plan: true } });
+    if (!GROWTH_PLANS.has(key?.plan ?? 'free')) {
+      throw new Error('The Outbound Agent requires a Growth or Scale plan (same gate as AI campaign copy generation).');
+    }
+    if (!config.AI_PERSONALIZATION_ENABLED) throw new Error('AI features are not enabled on this account.');
+    const anthropicKey = config.ANTHROPIC_API_KEY;
+    if (!anthropicKey) throw new Error('AI copy generation is not configured on this deployment.');
+
+    // Placeholder sequenceId: no real Sequence exists yet at draft time, and
+    // deriveSequenceSegments only uses it to look up an EXISTING sequence's
+    // enrollments (falling back to fallbackLeadIds when none exist) — a
+    // syntactically-obvious non-cuid string can never collide with a real
+    // sequence, so this always and safely falls through to cfg.leadIds.
+    const { totalContacts, segments } = await deriveSequenceSegments(run.apiKeyId, '__draft__', cfg.leadIds, 1);
+    if (totalContacts === 0 || segments.length === 0 || !segments[0]) {
+      throw new Error('None of the specified leads could be found on this account.');
+    }
+    const segment = segments[0];
+    const stepCount = Math.min(Math.max(cfg.stepCount ?? 3, 1), 6);
+
+    const steps: Array<{ subject: string; htmlBody: string; textBody: string; delayDays: number }> = [];
+    for (let i = 0; i < stepCount; i++) {
+      const stepContext = stepCount === 1
+        ? undefined
+        : i === 0
+          ? `step 1 of ${stepCount} — the opening spark`
+          : `step ${i + 1} of ${stepCount} — a genuinely different angle from the prior ${i} touch(es), not a rephrase`;
+
+      const email = await generateSegmentEmail(anthropicKey, {
+        about: cfg.icpContext ? `${cfg.about}\n\nWhy these leads are a fit: ${cfg.icpContext}` : cfg.about,
+        segment,
+        ...(cfg.sender !== undefined && { sender: cfg.sender }),
+        ...(cfg.tone !== undefined && { tone: cfg.tone }),
+        ...(stepContext !== undefined && { stepContext }),
+      });
+      steps.push({ subject: email.subject, htmlBody: email.htmlBody, textBody: email.textBody, delayDays: i === 0 ? 0 : 3 });
+    }
+    await incrementUsageBy(run.apiKeyId, steps.length);
+
+    const draft = {
+      sequenceName: `${cfg.about.slice(0, 80)} (agent draft)`,
+      steps,
+      matchCount: segment.matchCount,
+    };
+    const newConfig = { ...(run.config as object), draft };
+
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { status: 'pending_approval', config: newConfig },
+    });
+    await emitEvent(
+      run.id,
+      'drafted',
+      `${stepCount}-step sequence drafted for ${draft.matchCount.toLocaleString()} leads — review and approve to enroll and start sending.`,
+      { stepCount, matchCount: draft.matchCount, firstSubject: steps[0]?.subject },
+    );
+    log.info({ leadIds: cfg.leadIds.length, matchCount: draft.matchCount, stepCount }, 'Outbound agent draft ready for approval');
+  } catch (err) {
+    await handleOutboundFailure(run, err, log);
+  }
+}
+
+async function handleOutboundFailure(run: AgentRunRecord, err: unknown, log: Logger): Promise<void> {
+  const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+  log.error({ err }, 'Outbound agent run failed');
   await prisma.agentRun.update({
     where: { id: run.id },
     data: { status: 'failed', errorMessage: errorMsg.slice(0, 500) },

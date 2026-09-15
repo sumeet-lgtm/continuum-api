@@ -9,15 +9,14 @@ import { agentRunQueue } from '../../lib/queue.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
 import { createAndSendCampaignFromDraft } from '../../lib/nurtureAgent.js';
-import { parseNurtureAgentConfig } from '../../types/agentRun.js';
+import { createSequenceAndEnrollFromDraft } from '../../lib/outboundAgent.js';
+import { parseNurtureAgentConfig, parseOutboundAgentConfig } from '../../types/agentRun.js';
 import type { AgentRunKickPayload } from '../../types/job.js';
 import type { FinderSearchFilters } from '../../lib/finderSearch.js';
 import { Prisma } from '@prisma/client';
 
-// Verification, Nurture, Lead Finding, and Warmup are buildable today — the
-// other AgentPillar enum values exist in the schema for the pillars on the
-// roadmap, but creating a run for them isn't supported by any worker yet.
-const SUPPORTED_PILLARS = ['verification', 'nurture', 'lead_finding', 'warmup'] as const;
+// All five pillars are buildable today.
+const SUPPORTED_PILLARS = ['verification', 'nurture', 'lead_finding', 'warmup', 'outbound'] as const;
 
 const VALID_INTERVALS = [1, 6, 12, 24, 48, 72, 168] as const;
 const TONE_VALUES = ['professional', 'casual', 'direct', 'technical'] as const;
@@ -87,13 +86,34 @@ const warmupCreateSchema = z.object({
   mailboxId: z.string({ required_error: 'mailboxId is required' }).min(1),
 });
 
+// One-shot: draft -> approve -> enroll. No autoSend at all — this is the
+// highest-risk pillar (real cold sends to people who didn't opt in), so
+// unlike nurture a human approval is not optional here.
+const outboundCreateSchema = z.object({
+  pillar: z.literal('outbound'),
+  name: z.string().max(200).optional(),
+  leadIds: z.array(z.string()).min(1, 'At least one leadId is required'),
+  about: z.string({ required_error: 'about is required' }).min(1).max(1000),
+  icpContext: z.string().max(1000).optional(),
+  fromName: z.string({ required_error: 'fromName is required' }).min(1).max(200),
+  fromEmail: z.string({ required_error: 'fromEmail is required' }).email(),
+  mailboxId: z.string().optional(),
+  stepCount: z.number().int().min(1).max(6).optional(),
+  sender: z.object({
+    name: z.string().max(200).optional(),
+    company: z.string().max(200).optional(),
+    product: z.string().max(200).optional(),
+  }).optional(),
+  tone: z.enum(TONE_VALUES).optional(),
+});
+
 // z.discriminatedUnion needs the literal `pillar` key present in the raw
 // input to route to a branch — a request that omits it entirely (the
 // pre-nurture API shape, still supported) would match neither branch before
 // verificationCreateSchema's own .default() ever runs. Default it here.
 const createSchema = z.preprocess(
   (val) => (val && typeof val === 'object' && !('pillar' in val) ? { ...val, pillar: 'verification' } : val),
-  z.discriminatedUnion('pillar', [verificationCreateSchema, nurtureCreateSchema, leadFindingCreateSchema, warmupCreateSchema]),
+  z.discriminatedUnion('pillar', [verificationCreateSchema, nurtureCreateSchema, leadFindingCreateSchema, warmupCreateSchema, outboundCreateSchema]),
 );
 
 const updateSchema = z.object({
@@ -287,7 +307,7 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
           select: AGENT_RUN_SELECT,
         }),
       ) as AgentRunSelectResult;
-    } else {
+    } else if (parsed.data.pillar === 'warmup') {
       // Warmup: recurring, daily, one agent per mailbox.
       const { mailboxId } = parsed.data;
 
@@ -328,6 +348,48 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
           select: AGENT_RUN_SELECT,
         }),
       ) as AgentRunSelectResult;
+    } else {
+      // Outbound: one-shot, no interval/nextCheckAt, kicked once — and no
+      // autoSend option anywhere in this branch (unlike nurture).
+      const { leadIds, about, icpContext, fromName, fromEmail, mailboxId, stepCount, sender, tone } = parsed.data;
+
+      const leads = await withTenant(apiKeyId, (tx) => tx.lead.findMany({ where: { apiKeyId, id: { in: leadIds } }, select: { id: true } }));
+      if (leads.length === 0) throw Errors.notFound('Leads');
+      if (leads.length < leadIds.length) {
+        throw Errors.validationFailed({ leadIds: `${leadIds.length - leads.length} of the given leadIds don't belong to this account.` });
+      }
+
+      if (mailboxId) {
+        const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({ where: { id: mailboxId, apiKeyId }, select: { id: true } }));
+        if (!mailbox) throw Errors.notFound('Mailbox');
+      }
+
+      run = await withTenant(apiKeyId, (tx) =>
+        tx.agentRun.create({
+          data: {
+            apiKeyId,
+            pillar,
+            name: name ?? null,
+            status: 'active',
+            config: {
+              leadIds, about, fromName, fromEmail,
+              ...(icpContext !== undefined && { icpContext }),
+              ...(mailboxId !== undefined && { mailboxId }),
+              ...(stepCount !== undefined && { stepCount }),
+              ...(sender !== undefined && { sender }),
+              ...(tone !== undefined && { tone }),
+            } as unknown as Prisma.InputJsonValue,
+            createdByEmail: request.apiKey.ownerId ?? null,
+          },
+          select: AGENT_RUN_SELECT,
+        }),
+      ) as AgentRunSelectResult;
+
+      await agentRunQueue.add(
+        'agent-run-kick',
+        { agentRunId: run.id } as AgentRunKickPayload,
+        { jobId: `agent-run-kick-${run.id}-${Date.now()}` },
+      );
     }
 
     logger.info({ agentRunId: run.id, apiKeyId, pillar }, 'Agent run created');
@@ -484,53 +546,69 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   // ── POST /v1/agent-runs/:id/approve ──────────────────────────────────────────
-  // Nurture-pillar-only: the human-in-the-loop gate. A drafted run sits at
-  // pending_approval until this is called (or config.autoSend was true at
-  // creation, which skips this entirely) — only after this does the real
-  // Campaign get created and handed to campaignWorker.ts to send.
+  // Nurture and Outbound only: the human-in-the-loop gate. A drafted run
+  // sits at pending_approval until this is called (nurture skips this
+  // entirely when config.autoSend was true at creation — outbound has no
+  // such option, approval is never optional there) — only after this does
+  // the real Campaign/Sequence get created and handed to the existing send
+  // worker (campaignWorker.ts / sequenceWorker.ts).
   fastify.post<{ Params: AgentRunParams }>('/agent-runs/:id/approve', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest<{ Params: AgentRunParams }>, reply: FastifyReply) => {
     const apiKeyId = request.apiKey.id;
     const run = await withTenant(apiKeyId, (tx) =>
       tx.agentRun.findFirst({ where: { id: request.params.id, apiKeyId }, select: { id: true, pillar: true, status: true, config: true } }),
     );
     if (!run) throw Errors.notFound('Agent run');
-    if (run.pillar !== 'nurture') {
-      throw Errors.validationFailed({ pillar: 'Only nurture agent runs have an approval step.' });
+    if (run.pillar !== 'nurture' && run.pillar !== 'outbound') {
+      throw Errors.validationFailed({ pillar: 'Only nurture and outbound agent runs have an approval step.' });
     }
     if (run.status !== 'pending_approval') {
       throw Errors.validationFailed({ status: `Agent run is "${run.status}", not awaiting approval.` });
     }
 
-    const cfg = parseNurtureAgentConfig(run.config);
-    if (!cfg || !cfg.draft) {
-      throw Errors.validationFailed({ config: 'This run has no draft to approve.' });
+    if (run.pillar === 'nurture') {
+      const cfg = parseNurtureAgentConfig(run.config);
+      if (!cfg || !cfg.draft) throw Errors.validationFailed({ config: 'This run has no draft to approve.' });
+
+      const campaignId = await createAndSendCampaignFromDraft(apiKeyId, cfg);
+      const updated = await withTenant(apiKeyId, (tx) =>
+        tx.agentRun.update({
+          where: { id: run.id },
+          data: { status: 'completed', completedAt: new Date(), config: { ...(run.config as object), campaignId } },
+          select: AGENT_RUN_SELECT,
+        }),
+      );
+      await prisma.agentRunEvent.create({
+        data: {
+          agentRunId: run.id, eventType: 'sent',
+          message: `Approved and sent to ${cfg.draft.matchCount.toLocaleString()} contacts.`,
+          data: { campaignId, subject: cfg.draft.subject },
+        },
+      });
+      logger.info({ agentRunId: run.id, apiKeyId, campaignId }, 'Nurture agent run approved and sent');
+      return reply.status(200).send({ ...formatAgentRun(updated as AgentRunSelectResult), campaignId });
     }
 
-    const campaignId = await createAndSendCampaignFromDraft(apiKeyId, cfg);
+    // Outbound
+    const cfg = parseOutboundAgentConfig(run.config);
+    if (!cfg || !cfg.draft) throw Errors.validationFailed({ config: 'This run has no draft to approve.' });
 
+    const { sequenceId, enrolled, skipped, conflicts } = await createSequenceAndEnrollFromDraft(apiKeyId, cfg);
     const updated = await withTenant(apiKeyId, (tx) =>
       tx.agentRun.update({
         where: { id: run.id },
-        data: {
-          status: 'completed',
-          completedAt: new Date(),
-          config: { ...(run.config as object), campaignId },
-        },
+        data: { status: 'completed', completedAt: new Date(), config: { ...(run.config as object), sequenceId } },
         select: AGENT_RUN_SELECT,
       }),
     );
-
     await prisma.agentRunEvent.create({
       data: {
-        agentRunId: run.id,
-        eventType: 'sent',
-        message: `Approved and sent to ${cfg.draft.matchCount.toLocaleString()} contacts.`,
-        data: { campaignId, subject: cfg.draft.subject },
+        agentRunId: run.id, eventType: 'enrolled',
+        message: `Approved — ${enrolled} lead(s) enrolled and sending on schedule.${skipped ? ` ${skipped} already enrolled.` : ''}${conflicts ? ` ${conflicts} skipped (already active in another sequence).` : ''}`,
+        data: { sequenceId, enrolled, skipped, conflicts },
       },
     });
-
-    logger.info({ agentRunId: run.id, apiKeyId, campaignId }, 'Nurture agent run approved and sent');
-    return reply.status(200).send({ ...formatAgentRun(updated as AgentRunSelectResult), campaignId });
+    logger.info({ agentRunId: run.id, apiKeyId, sequenceId, enrolled }, 'Outbound agent run approved and enrolled');
+    return reply.status(200).send({ ...formatAgentRun(updated as AgentRunSelectResult), sequenceId, enrolled, skipped, conflicts });
   });
 
   // ── POST /v1/agent-runs/:id/trigger ──────────────────────────────────────────

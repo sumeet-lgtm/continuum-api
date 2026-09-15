@@ -47,6 +47,14 @@ vi.mock('../../lib/nurtureAgent.js', () => ({
   createAndSendCampaignFromDraft: vi.fn(),
 }));
 
+vi.mock('../../lib/outboundAgent.js', () => ({
+  createSequenceAndEnrollFromDraft: vi.fn(),
+}));
+
+vi.mock('../../lib/sequenceSegments.js', () => ({
+  deriveSequenceSegments: vi.fn(),
+}));
+
 vi.mock('../../lib/finderSearch.js', () => ({
   buildFinderActorInput: vi.fn(),
   startFinderRun: vi.fn(),
@@ -69,7 +77,7 @@ import {
   MAX_CONSECUTIVE_FAILURES,
   JITTER_FACTOR,
 } from '../../workers/agentRunWorker.js';
-import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig, parseLeadFindingAgentConfig, parseWarmupAgentConfig } from '../../types/agentRun.js';
+import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig, parseLeadFindingAgentConfig, parseWarmupAgentConfig, parseOutboundAgentConfig } from '../../types/agentRun.js';
 
 // ─── calcNextCheckAt — scheduling with jitter (same formula as monitorWorker) ──
 
@@ -303,5 +311,60 @@ describe('parseWarmupAgentConfig', () => {
     expect(parseWarmupAgentConfig(null)).toBeNull();
     expect(parseWarmupAgentConfig(undefined)).toBeNull();
     expect(parseWarmupAgentConfig('mbx_1')).toBeNull();
+  });
+});
+
+// ─── Outbound agent config parsing ─────────────────────────────────────────────
+
+describe('parseOutboundAgentConfig', () => {
+  const minimal = { leadIds: ['lead_1', 'lead_2'], about: 'a security tool for CISOs', fromName: 'Ada', fromEmail: 'ada@acme.com' };
+
+  it('accepts a minimal valid config', () => {
+    expect(parseOutboundAgentConfig(minimal)).toEqual(minimal);
+  });
+
+  it('carries through optional icpContext, mailboxId, stepCount, sender, tone', () => {
+    const cfg = parseOutboundAgentConfig({
+      ...minimal,
+      icpContext: 'found via Finder — CISOs at 51-200 employee SaaS companies',
+      mailboxId: 'mbx_1',
+      stepCount: 4,
+      sender: { name: 'Ada', company: 'Acme' },
+      tone: 'direct',
+    });
+    expect(cfg).toEqual({
+      ...minimal,
+      icpContext: 'found via Finder — CISOs at 51-200 employee SaaS companies',
+      mailboxId: 'mbx_1',
+      stepCount: 4,
+      sender: { name: 'Ada', company: 'Acme' },
+      tone: 'direct',
+    });
+  });
+
+  it('carries through a previously-written draft and sequenceId (worker re-kick idempotency)', () => {
+    const draft = { sequenceName: 'Outreach (agent draft)', steps: [{ subject: 'Hi', htmlBody: '<p>hi</p>', textBody: 'hi', delayDays: 0 }], matchCount: 12 };
+    const cfg = parseOutboundAgentConfig({ ...minimal, draft, sequenceId: 'seq_1' });
+    expect(cfg?.draft).toEqual(draft);
+    expect(cfg?.sequenceId).toBe('seq_1');
+  });
+
+  it('rejects a missing or empty leadIds', () => {
+    expect(parseOutboundAgentConfig({ about: 'x', fromName: 'Ada', fromEmail: 'ada@acme.com' })).toBeNull();
+    expect(parseOutboundAgentConfig({ ...minimal, leadIds: [] })).toBeNull();
+    expect(parseOutboundAgentConfig({ ...minimal, leadIds: [1, 2] })).toBeNull();
+  });
+
+  it('rejects missing required fields', () => {
+    expect(parseOutboundAgentConfig({ leadIds: ['lead_1'] })).toBeNull();
+    expect(parseOutboundAgentConfig({ ...minimal, about: '' })).toBeNull();
+    expect(parseOutboundAgentConfig({ ...minimal, fromName: '' })).toBeNull();
+    expect(parseOutboundAgentConfig({ ...minimal, fromEmail: '' })).toBeNull();
+  });
+
+  it('rejects non-object input', () => {
+    expect(parseOutboundAgentConfig(null)).toBeNull();
+    expect(parseOutboundAgentConfig(undefined)).toBeNull();
+    expect(parseOutboundAgentConfig('lead_1')).toBeNull();
   });
 });
