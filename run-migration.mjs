@@ -6,8 +6,18 @@ import { PrismaClient } from '@prisma/client';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
+// DIRECT_URL, not DATABASE_URL: this script runs raw DDL (CREATE TABLE/
+// ALTER TABLE etc.) on every worker-campaigns boot, so it needs the same
+// DDL-privileged connection prisma migrate deploy uses — not whatever
+// DATABASE_URL points at, which may be the DML-only continuum_app role
+// (see prisma/migrations/20260915_continuum_app_role).
+if (!process.env.DIRECT_URL) {
+  console.error('run-migration.mjs requires DIRECT_URL (a DDL-privileged, unpooled connection) — DATABASE_URL may point at a DML-only role.');
+  process.exit(1);
+}
+
 const prisma = new PrismaClient({
-  datasources: { db: { url: process.env.DATABASE_URL } },
+  datasources: { db: { url: process.env.DIRECT_URL } },
 });
 
 const MIGRATIONS_DIR = './prisma/migrations';
