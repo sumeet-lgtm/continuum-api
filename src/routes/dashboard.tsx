@@ -307,6 +307,7 @@ const NAV: NavItem[] = [
       { to: "/dashboard/settings", label: "General", icon: Settings, exact: true },
       { to: "/dashboard/domains", label: "Sending Domains", icon: ServerCog },
       { to: "/dashboard/mailboxes", label: "Mailboxes", icon: Mail },
+      { to: "/dashboard/warmup-agent", label: "Warmup Agent", icon: Bot },
       { to: "/dashboard/organization", label: "Organization", icon: Building2 },
       { to: "/dashboard/team", label: "Team", icon: Users },
       { to: "/dashboard/billing", label: "Billing", icon: CreditCard },
