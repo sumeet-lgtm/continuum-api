@@ -65,6 +65,7 @@ import { Route as DashboardToolsRouteImport } from './routes/dashboard.tools'
 import { Route as DashboardTransactionalRouteImport } from './routes/dashboard.transactional'
 import { Route as DashboardUsageRouteImport } from './routes/dashboard.usage'
 import { Route as DashboardVerifyRouteImport } from './routes/dashboard.verify'
+import { Route as DashboardVerifyAgentRouteImport } from './routes/dashboard.verify-agent'
 import { Route as DashboardWebhooksRouteImport } from './routes/dashboard.webhooks'
 import { Route as DashboardWidgetRouteImport } from './routes/dashboard.widget'
 import { Route as DashboardAccountsIdRouteImport } from './routes/dashboard.accounts.$id'
@@ -350,6 +351,11 @@ const DashboardVerifyRoute = DashboardVerifyRouteImport.update({
   path: '/verify',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardVerifyAgentRoute = DashboardVerifyAgentRouteImport.update({
+  id: '/verify-agent',
+  path: '/verify-agent',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardWebhooksRoute = DashboardWebhooksRouteImport.update({
   id: '/webhooks',
   path: '/webhooks',
@@ -427,6 +433,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/transactional': typeof DashboardTransactionalRoute
   '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
+  '/dashboard/verify-agent': typeof DashboardVerifyAgentRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
   '/dashboard/widget': typeof DashboardWidgetRoute
   '/dashboard/': typeof DashboardIndexRoute
@@ -488,6 +495,7 @@ export interface FileRoutesByTo {
   '/dashboard/transactional': typeof DashboardTransactionalRoute
   '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
+  '/dashboard/verify-agent': typeof DashboardVerifyAgentRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
   '/dashboard/widget': typeof DashboardWidgetRoute
   '/dashboard': typeof DashboardIndexRoute
@@ -551,6 +559,7 @@ export interface FileRoutesById {
   '/dashboard/transactional': typeof DashboardTransactionalRoute
   '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
+  '/dashboard/verify-agent': typeof DashboardVerifyAgentRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
   '/dashboard/widget': typeof DashboardWidgetRoute
   '/dashboard/': typeof DashboardIndexRoute
@@ -615,6 +624,7 @@ export interface FileRouteTypes {
     | '/dashboard/transactional'
     | '/dashboard/usage'
     | '/dashboard/verify'
+    | '/dashboard/verify-agent'
     | '/dashboard/webhooks'
     | '/dashboard/widget'
     | '/dashboard/'
@@ -676,6 +686,7 @@ export interface FileRouteTypes {
     | '/dashboard/transactional'
     | '/dashboard/usage'
     | '/dashboard/verify'
+    | '/dashboard/verify-agent'
     | '/dashboard/webhooks'
     | '/dashboard/widget'
     | '/dashboard'
@@ -738,6 +749,7 @@ export interface FileRouteTypes {
     | '/dashboard/transactional'
     | '/dashboard/usage'
     | '/dashboard/verify'
+    | '/dashboard/verify-agent'
     | '/dashboard/webhooks'
     | '/dashboard/widget'
     | '/dashboard/'
@@ -1151,6 +1163,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardVerifyRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/verify-agent': {
+      id: '/dashboard/verify-agent'
+      path: '/verify-agent'
+      fullPath: '/dashboard/verify-agent'
+      preLoaderRoute: typeof DashboardVerifyAgentRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/webhooks': {
       id: '/dashboard/webhooks'
       path: '/webhooks'
@@ -1252,6 +1271,7 @@ interface DashboardRouteChildren {
   DashboardTransactionalRoute: typeof DashboardTransactionalRoute
   DashboardUsageRoute: typeof DashboardUsageRoute
   DashboardVerifyRoute: typeof DashboardVerifyRoute
+  DashboardVerifyAgentRoute: typeof DashboardVerifyAgentRoute
   DashboardWebhooksRoute: typeof DashboardWebhooksRoute
   DashboardWidgetRoute: typeof DashboardWidgetRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
@@ -1304,6 +1324,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardTransactionalRoute: DashboardTransactionalRoute,
   DashboardUsageRoute: DashboardUsageRoute,
   DashboardVerifyRoute: DashboardVerifyRoute,
+  DashboardVerifyAgentRoute: DashboardVerifyAgentRoute,
   DashboardWebhooksRoute: DashboardWebhooksRoute,
   DashboardWidgetRoute: DashboardWidgetRoute,
   DashboardIndexRoute: DashboardIndexRoute,

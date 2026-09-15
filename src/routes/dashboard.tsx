@@ -47,6 +47,7 @@ import {
   CheckSquare,
   Cloud,
   LifeBuoy,
+  Bot,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
@@ -230,6 +231,7 @@ const NAV: NavItem[] = [
       { to: "/dashboard/verify", label: "Single Verify", icon: ShieldCheck, exact: true },
       { to: "/dashboard/bulk", label: "Bulk Jobs", icon: ListChecks },
       { to: "/dashboard/monitoring", label: "Monitoring", icon: Activity },
+      { to: "/dashboard/verify-agent", label: "Verification Agent", icon: Bot },
     ],
   },
 
