@@ -69,7 +69,7 @@ import {
   MAX_CONSECUTIVE_FAILURES,
   JITTER_FACTOR,
 } from '../../workers/agentRunWorker.js';
-import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig, parseLeadFindingAgentConfig } from '../../types/agentRun.js';
+import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig, parseLeadFindingAgentConfig, parseWarmupAgentConfig } from '../../types/agentRun.js';
 
 // ─── calcNextCheckAt — scheduling with jitter (same formula as monitorWorker) ──
 
@@ -273,5 +273,35 @@ describe('parseLeadFindingAgentConfig', () => {
   it('ignores an empty-string sequenceId/pendingRunId rather than accepting it', () => {
     const cfg = parseLeadFindingAgentConfig({ ...minimal, sequenceId: '', pendingRunId: '' });
     expect(cfg).toEqual(minimal);
+  });
+});
+
+// ─── Warmup agent config parsing ───────────────────────────────────────────────
+
+describe('parseWarmupAgentConfig', () => {
+  const minimal = { mailboxId: 'mbx_1', baselineDailyRampUp: 2 };
+
+  it('accepts a minimal valid config', () => {
+    expect(parseWarmupAgentConfig(minimal)).toEqual(minimal);
+  });
+
+  it('accepts a baselineDailyRampUp of 0 (a mailbox already at target)', () => {
+    expect(parseWarmupAgentConfig({ mailboxId: 'mbx_1', baselineDailyRampUp: 0 })).toEqual({ mailboxId: 'mbx_1', baselineDailyRampUp: 0 });
+  });
+
+  it('rejects a missing mailboxId', () => {
+    expect(parseWarmupAgentConfig({ baselineDailyRampUp: 2 })).toBeNull();
+    expect(parseWarmupAgentConfig({ mailboxId: '', baselineDailyRampUp: 2 })).toBeNull();
+  });
+
+  it('rejects a missing or negative baselineDailyRampUp', () => {
+    expect(parseWarmupAgentConfig({ mailboxId: 'mbx_1' })).toBeNull();
+    expect(parseWarmupAgentConfig({ mailboxId: 'mbx_1', baselineDailyRampUp: -1 })).toBeNull();
+  });
+
+  it('rejects non-object input', () => {
+    expect(parseWarmupAgentConfig(null)).toBeNull();
+    expect(parseWarmupAgentConfig(undefined)).toBeNull();
+    expect(parseWarmupAgentConfig('mbx_1')).toBeNull();
   });
 });

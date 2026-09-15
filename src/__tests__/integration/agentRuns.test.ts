@@ -16,6 +16,7 @@ vi.mock('../../lib/prisma.js', () => ({
     agentRunEvent: { findMany: vi.fn(), count: vi.fn(), create: vi.fn() },
     mailingList: { findFirst: vi.fn() },
     sequence: { findFirst: vi.fn() },
+    mailbox: { findFirst: vi.fn() },
     webhook: { findMany: vi.fn().mockResolvedValue([]) },
     $disconnect: vi.fn(),
   },
@@ -99,6 +100,7 @@ const mockEventCount    = vi.mocked(prisma.agentRunEvent.count);
 const mockEventCreate   = vi.mocked(prisma.agentRunEvent.create);
 const mockListFind      = vi.mocked(prisma.mailingList.findFirst);
 const mockSequenceFind  = vi.mocked(prisma.sequence.findFirst);
+const mockMailboxFind   = vi.mocked(prisma.mailbox.findFirst);
 const mockQueueAdd      = vi.mocked(agentRunQueue.add);
 const mockCreateAndSend = vi.mocked(createAndSendCampaignFromDraft);
 
@@ -576,5 +578,77 @@ describe('POST /v1/agent-runs — lead_finding pillar', () => {
       payload: JSON.stringify({ pillar: 'lead_finding', searchFilters: { personTitleIncludes: ['CISO'] }, sequenceId: 'seq-001' }),
     });
     expect(res.statusCode).toBe(201);
+  });
+});
+
+// ─── POST /v1/agent-runs — warmup pillar ────────────────────────────────────
+
+function makeWarmupAgentRun(overrides: Record<string, unknown> = {}) {
+  return makeAgentRun({
+    pillar: 'warmup',
+    config: { mailboxId: 'mbx-001', baselineDailyRampUp: 2 },
+    intervalHours: 24,
+    ...overrides,
+  });
+}
+
+describe('POST /v1/agent-runs — warmup pillar', () => {
+  beforeEach(() => {
+    mockRunCount.mockResolvedValue(0);
+    mockRunFindFirst.mockResolvedValue(null); // no existing duplicate warmup agent
+    mockMailboxFind.mockResolvedValue({ id: 'mbx-001', warmupConfig: { dailyRampUp: 2 } });
+    mockRunCreate.mockResolvedValue(makeWarmupAgentRun());
+  });
+
+  it('creates a warmup agent, capturing the mailbox\'s current dailyRampUp as the baseline', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'warmup', mailboxId: 'mbx-001' }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().pillar).toBe('warmup');
+    const createCall = mockRunCreate.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+    expect(createCall.data['config']).toEqual({ mailboxId: 'mbx-001', baselineDailyRampUp: 2 });
+    expect(createCall.data['intervalHours']).toBe(24);
+  });
+
+  it('returns 404 when the mailbox does not belong to this key', async () => {
+    mockMailboxFind.mockResolvedValue(null);
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'warmup', mailboxId: 'someone-elses-mailbox' }),
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 422 when the mailbox does not have warmup enabled', async () => {
+    mockMailboxFind.mockResolvedValue({ id: 'mbx-001', warmupConfig: null });
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'warmup', mailboxId: 'mbx-001' }),
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it('returns 422 when this mailbox already has an active warmup agent', async () => {
+    mockRunFindFirst.mockResolvedValue({ id: 'run-existing' });
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'warmup', mailboxId: 'mbx-001' }),
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it('returns 422 when mailboxId is missing', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/v1/agent-runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: JSON.stringify({ pillar: 'warmup' }),
+    });
+    expect(res.statusCode).toBe(422);
   });
 });

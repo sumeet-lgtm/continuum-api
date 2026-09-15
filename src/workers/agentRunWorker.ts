@@ -30,6 +30,15 @@
  * search), which is itself async — a tick either starts a search or polls
  * one already in flight (re-enqueuing itself with a short delay either way),
  * and only once Apify reports done does it dedup/verify/import.
+ *
+ * Warmup pillar (recurring, daily — see processWarmupTick below): does NOT
+ * send anything and does not touch workers/warmupWorker.ts's existing
+ * hourly tick or its currentPerDay ramp math. It only adjusts
+ * WarmupConfig.dailyRampUp — the one input to that existing fixed-formula
+ * ramp — based on real per-mailbox health signals warmupWorker.ts already
+ * writes (Mailbox.status, Mailbox.lastErrorMsg): hold the ramp (dailyRampUp
+ * = 0) on any sign of trouble instead of blindly increasing through it, and
+ * restore the configured baseline pace once healthy again.
  */
 
 import { Worker, type Job } from 'bullmq';
@@ -42,7 +51,7 @@ import { getPlanLimit, incrementUsageBy, getFinderAffordability, incrementFinder
 import { config } from '../config.js';
 import { logger, type Logger } from '../lib/logger.js';
 import { initSentry, installCrashReporting } from '../lib/sentry.js';
-import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig, parseLeadFindingAgentConfig } from '../types/agentRun.js';
+import { parseVerificationAgentConfig, DEFAULT_VERIFICATION_CUTOFF_DAYS, parseNurtureAgentConfig, parseLeadFindingAgentConfig, parseWarmupAgentConfig } from '../types/agentRun.js';
 import type { AgentRunTickPayload, AgentRunKickPayload } from '../types/job.js';
 import { deriveListSegments } from '../lib/campaignSegments.js';
 import { generateSegmentEmail } from '../lib/emailGenerator.js';
@@ -81,7 +90,7 @@ async function runAgentTick(_job: Job<AgentRunTickPayload>): Promise<void> {
   const dueRuns = await withRlsBypass((tx) =>
     tx.agentRun.findMany({
       where: {
-        pillar: { in: ['verification', 'lead_finding'] },
+        pillar: { in: ['verification', 'lead_finding', 'warmup'] },
         status: 'active',
         pausedAt: null,
         nextCheckAt: { lte: now },
@@ -162,6 +171,8 @@ async function processAgentRun(run: AgentRunRecord): Promise<void> {
       await processNurtureTick(run, log);
     } else if (run.pillar === 'lead_finding') {
       await processLeadFindingTick(run, log);
+    } else if (run.pillar === 'warmup') {
+      await processWarmupTick(run, log);
     } else {
       log.error({ pillar: run.pillar }, 'Agent run has an unsupported pillar — no worker implements it yet');
       await prisma.agentRun.update({
@@ -648,6 +659,75 @@ async function processLeadFindingTick(run: AgentRunRecord, log: Logger): Promise
     // run must not wedge the watch into polling forever.
     const { pendingRunId: _drop, ...rest } = (run.config as Record<string, unknown>) ?? {};
     await prisma.agentRun.update({ where: { id: run.id }, data: { config: rest as Prisma.InputJsonValue } }).catch(() => {});
+    await handleTickFailure(run, intervalHours, err, log);
+  }
+}
+
+// ─── Warmup pillar (recurring, daily — a safety gate on the existing ramp) ─────
+
+async function processWarmupTick(run: AgentRunRecord, log: Logger): Promise<void> {
+  const intervalHours = run.intervalHours ?? 24;
+  const cfg = parseWarmupAgentConfig(run.config);
+
+  if (!cfg) {
+    log.error({ config: run.config }, 'Agent run has invalid config — pausing');
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { status: 'failed', errorMessage: 'Invalid or missing warmup config (mailboxId, baselineDailyRampUp required)', pausedAt: new Date() },
+    });
+    return;
+  }
+
+  try {
+    // tenant-sweep exemption not needed: withTenant(run.apiKeyId, ...) below
+    // scopes this to exactly the one mailbox this AgentRun owns.
+    const mailbox = await withTenant(run.apiKeyId, (tx) => tx.mailbox.findFirst({
+      where: { id: cfg.mailboxId, apiKeyId: run.apiKeyId },
+      select: { id: true, status: true, lastErrorMsg: true, warmupConfig: { select: { id: true, dailyRampUp: true, currentPerDay: true, targetPerDay: true } } },
+    }));
+
+    if (!mailbox) {
+      throw new Error('Mailbox no longer exists or no longer belongs to this account.');
+    }
+    if (!mailbox.warmupConfig) {
+      throw new Error('Mailbox no longer has warmup enabled (WarmupConfig missing).');
+    }
+
+    const nextCheckAt = calcNextCheckAt(intervalHours);
+    let newDailyRampUp: number;
+    let eventType: string;
+    let message: string;
+
+    if (mailbox.status !== 'active') {
+      newDailyRampUp = 0;
+      eventType = 'held_mailbox_status';
+      message = `Ramp held — mailbox status is "${mailbox.status}", not active.`;
+    } else if (mailbox.lastErrorMsg) {
+      newDailyRampUp = 0;
+      eventType = 'held_recent_failure';
+      message = `Ramp held — last warmup send failed: ${mailbox.lastErrorMsg.slice(0, 200)}`;
+      // Clear it: warmupWorker.ts never clears this field itself (it's only
+      // ever set on failure), so leaving it as-is would hold the ramp
+      // forever after one transient error. This agent is what now acts on
+      // it, so this agent is what resets it for a fresh read next cycle —
+      // if sends keep failing, warmupWorker.ts will just set it again.
+      await withTenant(run.apiKeyId, (tx) => tx.mailbox.update({ where: { id: mailbox.id }, data: { lastErrorMsg: null } }));
+    } else {
+      newDailyRampUp = cfg.baselineDailyRampUp;
+      eventType = 'ramped';
+      message = `Healthy — ramp restored to ${cfg.baselineDailyRampUp}/day.`;
+    }
+
+    await prisma.warmupConfig.update({ where: { id: mailbox.warmupConfig.id }, data: { dailyRampUp: newDailyRampUp } });
+    await prisma.agentRun.update({ where: { id: run.id }, data: { lastCheckedAt: new Date(), nextCheckAt, consecutiveFailures: 0 } });
+    await emitEvent(run.id, eventType, message, {
+      dailyRampUp: newDailyRampUp,
+      currentPerDay: mailbox.warmupConfig.currentPerDay,
+      targetPerDay: mailbox.warmupConfig.targetPerDay,
+    });
+
+    log.info({ mailboxId: cfg.mailboxId, status: mailbox.status, newDailyRampUp }, 'Warmup agent tick complete');
+  } catch (err) {
     await handleTickFailure(run, intervalHours, err, log);
   }
 }

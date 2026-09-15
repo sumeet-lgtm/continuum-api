@@ -14,10 +14,10 @@ import type { AgentRunKickPayload } from '../../types/job.js';
 import type { FinderSearchFilters } from '../../lib/finderSearch.js';
 import { Prisma } from '@prisma/client';
 
-// Verification, Nurture, and Lead Finding are buildable today — the other
-// AgentPillar enum values exist in the schema for the pillars on the
+// Verification, Nurture, Lead Finding, and Warmup are buildable today — the
+// other AgentPillar enum values exist in the schema for the pillars on the
 // roadmap, but creating a run for them isn't supported by any worker yet.
-const SUPPORTED_PILLARS = ['verification', 'nurture', 'lead_finding'] as const;
+const SUPPORTED_PILLARS = ['verification', 'nurture', 'lead_finding', 'warmup'] as const;
 
 const VALID_INTERVALS = [1, 6, 12, 24, 48, 72, 168] as const;
 const TONE_VALUES = ['professional', 'casual', 'direct', 'technical'] as const;
@@ -78,13 +78,22 @@ const leadFindingCreateSchema = z.object({
     .default(168), // weekly — a search is slower/costlier than a verification check
 });
 
+// Recurring, per-mailbox. No intervalHours choice exposed — a daily safety
+// check is the natural cadence for a ramp that itself only advances once
+// per day (see workers/warmupWorker.ts's own lastRampDate guard).
+const warmupCreateSchema = z.object({
+  pillar: z.literal('warmup'),
+  name: z.string().max(200).optional(),
+  mailboxId: z.string({ required_error: 'mailboxId is required' }).min(1),
+});
+
 // z.discriminatedUnion needs the literal `pillar` key present in the raw
 // input to route to a branch — a request that omits it entirely (the
 // pre-nurture API shape, still supported) would match neither branch before
 // verificationCreateSchema's own .default() ever runs. Default it here.
 const createSchema = z.preprocess(
   (val) => (val && typeof val === 'object' && !('pillar' in val) ? { ...val, pillar: 'verification' } : val),
-  z.discriminatedUnion('pillar', [verificationCreateSchema, nurtureCreateSchema, leadFindingCreateSchema]),
+  z.discriminatedUnion('pillar', [verificationCreateSchema, nurtureCreateSchema, leadFindingCreateSchema, warmupCreateSchema]),
 );
 
 const updateSchema = z.object({
@@ -247,7 +256,7 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
         { agentRunId: run.id } as AgentRunKickPayload,
         { jobId: `agent-run-kick-${run.id}-${Date.now()}` },
       );
-    } else {
+    } else if (parsed.data.pillar === 'lead_finding') {
       // Lead Finding: recurring, like verification — no list to validate
       // (it searches externally, not a Continuum mailing list), but if a
       // sequenceId for auto-enroll was given, that DOES need the same
@@ -271,6 +280,47 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
               searchFilters: searchFilters as FinderSearchFilters,
               ...(sequenceId !== undefined && { sequenceId }),
             } as unknown as Prisma.InputJsonValue,
+            intervalHours,
+            nextCheckAt,
+            createdByEmail: request.apiKey.ownerId ?? null,
+          },
+          select: AGENT_RUN_SELECT,
+        }),
+      ) as AgentRunSelectResult;
+    } else {
+      // Warmup: recurring, daily, one agent per mailbox.
+      const { mailboxId } = parsed.data;
+
+      const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({
+        where: { id: mailboxId, apiKeyId },
+        select: { id: true, warmupConfig: { select: { dailyRampUp: true } } },
+      }));
+      if (!mailbox) throw Errors.notFound('Mailbox');
+      if (!mailbox.warmupConfig) {
+        throw Errors.validationFailed({ mailboxId: 'This mailbox does not have warmup enabled yet — enable it under Mailboxes first.' });
+      }
+
+      const existing = await prisma.agentRun.findFirst({
+        where: {
+          apiKeyId, pillar: 'warmup', status: { notIn: ['cancelled', 'failed'] },
+          config: { path: ['mailboxId'], equals: mailboxId },
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        throw Errors.validationFailed({ mailboxId: `This mailbox already has an active warmup agent (id: ${existing.id}).` });
+      }
+
+      const intervalHours = 24;
+      const nextCheckAt = new Date(Date.now() + intervalHours * 3600 * 1000);
+      run = await withTenant(apiKeyId, (tx) =>
+        tx.agentRun.create({
+          data: {
+            apiKeyId,
+            pillar,
+            name: name ?? null,
+            status: 'active',
+            config: { mailboxId, baselineDailyRampUp: mailbox.warmupConfig!.dailyRampUp },
             intervalHours,
             nextCheckAt,
             createdByEmail: request.apiKey.ownerId ?? null,

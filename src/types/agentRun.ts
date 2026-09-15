@@ -100,6 +100,36 @@ export function parseLeadFindingAgentConfig(config: unknown): LeadFindingAgentCo
   return result;
 }
 
+// ─── Warmups ─────────────────────────────────────────────────────────────────
+// Recurring, per-mailbox (like Verification). workers/warmupWorker.ts already
+// runs an automatic, hourly warmup tick with a FIXED linear ramp formula
+// (currentPerDay + dailyRampUp each day, see getTodayTarget() there) — this
+// agent doesn't replace that mechanism or touch currentPerDay/sending at
+// all. It only adjusts WarmupConfig.dailyRampUp, the one input to that
+// existing formula, based on real per-mailbox health signals (status,
+// lastErrorMsg — both already written by warmupWorker.ts itself): hold
+// (dailyRampUp=0) on any sign of trouble instead of blindly ramping through
+// it, and restore the configured baseline rate once healthy again. Richer
+// signals (bounce/complaint/placement-test data specific to warmup traffic)
+// aren't wired up yet — see the pillar's own module comment in
+// workers/agentRunWorker.ts for what v1 actually checks and why.
+
+export interface WarmupAgentConfig {
+  mailboxId: string;
+  // Captured once at creation from the mailbox's WarmupConfig.dailyRampUp —
+  // the rate to return to once signals are healthy again, so a hold doesn't
+  // become permanent just because the agent forgot the original pace.
+  baselineDailyRampUp: number;
+}
+
+export function parseWarmupAgentConfig(config: unknown): WarmupAgentConfig | null {
+  if (!config || typeof config !== 'object') return null;
+  const c = config as Record<string, unknown>;
+  if (typeof c['mailboxId'] !== 'string' || c['mailboxId'].length === 0) return null;
+  if (typeof c['baselineDailyRampUp'] !== 'number' || c['baselineDailyRampUp'] < 0) return null;
+  return { mailboxId: c['mailboxId'], baselineDailyRampUp: c['baselineDailyRampUp'] };
+}
+
 export function parseNurtureAgentConfig(config: unknown): NurtureAgentConfig | null {
   if (!config || typeof config !== 'object') return null;
   const c = config as Record<string, unknown>;
