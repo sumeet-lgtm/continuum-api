@@ -164,6 +164,7 @@ model ApiKey {
   verifications  Verification[]
   bulkJobs       BulkJob[]
   monitors       Monitor[]
+  agentRuns      AgentRun[]
   webhooks       Webhook[]
   sendMessages   SendMessage[]
   sendingDomains SendingDomain[]
@@ -427,6 +428,84 @@ model MonitorCheck {
   @@index([monitorId, checkedAt])
   @@index([checkedAt])
   @@map("monitor_checks")
+}
+
+// ─── Agent Runs (cross-pillar agentic execution) ─────────────────────────────
+// One generalized primitive shared by every agentic pillar (verification,
+// lead finding, outbound, warmup, nurture) instead of a bespoke table per
+// pillar. `config` carries pillar-specific input; the recurring-watch fields
+// (intervalHours/nextCheckAt/pausedAt/consecutiveFailures) mirror Monitor's
+// tick mechanics above (see workers/agentRunWorker.ts, copied from
+// workers/monitorWorker.ts) and are unused by one-shot pillars, which use
+// startedAt/completedAt instead.
+
+enum AgentPillar {
+  verification
+  lead_finding
+  outbound
+  warmup
+  nurture
+}
+
+enum AgentRunStatus {
+  draft
+  pending_approval
+  active
+  running
+  paused
+  completed
+  failed
+  cancelled
+}
+
+model AgentRun {
+  id       String         @id @default(cuid())
+  apiKeyId String
+  pillar   AgentPillar
+  name     String?
+  status   AgentRunStatus @default(draft)
+  config   Json
+  errorMessage String? @map("error_message")
+
+  // Recurring-watch fields (verification, lead_finding)
+  intervalHours       Int?
+  nextCheckAt         DateTime? @map("next_check_at")
+  lastCheckedAt       DateTime? @map("last_checked_at")
+  consecutiveFailures Int       @default(0) @map("consecutive_failures")
+  pausedAt            DateTime? @map("paused_at")
+
+  // One-shot pipeline fields (outbound, warmup-adjustment, nurture)
+  startedAt   DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+
+  createdByEmail String?   @map("created_by_email")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  cancelledAt    DateTime? @map("cancelled_at")
+
+  apiKey ApiKey          @relation(fields: [apiKeyId], references: [id])
+  events AgentRunEvent[]
+
+  @@index([apiKeyId])
+  @@index([pillar, status])
+  @@index([status, nextCheckAt])
+  @@map("agent_runs")
+}
+
+// Append-only activity log — the "visually agentic" surface: one feed
+// component in the dashboard renders these rows for whichever AgentRun the
+// user is looking at.
+model AgentRunEvent {
+  id         String   @id @default(cuid())
+  agentRunId String   @map("agent_run_id")
+  eventType  String   @map("event_type")
+  message    String
+  data       Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  agentRun AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+
+  @@index([agentRunId, createdAt])
+  @@map("agent_run_events")
 }
 
 // ─── Webhook Endpoints ────────────────────────────────────────────────────────
@@ -814,6 +893,13 @@ model Contact {
   customFields Json?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  // Written by the Email Verification Agent (workers/agentRunWorker.ts) each
+  // time it verifies this contact — lets a watch's tick query cheaply find
+  // "contacts in list X never verified, or not verified in N days" without
+  // joining through the Verification log (which has no FK back to Contact).
+  lastVerifiedAt         DateTime? @map("last_verified_at")
+  lastVerificationStatus String?   @map("last_verification_status")
 
   apiKey      ApiKey                  @relation(fields: [apiKeyId], references: [id])
   memberships ContactListMembership[]

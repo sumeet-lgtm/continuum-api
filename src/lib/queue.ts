@@ -1,6 +1,6 @@
 import { Queue, type ConnectionOptions } from 'bullmq';
 import { config } from '../config.js';
-import type { BulkJobPayload, MonitorCheckPayload, MonitorRecheckPayload, SendJobPayload } from '../types/job.js';
+import type { BulkJobPayload, MonitorCheckPayload, MonitorRecheckPayload, SendJobPayload, AgentRunTickPayload, AgentRunKickPayload } from '../types/job.js';
 import type { WebhookDeliveryPayload } from '../types/webhook.js';
 
 // Parse the Redis URL to extract connection details for BullMQ.
@@ -34,6 +34,7 @@ export const QUEUE_SEND = 'continuum-send';
 export const QUEUE_DISPOSABLE_LIST = 'continuum-disposable-list';
 export const QUEUE_SALESFORCE_SYNC = 'continuum-salesforce-sync';
 export const QUEUE_DOMAIN_VERIFY = 'continuum-domain-verify';
+export const QUEUE_AGENT_RUN = 'continuum-agent-run';
 
 // ─── Queue instances ──────────────────────────────────────────────────────────
 // Queues are lightweight producers — instantiated in the API server.
@@ -144,6 +145,16 @@ export const domainVerifyQueue = new Queue(QUEUE_DOMAIN_VERIFY, {
   },
 });
 
+export const agentRunQueue = new Queue<AgentRunTickPayload | AgentRunKickPayload>(QUEUE_AGENT_RUN, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 5000 },
+    removeOnComplete: { count: 200, age: 86400 },
+    removeOnFail: { count: 100, age: 604800 },
+  },
+});
+
 /**
  * Gracefully close all queue connections.
  * Call this during server shutdown.
@@ -153,6 +164,6 @@ export async function closeQueues(): Promise<void> {
     bulkQueue.close(), monitorQueue.close(), webhookQueue.close(),
     campaignQueue.close(), sequenceQueue.close(), warmupQueue.close(),
     imapQueue.close(), sendQueue.close(), disposableListQueue.close(),
-    salesforceSyncQueue.close(), domainVerifyQueue.close(),
+    salesforceSyncQueue.close(), domainVerifyQueue.close(), agentRunQueue.close(),
   ]);
 }

@@ -120,4 +120,5 @@ export const redisKey = {
   ipRateLimit:  (scope: string, ip: string) => `rl:ip:${scope}:${ip}`,
   bulkJobLock:  (jobId: string)     => `lock:bulk:${jobId}`,
   monitorLock:  (monitorId: string) => `lock:monitor:${monitorId}`,
+  agentRunLock: (agentRunId: string) => `lock:agent-run:${agentRunId}`,
 } as const;

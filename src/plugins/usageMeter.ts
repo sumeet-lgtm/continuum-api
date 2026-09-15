@@ -42,6 +42,20 @@ export function getMonitorLimit(plan: string | null): number {
   return PLAN_MONITOR_LIMITS[plan ?? 'free'] ?? PLAN_MONITOR_LIMITS['free']!;
 }
 
+// Active-AgentRun ceiling per plan — same rationale as PLAN_MONITOR_LIMITS
+// above: an unbounded number of recurring watches is an abuse/cost vector
+// independent of the per-tick verification quota they also respect.
+const PLAN_AGENT_RUN_LIMITS: Record<string, number> = {
+  free:    2,
+  starter: 10,
+  growth:  50,
+  scale:   200,
+};
+
+export function getAgentRunLimit(plan: string | null): number {
+  return PLAN_AGENT_RUN_LIMITS[plan ?? 'free'] ?? PLAN_AGENT_RUN_LIMITS['free']!;
+}
+
 // Mailbox ceiling per plan — matches the counts advertised on the pricing
 // page. Previously unenforced: any plan could create unlimited mailboxes,
 // unlike every other quota in this file.

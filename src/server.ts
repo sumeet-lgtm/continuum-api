@@ -19,6 +19,7 @@ import { verifySingleRoute } from './routes/verify/single.js';
 import { verifyPublicRoute } from './routes/verify/public.js';
 import { chatPublicRoutes } from './routes/chat/public.js';
 import { monitoringRoutes } from './routes/monitor/index.js';
+import { agentRunRoutes } from './routes/agentRuns/index.js';
 import { historyRoutes } from './routes/history/index.js';
 import { webhookRoutes } from './routes/webhooks/index.js';
 import { bulkJobRoutes } from './routes/bulk-jobs/index.js';
@@ -184,6 +185,7 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(verifyPublicRoute, { prefix: '/v1' });
   await app.register(chatPublicRoutes, { prefix: '/v1' });
   await app.register(monitoringRoutes, { prefix: '/v1' });
+  await app.register(agentRunRoutes, { prefix: '/v1' });
   await app.register(historyRoutes, { prefix: '/v1' });
   await app.register(webhookRoutes, { prefix: '/v1' });
   await app.register(bulkJobRoutes, { prefix: '/v1' });

@@ -27,6 +27,7 @@
     "smtp:relay": "tsx src/smtp-relay.ts",
     "worker:bulk": "tsx src/workers/bulkWorker.ts",
     "worker:monitor": "tsx src/workers/monitorWorker.ts",
+    "worker:agent-run": "tsx src/workers/agentRunWorker.ts",
     "worker:webhook": "tsx src/workers/webhookWorker.ts",
     "worker:send": "tsx src/workers/sendWorker.ts",
     "test": "vitest run",

@@ -19,6 +19,14 @@ export interface MonitorRecheckPayload {
   source:    string;
 }
 
+export interface AgentRunTickPayload {
+  batchSize: number;
+}
+
+export interface AgentRunKickPayload {
+  agentRunId: string;
+}
+
 export interface SendJobPayload {
   sendMessageId: string;
   to: string;
