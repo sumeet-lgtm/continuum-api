@@ -288,6 +288,7 @@ const NAV: NavItem[] = [
     icon: Search,
     children: [
       { to: "/dashboard/finder", label: "Find People", icon: Search, exact: true },
+      { to: "/dashboard/finder-agent", label: "Lead Finding Agent", icon: Bot },
       { to: "/dashboard/leads", label: "Lead CRM", icon: Users },
       { to: "/dashboard/salesforce", label: "Salesforce", icon: Cloud },
     ],

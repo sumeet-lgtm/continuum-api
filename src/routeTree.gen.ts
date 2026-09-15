@@ -36,6 +36,7 @@ import { Route as DashboardContactsRouteImport } from './routes/dashboard.contac
 import { Route as DashboardDeliverabilityRouteImport } from './routes/dashboard.deliverability'
 import { Route as DashboardDomainsRouteImport } from './routes/dashboard.domains'
 import { Route as DashboardFinderRouteImport } from './routes/dashboard.finder'
+import { Route as DashboardFinderAgentRouteImport } from './routes/dashboard.finder-agent'
 import { Route as DashboardImportRouteImport } from './routes/dashboard.import'
 import { Route as DashboardInboxRouteImport } from './routes/dashboard.inbox'
 import { Route as DashboardInboxTestRouteImport } from './routes/dashboard.inbox-test'
@@ -205,6 +206,11 @@ const DashboardDomainsRoute = DashboardDomainsRouteImport.update({
 const DashboardFinderRoute = DashboardFinderRouteImport.update({
   id: '/finder',
   path: '/finder',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardFinderAgentRoute = DashboardFinderAgentRouteImport.update({
+  id: '/finder-agent',
+  path: '/finder-agent',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardImportRoute = DashboardImportRouteImport.update({
@@ -410,6 +416,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/deliverability': typeof DashboardDeliverabilityRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
   '/dashboard/finder': typeof DashboardFinderRoute
+  '/dashboard/finder-agent': typeof DashboardFinderAgentRoute
   '/dashboard/import': typeof DashboardImportRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
@@ -473,6 +480,7 @@ export interface FileRoutesByTo {
   '/dashboard/deliverability': typeof DashboardDeliverabilityRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
   '/dashboard/finder': typeof DashboardFinderRoute
+  '/dashboard/finder-agent': typeof DashboardFinderAgentRoute
   '/dashboard/import': typeof DashboardImportRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
@@ -538,6 +546,7 @@ export interface FileRoutesById {
   '/dashboard/deliverability': typeof DashboardDeliverabilityRoute
   '/dashboard/domains': typeof DashboardDomainsRoute
   '/dashboard/finder': typeof DashboardFinderRoute
+  '/dashboard/finder-agent': typeof DashboardFinderAgentRoute
   '/dashboard/import': typeof DashboardImportRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/inbox-test': typeof DashboardInboxTestRoute
@@ -604,6 +613,7 @@ export interface FileRouteTypes {
     | '/dashboard/deliverability'
     | '/dashboard/domains'
     | '/dashboard/finder'
+    | '/dashboard/finder-agent'
     | '/dashboard/import'
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
@@ -667,6 +677,7 @@ export interface FileRouteTypes {
     | '/dashboard/deliverability'
     | '/dashboard/domains'
     | '/dashboard/finder'
+    | '/dashboard/finder-agent'
     | '/dashboard/import'
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
@@ -731,6 +742,7 @@ export interface FileRouteTypes {
     | '/dashboard/deliverability'
     | '/dashboard/domains'
     | '/dashboard/finder'
+    | '/dashboard/finder-agent'
     | '/dashboard/import'
     | '/dashboard/inbox'
     | '/dashboard/inbox-test'
@@ -970,6 +982,13 @@ declare module '@tanstack/react-router' {
       path: '/finder'
       fullPath: '/dashboard/finder'
       preLoaderRoute: typeof DashboardFinderRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/finder-agent': {
+      id: '/dashboard/finder-agent'
+      path: '/finder-agent'
+      fullPath: '/dashboard/finder-agent'
+      preLoaderRoute: typeof DashboardFinderAgentRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/import': {
@@ -1261,6 +1280,7 @@ interface DashboardRouteChildren {
   DashboardDeliverabilityRoute: typeof DashboardDeliverabilityRoute
   DashboardDomainsRoute: typeof DashboardDomainsRoute
   DashboardFinderRoute: typeof DashboardFinderRoute
+  DashboardFinderAgentRoute: typeof DashboardFinderAgentRoute
   DashboardImportRoute: typeof DashboardImportRoute
   DashboardInboxRoute: typeof DashboardInboxRoute
   DashboardInboxTestRoute: typeof DashboardInboxTestRoute
@@ -1315,6 +1335,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardDeliverabilityRoute: DashboardDeliverabilityRoute,
   DashboardDomainsRoute: DashboardDomainsRoute,
   DashboardFinderRoute: DashboardFinderRoute,
+  DashboardFinderAgentRoute: DashboardFinderAgentRoute,
   DashboardImportRoute: DashboardImportRoute,
   DashboardInboxRoute: DashboardInboxRoute,
   DashboardInboxTestRoute: DashboardInboxTestRoute,
