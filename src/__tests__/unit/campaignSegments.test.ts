@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: any = {
     contactListMembership: { findMany: vi.fn() },
     lead: { findMany: vi.fn().mockResolvedValue([]) },
-  },
-}));
+    $executeRawUnsafe: vi.fn().mockResolvedValue(undefined),
+  };
+  // withTenant() calls prisma.$transaction(fn) and hands fn the tx — here
+  // the same mock object, so tx.X resolves to the mocks above.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  return { prisma };
+});
 
 import { deriveListSegments } from '../../lib/campaignSegments.js';
 import { prisma } from '../../lib/prisma.js';

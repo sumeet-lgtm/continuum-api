@@ -7,7 +7,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // label list was zipped to a differently-ordered transaction array,
 // silently mislabeling every count in the response).
 
-const { transactionMock, findManyMocks, deleteManyMocks } = vi.hoisted(() => {
+// accountData.ts calls withTenant()/collectOwnedIds() with a mix of `tx.X`
+// (RLS-covered models) and `prisma.X` (not RLS-covered) — both need to
+// resolve to these same mocks, so mockPrisma is passed to $transaction's
+// callback as `tx` (the interactive-callback form the real client uses,
+// not the old array-of-PrismaPromises form).
+const { transactionMock, findManyMocks, deleteManyMocks, mockPrisma } = vi.hoisted(() => {
   const models = [
     'mailbox', 'monitor', 'webhook', 'automation', 'campaign', 'sequence', 'sendMessage',
     'verification', 'bulkJob', 'contact', 'mailingList', 'segment', 'sendingDomain',
@@ -20,35 +25,18 @@ const { transactionMock, findManyMocks, deleteManyMocks } = vi.hoisted(() => {
     findManyMocks[m] = vi.fn().mockResolvedValue([]);
     deleteManyMocks[m] = vi.fn().mockResolvedValue({ count: 0 });
   }
-  return { transactionMock: vi.fn(), findManyMocks, deleteManyMocks };
+  const transactionMock = vi.fn();
+  const mockPrisma: Record<string, unknown> = {
+    $executeRawUnsafe: vi.fn().mockResolvedValue(undefined),
+    $transaction: transactionMock,
+  };
+  for (const m of models) {
+    mockPrisma[m] = { findMany: findManyMocks[m], deleteMany: deleteManyMocks[m] };
+  }
+  return { transactionMock, findManyMocks, deleteManyMocks, mockPrisma };
 });
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
-    mailbox: { findMany: findManyMocks['mailbox'], deleteMany: deleteManyMocks['mailbox'] },
-    monitor: { findMany: findManyMocks['monitor'], deleteMany: deleteManyMocks['monitor'] },
-    webhook: { findMany: findManyMocks['webhook'], deleteMany: deleteManyMocks['webhook'] },
-    automation: { findMany: findManyMocks['automation'], deleteMany: deleteManyMocks['automation'] },
-    campaign: { findMany: findManyMocks['campaign'], deleteMany: deleteManyMocks['campaign'] },
-    sequence: { findMany: findManyMocks['sequence'], deleteMany: deleteManyMocks['sequence'] },
-    sendMessage: { findMany: findManyMocks['sendMessage'], deleteMany: deleteManyMocks['sendMessage'] },
-    verification: { findMany: findManyMocks['verification'], deleteMany: deleteManyMocks['verification'] },
-    bulkJob: { findMany: findManyMocks['bulkJob'], deleteMany: deleteManyMocks['bulkJob'] },
-    contact: { findMany: findManyMocks['contact'], deleteMany: deleteManyMocks['contact'] },
-    mailingList: { findMany: findManyMocks['mailingList'], deleteMany: deleteManyMocks['mailingList'] },
-    segment: { findMany: findManyMocks['segment'], deleteMany: deleteManyMocks['segment'] },
-    sendingDomain: { findMany: findManyMocks['sendingDomain'], deleteMany: deleteManyMocks['sendingDomain'] },
-    emailTemplate: { findMany: findManyMocks['emailTemplate'], deleteMany: deleteManyMocks['emailTemplate'] },
-    lead: { findMany: findManyMocks['lead'], deleteMany: deleteManyMocks['lead'] },
-    inboxTest: { findMany: findManyMocks['inboxTest'], deleteMany: deleteManyMocks['inboxTest'] },
-    replyEvent: { findMany: findManyMocks['replyEvent'], deleteMany: deleteManyMocks['replyEvent'] },
-    trackingEvent: { findMany: findManyMocks['trackingEvent'], deleteMany: deleteManyMocks['trackingEvent'] },
-    monitorCheck: { findMany: findManyMocks['monitorCheck'], deleteMany: deleteManyMocks['monitorCheck'] },
-    webhookDelivery: { findMany: findManyMocks['webhookDelivery'], deleteMany: deleteManyMocks['webhookDelivery'] },
-    automationEnrollment: { findMany: findManyMocks['automationEnrollment'], deleteMany: deleteManyMocks['automationEnrollment'] },
-    $transaction: transactionMock,
-  },
-}));
+vi.mock('../../lib/prisma.js', () => ({ prisma: mockPrisma }));
 
 import { deleteAccountData, exportAccountData } from '../../lib/accountData.js';
 
@@ -56,10 +44,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   for (const mock of Object.values(findManyMocks)) mock.mockResolvedValue([]);
   for (const mock of Object.values(deleteManyMocks)) mock.mockResolvedValue({ count: 0 });
-  // $transaction receives an array of already-created PrismaPromises in
-  // this codebase's usage (not the interactive-callback form) — resolve
-  // each one in place, exactly like the real client would.
-  transactionMock.mockImplementation((calls: Promise<unknown>[]) => Promise.all(calls));
+  // Real withTenant()/withRlsBypass() semantics: $transaction receives an
+  // interactive callback and hands it `tx` — here the same mockPrisma
+  // object, so `tx.X` calls resolve to the mocks above exactly like
+  // `prisma.X` calls do.
+  transactionMock.mockImplementation((fn: (tx: typeof mockPrisma) => Promise<unknown>) => fn(mockPrisma));
 });
 
 describe('deleteAccountData', () => {
@@ -81,8 +70,12 @@ describe('deleteAccountData', () => {
   it('deletes children before their non-cascading apiKeyId-owned parent within the same transaction', async () => {
     await deleteAccountData('key-1');
 
-    const calledModels = transactionMock.mock.calls[0]![0] as unknown[];
-    expect(calledModels).toHaveLength(21);
+    // All 21 owned-content tables ran exactly once, inside the single
+    // withTenant() transaction (one $transaction call).
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    for (const mock of Object.values(deleteManyMocks)) {
+      expect(mock).toHaveBeenCalledTimes(1);
+    }
 
     // replyEvent (child of mailbox, no cascade) must be queued before mailbox.
     expect(deleteManyMocks['replyEvent']).toHaveBeenCalled();
@@ -103,9 +96,10 @@ describe('deleteAccountData', () => {
   });
 
   it('never touches Suppression, SoftBounceTrack, or SequenceTemplate', async () => {
-    await deleteAccountData('key-1');
-    const calledModels = transactionMock.mock.calls[0]![0] as unknown[];
-    expect(calledModels).toHaveLength(21); // exactly the owned-content tables, nothing more
+    const counts = await deleteAccountData('key-1');
+    // Exactly the owned-content tables, nothing more — those three models
+    // aren't even mocked above, so touching one would throw.
+    expect(Object.keys(counts)).toHaveLength(21);
   });
 });
 

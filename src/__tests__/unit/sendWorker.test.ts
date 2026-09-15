@@ -29,12 +29,22 @@ const {
   };
 });
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: any = {
     sendMessage: { findUnique: sendMessageFindUnique, update: sendMessageUpdate },
+    // sendWorker.ts reads allowSendFallback before sending — defaulting to
+    // an existing key means the fallback-suppression codepath is never
+    // exercised here, consistent with what these tests actually assert.
+    apiKey: { findUnique: vi.fn().mockResolvedValue({ allowSendFallback: true }) },
     $disconnect: vi.fn(),
-  },
-}));
+    $executeRawUnsafe: vi.fn().mockResolvedValue(undefined),
+  };
+  // withTenant()/withRlsBypass() call prisma.$transaction(fn) and hand fn
+  // the tx — here the same mock object, so tx.X resolves to the mocks above
+  // exactly like prisma.X does.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  return { prisma };
+});
 
 vi.mock('../../lib/ses.js', () => ({
   sendViaSes,

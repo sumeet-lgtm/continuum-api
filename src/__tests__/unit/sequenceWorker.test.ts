@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ─── Mock everything the worker module touches at import time ─────────────────
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: any = {
     sequenceEnrollment: { findMany: vi.fn(), update: vi.fn(), findUnique: vi.fn(), create: vi.fn() },
     suppression:        { findMany: vi.fn().mockResolvedValue([]) },
     sequence:           { findMany: vi.fn().mockResolvedValue([]) },
@@ -17,8 +17,14 @@ vi.mock('../../lib/prisma.js', () => ({
     // 'findFirst')" regardless of what the test itself was asserting.
     lead:               { findFirst: vi.fn().mockResolvedValue(null) },
     $disconnect:        vi.fn(),
-  },
-}));
+    $executeRawUnsafe:  vi.fn().mockResolvedValue(undefined),
+  };
+  // withTenant()/withRlsBypass() call prisma.$transaction(fn) and hand fn
+  // the tx — here the same mock object, so tx.X resolves to the mocks above
+  // exactly like prisma.X does.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  return { prisma };
+});
 
 vi.mock('../../lib/queue.js', () => ({
   QUEUE_SEQUENCE:  'continuum:sequence',

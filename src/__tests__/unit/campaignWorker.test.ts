@@ -1,16 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: any = {
     campaign:           { findUnique: vi.fn(), update: vi.fn() },
     contactListMembership: { findMany: vi.fn().mockResolvedValue([]) },
+    // Recipient-isolation circuit breaker — defaults to "every queried email
+    // is owned" (real behavior when nothing is actually cross-tenant) so it
+    // doesn't false-trip regardless of how many recipients a test resolves;
+    // tests exercising the breaker itself override this per-call.
+    contact: {
+      count: vi.fn((args: { where?: { email?: { in?: string[] } } }) => Promise.resolve(args?.where?.email?.in?.length ?? 0)),
+    },
     suppression:        { findMany: vi.fn().mockResolvedValue([]) },
     campaignRecipient:  { createMany: vi.fn(), updateMany: vi.fn() },
     sendMessage:        { create: vi.fn().mockResolvedValue({}) },
     apiKey:             { findUnique: vi.fn(), update: vi.fn().mockResolvedValue({}) },
     $disconnect:        vi.fn(),
-  },
-}));
+    $executeRawUnsafe:  vi.fn().mockResolvedValue(undefined),
+  };
+  // withTenant()/withRlsBypass() call prisma.$transaction(fn) and hand fn
+  // the tx — here the same mock object, so tx.X resolves to the mocks above
+  // exactly like prisma.X does.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  return { prisma };
+});
 
 vi.mock('../../lib/queue.js', () => ({
   QUEUE_CAMPAIGN:  'continuum:campaign',

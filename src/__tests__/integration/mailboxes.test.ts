@@ -3,15 +3,20 @@ import type { FastifyInstance } from 'fastify';
 
 // ─── Mock all external dependencies (buildApp() registers every route) ──────
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: any = {
     apiKey: { findUnique: vi.fn(), update: vi.fn().mockResolvedValue({}) },
     mailbox: { count: vi.fn(), create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn() },
     webhook: { findMany: vi.fn().mockResolvedValue([]) },
     $disconnect: vi.fn(),
-  },
-  disconnectPrisma: vi.fn(),
-}));
+    $executeRawUnsafe: vi.fn().mockResolvedValue(undefined),
+  };
+  // withTenant()/withRlsBypass() call prisma.$transaction(fn) and hand fn
+  // the tx — here the same mock object, so tx.X resolves to the mocks above
+  // exactly like prisma.X does.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  return { prisma, disconnectPrisma: vi.fn() };
+});
 
 vi.mock('../../lib/redis.js', () => ({
   redis: { incr: vi.fn().mockResolvedValue(1), expire: vi.fn(), ttl: vi.fn().mockResolvedValue(55), ping: vi.fn().mockResolvedValue('PONG') },

@@ -1,15 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: any = {
     salesforceConnection: { findMany: vi.fn(), update: vi.fn().mockResolvedValue({}) },
     salesforceLeadSync:   { findMany: vi.fn().mockResolvedValue([]), upsert: vi.fn(), update: vi.fn() },
     lead:                 { findMany: vi.fn().mockResolvedValue([]), updateMany: vi.fn().mockResolvedValue({}) },
     mailbox:              { findMany: vi.fn().mockResolvedValue([]) },
     replyEvent:           { findMany: vi.fn().mockResolvedValue([]) },
     sequenceEnrollment:   { updateMany: vi.fn().mockResolvedValue({}) },
-  },
-}));
+    $executeRawUnsafe:    vi.fn().mockResolvedValue(undefined),
+  };
+  // withTenant()/withRlsBypass() call prisma.$transaction(fn) and hand fn
+  // the tx — here the same mock object, so tx.X resolves to the mocks above
+  // exactly like prisma.X does.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  return { prisma };
+});
 
 vi.mock('bullmq', () => ({
   Worker: vi.fn().mockImplementation(() => ({ on: vi.fn(), close: vi.fn() })),
@@ -35,6 +41,9 @@ vi.mock('../../lib/salesforceApi.js', () => ({
   updateLead: vi.fn(),
   logActivity: vi.fn(),
   queryLeadsById: vi.fn().mockResolvedValue([]),
+  // Pass-through matches the real function's behavior for the no-mappings
+  // case every test here exercises (makeConnection() sets no fieldMappings).
+  applyFieldMappings: vi.fn((baseFields: unknown) => baseFields),
   SalesforceApiError: class SalesforceApiError extends Error {
     status: number;
     constructor(message: string, status: number) { super(message); this.status = status; }
