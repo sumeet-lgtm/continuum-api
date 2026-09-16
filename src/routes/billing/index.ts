@@ -75,6 +75,8 @@ interface DodoEvent {
     product_cart?: Array<{ product_id?: string }>;
     metadata?: Record<string, string>;
     customer?: { email?: string };
+    total_amount?: number;
+    currency?: string;
   };
   metadata?: Record<string, string>;
 }
@@ -303,6 +305,8 @@ export async function billingRoutes(fastify: FastifyInstance): Promise<void> {
           await applyPlanChange(event, eventType);
         } else if (DOWNGRADE_EVENTS.has(eventType)) {
           await applyDowngrade(event, eventType);
+        } else if (eventType === 'payment.failed') {
+          await notifyPaymentFailed(event);
         }
       } catch (err) {
         // Release the idempotency claim so Dodo's retry re-runs the grant
@@ -373,6 +377,24 @@ async function applyDowngrade(event: DodoEvent, eventType: string): Promise<void
     const msg = planDowngradedEmail('free');
     void sendEmail(email, msg.subject, msg.html);
   }
+}
+
+// payment.failed is neither an upgrade nor a downgrade — Dodo hasn't given up
+// on the subscription yet (that's subscription.expired, already handled
+// above). This is purely a dunning notice; the plan doesn't change here.
+async function notifyPaymentFailed(event: DodoEvent): Promise<void> {
+  const { email } = eventIdentity(event);
+  if (!email) return;
+  const amountMinor = event.data?.total_amount;
+  const currency = event.data?.currency ?? '';
+  // Dodo amounts are in the currency's minor unit (cents/paise); the
+  // template's own $-prefix assumes USD — a known gap for non-USD accounts,
+  // not fixed here.
+  const amount = typeof amountMinor === 'number'
+    ? `${(amountMinor / 100).toFixed(2)}${currency ? ` ${currency}` : ''}`
+    : 'your subscription';
+  const msg = paymentFailedEmail({ amount, retryDate: 'within 3 days' });
+  void sendEmail(email, msg.subject, msg.html);
 }
 
 /** Update the target api_keys row(s); most-specific identity wins. */

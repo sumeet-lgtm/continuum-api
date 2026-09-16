@@ -59,13 +59,19 @@ export async function sendEmail(
 
 // ─── Shared layout ─────────────────────────────────────────────────────────────
 
+// The real mark (src/components/Logo.tsx, Mark()) — black rounded square,
+// white dashed-circle ring. Static here: email clients don't render the
+// site's CSS spin animation, and a still ring reads fine at rest.
 const LOGO = `<table cellpadding="0" cellspacing="0" border="0" style="margin-bottom:0">
   <tr>
     <td style="background:#000;padding:20px 32px;border-radius:4px 4px 0 0">
       <table cellpadding="0" cellspacing="0" border="0">
         <tr>
           <td style="padding-right:10px;vertical-align:middle">
-            <div style="width:24px;height:24px;background:rgba(255,255,255,0.15);border-radius:5px;display:inline-block;line-height:24px;text-align:center;font-size:11px;color:#fff;font-weight:700">C</div>
+            <svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block">
+              <rect width="32" height="32" rx="8" fill="#000"/>
+              <circle cx="16" cy="16" r="9.5" stroke="#fff" stroke-width="2.8" stroke-dasharray="9 3" stroke-linecap="round"/>
+            </svg>
           </td>
           <td style="vertical-align:middle">
             <span style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#fff">Continuum</span>
@@ -159,7 +165,7 @@ export function welcomeEmail(keyPrefix: string, firstName?: string | null): { su
   -H "Authorization: Bearer YOUR_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"email":"someone@company.com"}'</pre>
-      ${BTN('https://app.continuumapi.com', 'Open Dashboard →')}
+      ${BTN('https://app.continuumapi.com/dashboard', 'Open Dashboard →')}
       ${DIVIDER}
       ${ROW('API endpoint', '<code style="font-family:monospace;font-size:12px">api.continuumapi.com</code>')}
       ${ROW('Monthly verifications', '500 (free)')}
@@ -667,42 +673,224 @@ export function day7CheckInEmail(firstName?: string | null): { subject: string; 
       ${p('Which one are you trying to solve? Or is it something else entirely?')}
       ${p('Hit reply and tell me — I\'ll point you to the fastest path, and if something isn\'t working the way you expected, I\'d rather know now than later.')}
       ${DIVIDER}
-      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet, founder @ Continuum<br>You can reply directly to this email.</span>')}
+      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet<br>You can reply directly to this email.</span>')}
     `),
   };
 }
 
 export function day14ValueEmail(firstName?: string | null): { subject: string; html: string } {
   return {
-    subject: 'Two weeks in — what teams are actually building',
+    subject: 'Two weeks in — three combinations worth trying',
     html: layout('Two weeks in', `
       ${greeting(firstName)}
-      ${h1('What people are building with Continuum.')}
-      ${p('You\'re two weeks in. Here\'s what other teams have shipped in their first month:')}
+      ${h1('The features that compound.')}
+      ${p('You\'re two weeks in. Most of the value in Continuum shows up when two agents work together, not from any single one. Three combinations worth trying this week:')}
       <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 24px;border:1px solid #E5E7EB;border-radius:6px;overflow:hidden">
         <tr style="background:#F9FAFB">
           <td style="padding:14px 16px;border-bottom:1px solid #E5E7EB">
-            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 3px">SaaS startup — signup validation</p>
-            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Added real-time verification to their signup form. Invalid email rate dropped from 12% to 0.4% in 48 hours.</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 3px">Verify Agent + Transactional</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Add <code>verify_before_send: true</code> to any <code>/v1/send</code> call — invalid addresses get rejected before they ever touch your SES reputation, in the same request.</p>
           </td>
         </tr>
         <tr>
           <td style="padding:14px 16px;border-bottom:1px solid #E5E7EB">
-            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 3px">Agency — cold outreach</p>
-            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Replaced Instantly + MillionVerifier with one API key. Saved $380/month and simplified their stack to a single dashboard.</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 3px">Finder Agent + Outbound Agent</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Import search results straight into a sequence — no CSV export, no re-upload. Leads go from "found" to "enrolled" in one API call.</p>
           </td>
         </tr>
         <tr>
           <td style="padding:14px 16px">
-            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 3px">Developer tools company — transactional email</p>
-            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Migrated from Sendgrid. Kept the same API pattern, got verification + sending + analytics in one place.</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:600;color:#0A0A0A;margin:0 0 3px">Verify Agent + Monitors</p>
+            <p style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#6B7280;margin:0">Put a monitor on any address that matters (a key account, a high-value lead) — a webhook fires the instant its status changes, instead of you finding out from a bounce.</p>
           </td>
         </tr>
       </table>
-      ${p('If any of these look like where you\'re headed, or if you\'re still figuring out the right fit — reply and I\'ll help you map it out.')}
+      ${p('If you\'re not sure which of these fits what you\'re building — reply and tell me, and I\'ll point you at the fastest path.')}
       ${BTN('https://app.continuumapi.com/dashboard', 'Check Your Dashboard →')}
       ${DIVIDER}
-      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet @ Continuum<br>Reply directly to this email — I\'m reachable.</span>')}
+      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet<br>Reply directly to this email.</span>')}
+    `),
+  };
+}
+
+export function day21Email(firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: 'One five-minute setup most people skip',
+    html: layout('Custom sending domain', `
+      ${greeting(firstName)}
+      ${h1('Sending from your own domain takes five minutes.')}
+      ${p('If you\'re still sending transactional mail from a shared or default address, this is worth doing now rather than later — it\'s the single biggest lever on inbox placement, and it only gets more annoying to set up once you\'re sending real volume.')}
+      ${ROW('Add a domain', CODE('POST /v1/domains'))}
+      ${ROW('What you get back', 'DKIM keypair + exact DNS records to add')}
+      ${ROW('Propagation', 'Usually minutes, up to 48h worst case')}
+      ${DIVIDER}
+      ${BTN('https://app.continuumapi.com/dashboard/domains', 'Add Your Domain →')}
+      ${p('<span style="color:#9CA3AF;font-size:12px">Stuck on DNS? Reply with your registrar and I\'ll tell you exactly what to paste where.<br>— Sumeet</span>')}
+    `),
+  };
+}
+
+export function day30Email(firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: 'One month in — what\'s actually in each plan',
+    html: layout('One month in', `
+      ${greeting(firstName)}
+      ${h1('A month in. Here\'s the honest plan breakdown.')}
+      ${p('No pitch here — just what each tier actually unlocks, since the pricing page compresses it more than it should:')}
+      <ul style="padding-left:18px;margin:0 0 20px">
+        <li style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#374151;padding:5px 0"><strong>Free</strong> — full verification + transactional + nurture, 1k/mo, 1 mailbox. No time limit, no trial clock.</li>
+        <li style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#374151;padding:5px 0"><strong>Starter ($29)</strong> — adds cold outbound sequences, the Finder agent, and inbox warmup. This is the tier where the other four agents stop being locked.</li>
+        <li style="font-family:Inter,-apple-system,sans-serif;font-size:13px;color:#374151;padding:5px 0"><strong>Growth ($79)</strong> — adds AI sequence generation, AI personalization, and inbox placement testing.</li>
+      </ul>
+      ${p('If you\'re on Free and hitting the verification or send limit regularly, that\'s the actual signal to upgrade — not a countdown timer.')}
+      ${BTN('https://app.continuumapi.com/dashboard/billing', 'Compare Plans →')}
+      ${DIVIDER}
+      ${p('<span style="color:#9CA3AF;font-size:12px">Questions about what fits your usage? Reply and I\'ll look at your actual numbers.<br>— Sumeet</span>')}
+    `),
+  };
+}
+
+export function day45Email(firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: 'The agent most people forget they have',
+    html: layout('Nurture Agent', `
+      ${greeting(firstName)}
+      ${h1('Nurture Agent — the one people forget they already have.')}
+      ${p('If you signed up for verification or transactional sending, there\'s a decent chance you never opened the Nurture tab. I notice this a lot — it\'s the same API key, same contact model, and it\'s already running:')}
+      ${ROW('Lists & segments', 'Filter contacts by field, subscription date, or open behaviour')}
+      ${ROW('Drip automations', CODE('POST /v1/automations/trigger') + ' from your app')}
+      ${ROW('Compliance', 'One-click unsubscribe + double opt-in, handled automatically')}
+      ${DIVIDER}
+      ${p('If you already have a contacts table somewhere, this is usually a same-day migration, not a project — reply if you want help mapping the fields.')}
+      ${BTN('https://app.continuumapi.com/dashboard/nurture-agent', 'Open Nurture Agent →')}
+      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet</span>')}
+    `),
+  };
+}
+
+export function day60Email(firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: 'Finding leads without leaving your sequence tool',
+    html: layout('Finder Agent', `
+      ${greeting(firstName)}
+      ${h1('Finder Agent — search, then enroll, in one call.')}
+      ${p('Most people run lead search in one tool, export a CSV, then re-upload it into whatever sends the sequence. I built Finder Agent to skip the middle step — search results enroll directly:')}
+      ${ROW('Search', CODE('POST /v1/finder/search') + ' by title, industry, geography')}
+      ${ROW('Import', 'Straight into a sequence — no CSV round-trip')}
+      ${ROW('Enrichment', 'An icebreaker generated per lead at import')}
+      ${DIVIDER}
+      ${BTN('https://app.continuumapi.com/dashboard/finder-agent', 'Try Finder Agent →')}
+      ${p('<span style="color:#9CA3AF;font-size:12px">Already using Clay or Apollo? Finder Agent has webhook intake for both — bring your existing enrichment, skip re-verifying.<br>— Sumeet</span>')}
+    `),
+  };
+}
+
+export function day75Email(firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: 'Before you run your first cold sequence — warm up the mailbox',
+    html: layout('Warmup Agent', `
+      ${greeting(firstName)}
+      ${h1('A brand-new mailbox sending 200 cold emails on day one gets flagged.')}
+      ${p('If Outbound Agent is on your list to try, Warmup Agent is the thing to run first — not after. It ramps a connected mailbox gradually so its reputation is built before your sequences actually need it:')}
+      ${ROW('Day 1', '5 emails/day')}
+      ${ROW('Day 7', '12 emails/day')}
+      ${ROW('Day 30', '40 emails/day, full reputation')}
+      ${DIVIDER}
+      ${BTN('https://app.continuumapi.com/dashboard/warmup-agent', 'Start Warmup →')}
+      ${p('<span style="color:#9CA3AF;font-size:12px">Already sending cold outbound from an unwarmed mailbox? Start this in parallel — it won\'t undo damage already done, but it stops it from getting worse.<br>— Sumeet</span>')}
+    `),
+  };
+}
+
+export function day90Email(firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: 'Three months — one honest question',
+    html: layout('Three months in', `
+      ${greeting(firstName)}
+      ${h1('You\'ve been here three months.')}
+      ${p('No feature pitch this time — just one real question: what\'s the thing about Continuum that\'s still annoying, missing, or confusing? Reply and tell me. I read every one of these, and the roadmap is built from exactly this kind of message, not guesswork.')}
+      ${p('And if it\'s been genuinely useful — the fastest way to help is a two-line honest review or a referral. I\'m early enough that either one actually moves things.')}
+      ${DIVIDER}
+      ${BTN('https://app.continuumapi.com/dashboard', 'Open Dashboard →')}
+      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet</span>')}
+    `),
+  };
+}
+
+// ─── Feature spotlights ────────────────────────────────────────────────────────
+// One real feature per email, not one email per day of filler. Days start at
+// 17 (after the day-14 value email) and step every 5 days, so a signup who
+// stays subscribed sees the full 37 over roughly six months. Wired in
+// emailSweep.ts by day-since-creation, same mechanism as the day-N emails.
+
+export interface FeatureSpotlight {
+  tag: string;
+  agent: string;
+  headline: string;
+  body: string;
+  cta: { href: string; label: string };
+}
+
+export const FEATURE_SPOTLIGHTS: FeatureSpotlight[] = [
+  // ── Verify Agent (12 checks) ──
+  { tag: 'verify-syntax', agent: 'Verify Agent', headline: 'The check that runs before any network call.', body: 'RFC-compliant syntax validation catches a malformed address in under a millisecond — before Verify Agent ever spends a DNS lookup or an SMTP handshake on it. Cheap filters first is the whole design.', cta: { href: 'https://app.continuumapi.com/dashboard/verify-agent', label: 'Open Verify Agent →' } },
+  { tag: 'verify-mx', agent: 'Verify Agent', headline: 'MX check: does the domain even accept mail?', body: 'Live DNS resolution against the domain\'s MX records — not a cached list. A domain with no mail server configured fails here, instantly, before anything more expensive runs.', cta: { href: 'https://app.continuumapi.com/dashboard/verify-agent', label: 'Open Verify Agent →' } },
+  { tag: 'verify-smtp', agent: 'Verify Agent', headline: 'SMTP probing — checking the specific mailbox, not just the domain.', body: 'A mailbox-level handshake confirms the exact address exists on that mail server, not just that the domain accepts mail generically. This is the check that catches typos in the local part.', cta: { href: 'https://app.continuumapi.com/dashboard/verify-agent', label: 'Open Verify Agent →' } },
+  { tag: 'verify-catchall', agent: 'Verify Agent', headline: 'Catch-all detection — the check most verifiers skip.', body: 'Some domains accept mail to any address regardless of whether it exists, which makes SMTP probing lie to you. Verify Agent flags catch-all domains explicitly instead of reporting a false "valid."', cta: { href: 'https://app.continuumapi.com/dashboard/verify-agent', label: 'Open Verify Agent →' } },
+  { tag: 'verify-disposable', agent: 'Verify Agent', headline: 'Blocking throwaway addresses at signup.', body: 'Mailinator, Guerrilla Mail, and every other disposable provider get flagged automatically — useful the moment you plug verification into a signup form and want real users, not one-time inboxes.', cta: { href: 'https://app.continuumapi.com/dashboard/verify-agent', label: 'Open Verify Agent →' } },
+  { tag: 'verify-role', agent: 'Verify Agent', headline: 'Role accounts: technically valid, usually low-value.', body: 'info@, support@, noreply@ — these addresses exist and accept mail, but they\'re shared inboxes, not people. Role-account detection lets you treat them differently in your funnel instead of scoring them the same as a real signup.', cta: { href: 'https://app.continuumapi.com/dashboard/verify-agent', label: 'Open Verify Agent →' } },
+  { tag: 'verify-greylist', agent: 'Verify Agent', headline: 'Handling greylisting without a false negative.', body: 'Some mail servers temporarily defer unfamiliar senders as an anti-spam tactic. Verify Agent recognizes a greylist response for what it is instead of reporting the address as invalid.', cta: { href: 'https://app.continuumapi.com/dashboard/verify-agent', label: 'Open Verify Agent →' } },
+  { tag: 'verify-auth', agent: 'Verify Agent', headline: 'SPF, DKIM, DMARC — checking the domain\'s own setup.', body: 'Beyond whether an address exists, Verify Agent checks whether the sending domain\'s auth records are configured correctly. A misconfigured domain is often the real reason mail bounces, not the address itself.', cta: { href: 'https://app.continuumapi.com/dashboard/verify-agent', label: 'Open Verify Agent →' } },
+  { tag: 'verify-blacklist', agent: 'Verify Agent', headline: 'Cross-checking domain blacklists in real time.', body: 'Spamhaus, Barracuda, and other blacklists get checked on every verification — so you find out a domain has a reputation problem before you send to it, not after your own domain gets tainted.', cta: { href: 'https://app.continuumapi.com/dashboard/verify-agent', label: 'Open Verify Agent →' } },
+  { tag: 'verify-spoof', agent: 'Verify Agent', headline: 'Catching look-alike domains before they catch you.', body: 'Subdomain spoofing and typosquat detection flags addresses on domains built to look like a real one — the same pattern used in phishing. Worth knowing about before that address ends up in your CRM.', cta: { href: 'https://app.continuumapi.com/dashboard/verify-agent', label: 'Open Verify Agent →' } },
+  { tag: 'verify-score', agent: 'Verify Agent', headline: 'A 0–100 score, not just valid/invalid.', body: 'Deliverability isn\'t always binary. The score lets you act on a threshold that fits your risk tolerance instead of a hard yes/no — useful when "risky" addresses are still worth sending to.', cta: { href: 'https://app.continuumapi.com/dashboard/verify-agent', label: 'Open Verify Agent →' } },
+  { tag: 'verify-monitor', agent: 'Verify Agent', headline: 'An address can go bad after you\'ve already verified it.', body: 'Continuous monitoring re-checks addresses on a schedule and fires a webhook the moment a status changes — so a key account\'s email going stale shows up as a notification, not a bounce.', cta: { href: 'https://app.continuumapi.com/dashboard/monitoring', label: 'Set Up a Monitor →' } },
+
+  // ── Transactional (6) ──
+  { tag: 'send-templates', agent: 'Transactional', headline: 'Templates with real logic, not just find-and-replace.', body: 'HTML or MJML templates support curly-brace variables, spintax, and Liquid conditionals, compiled server-side — the same template can branch on who it\'s going to, not just fill in a name.', cta: { href: 'https://app.continuumapi.com/dashboard/templates', label: 'Manage Templates →' } },
+  { tag: 'send-batch', agent: 'Transactional', headline: 'Batch sending, with per-message suppression built in.', body: 'POST /v1/send/batch takes up to 100 messages in one call, and every single one is checked against your suppression list before it ships — batching doesn\'t bypass compliance.', cta: { href: 'https://app.continuumapi.com/dashboard/batch-send', label: 'Try Batch Send →' } },
+  { tag: 'send-schedule', agent: 'Transactional', headline: 'Scheduled delivery you can still cancel.', body: 'Set scheduled_at and the message queues via BullMQ. Change your mind any time before it fires — cancellation isn\'t a race condition against a cron job.', cta: { href: 'https://app.continuumapi.com/dashboard/schedule', label: 'View Scheduled Sends →' } },
+  { tag: 'send-tracking', agent: 'Transactional', headline: 'Open and click tracking, injected automatically.', body: 'A 1×1 pixel and wrapped links get added without any change to your template, and every event lands in /v1/analytics — you don\'t have to remember to instrument each send.', cta: { href: 'https://app.continuumapi.com/dashboard/analytics', label: 'View Analytics →' } },
+  { tag: 'send-domains', agent: 'Transactional', headline: 'Custom sending domains, DKIM handled for you.', body: 'Add a domain and Continuum generates the DKIM keypair and hands you the exact DNS records to paste. No manual key generation, no guessing at record format.', cta: { href: 'https://app.continuumapi.com/dashboard/domains', label: 'Add a Sending Domain →' } },
+  { tag: 'send-verify', agent: 'Transactional', headline: 'The one flag that prevents most reputation damage.', body: 'verify_before_send: true on any /v1/send call aborts delivery to an invalid address before it ever reaches SES. This alone is usually the highest-leverage thing to turn on.', cta: { href: 'https://app.continuumapi.com/dashboard/transactional', label: 'Open Transactional →' } },
+
+  // ── Nurture Agent (6) ──
+  { tag: 'nurture-segments', agent: 'Nurture Agent', headline: 'Segments built on real signals, not just tags.', body: 'Filter contacts by field values, subscription date, or open behaviour — a segment can be "opened 2 of the last 3 sends" as easily as "tagged VIP."', cta: { href: 'https://app.continuumapi.com/dashboard/segments', label: 'Build a Segment →' } },
+  { tag: 'nurture-campaigns', agent: 'Nurture Agent', headline: 'Campaigns with A/B subject testing built in.', body: 'One-time or scheduled broadcasts support subject-line testing and spintax out of the box — you don\'t need a separate tool to find out which subject line actually gets opened.', cta: { href: 'https://app.continuumapi.com/dashboard/campaigns', label: 'Create a Campaign →' } },
+  { tag: 'nurture-triggers', agent: 'Nurture Agent', headline: 'Drips that start from your app, not a schedule.', body: 'POST /v1/automations/trigger from anywhere in your codebase and a contact enters a timed, multi-step drip automatically — trial expiring, cart abandoned, whatever your app already knows.', cta: { href: 'https://app.continuumapi.com/dashboard/automations', label: 'Set Up an Automation →' } },
+  { tag: 'nurture-unsub', agent: 'Nurture Agent', headline: 'One-click unsubscribe, RFC 8058 compliant.', body: 'The List-Unsubscribe header gets injected on every send automatically — this is what keeps Gmail from routing your nurture sends straight to spam for lacking it.', cta: { href: 'https://app.continuumapi.com/dashboard/lists', label: 'View Mailing Lists →' } },
+  { tag: 'nurture-optin', agent: 'Nurture Agent', headline: 'Double opt-in, without you building the confirmation flow.', body: 'Continuum sends the confirmation email and handles the state — GDPR-ready consent without you writing a single line of that logic yourself.', cta: { href: 'https://app.continuumapi.com/dashboard/lists', label: 'View Mailing Lists →' } },
+  { tag: 'nurture-suppress', agent: 'Nurture Agent', headline: 'The suppression list gets checked on every single step.', body: 'Not just once at signup — every recipient is re-checked against the global suppression list before each step of a campaign fires. An unsubscribe mid-sequence actually stops the sequence.', cta: { href: 'https://app.continuumapi.com/dashboard/suppressions', label: 'View Suppressions →' } },
+
+  // ── Outbound Agent (8) ──
+  { tag: 'outbound-ai-seq', agent: 'Outbound Agent', headline: 'A full sequence from one sentence.', body: 'Describe your ICP and goal, and AI sequence generation returns email copy, LinkedIn steps, and task notes as a complete plan — a starting point in seconds, not a blank page.', cta: { href: 'https://app.continuumapi.com/dashboard/sequences', label: 'Generate a Sequence →' } },
+  { tag: 'outbound-rotation', agent: 'Outbound Agent', headline: 'Multi-mailbox rotation for reputation spread.', body: 'Connect SMTP, Gmail, or Outlook and Continuum rotates sends per-recipient across them — spreading volume and daily limits instead of hammering one mailbox\'s reputation.', cta: { href: 'https://app.continuumapi.com/dashboard/mailboxes', label: 'Connect a Mailbox →' } },
+  { tag: 'outbound-warmup', agent: 'Outbound Agent', headline: 'Warmup isn\'t optional if the mailbox is new.', body: 'A fresh mailbox ramps from 5 to 40 emails/day over 30 days before it\'s trusted with real cold volume — the agent that runs quietly in the background before Outbound needs it.', cta: { href: 'https://app.continuumapi.com/dashboard/warmup-agent', label: 'Start Warmup →' } },
+  { tag: 'outbound-firstline', agent: 'Outbound Agent', headline: 'A real first line, not a merge tag.', body: 'AI writes a personalized opener per lead at enrollment, using their company, title, and context — the difference between "Hi {{first_name}}" and something that reads like it was actually written for them.', cta: { href: 'https://app.continuumapi.com/dashboard/sequences', label: 'Open Sequences →' } },
+  { tag: 'outbound-reply', agent: 'Outbound Agent', headline: 'Reply detection that actually stops the sequence.', body: 'A worker polls connected mailboxes every 15 minutes — a real reply pauses or stops enrollment automatically. Nobody keeps getting follow-up 3 after they\'ve already responded.', cta: { href: 'https://app.continuumapi.com/dashboard/inbox', label: 'View Unified Inbox →' } },
+  { tag: 'outbound-classify', agent: 'Outbound Agent', headline: 'Replies get classified, not just detected.', body: 'Interested, meeting request, out-of-office, unsubscribe — each incoming reply gets auto-classified with a suggested next action, so triage isn\'t a manual read-through of every response.', cta: { href: 'https://app.continuumapi.com/dashboard/inbox', label: 'View Unified Inbox →' } },
+  { tag: 'outbound-conditional', agent: 'Outbound Agent', headline: 'Steps that skip themselves when they\'re not needed.', body: 'if_not_opened and if_not_replied conditions mean a follow-up doesn\'t fire on someone who already engaged — no manual review of who to skip.', cta: { href: 'https://app.continuumapi.com/dashboard/sequences', label: 'Open Sequences →' } },
+  { tag: 'outbound-unified', agent: 'Outbound Agent', headline: 'Every reply, every mailbox, one inbox.', body: 'Replies across every connected mailbox land in one view, with the sequence and enrollment context attached — no switching between five Gmail tabs to see what came in.', cta: { href: 'https://app.continuumapi.com/dashboard/inbox', label: 'View Unified Inbox →' } },
+
+  // ── Finder Agent (5) ──
+  { tag: 'finder-search', agent: 'Finder Agent', headline: 'Search on the filters that actually narrow a list.', body: 'Title, seniority, company size, industry, geography — ICP-based search filters on the parameters that matter, not just a keyword match on a job title string.', cta: { href: 'https://app.continuumapi.com/dashboard/finder', label: 'Search for Leads →' } },
+  { tag: 'finder-enroll', agent: 'Finder Agent', headline: 'From search result to enrolled lead, no CSV.', body: 'Import search results directly into a sequence — the CSV export/re-upload step that eats most of an afternoon in other tools just doesn\'t exist here.', cta: { href: 'https://app.continuumapi.com/dashboard/finder', label: 'Search for Leads →' } },
+  { tag: 'finder-enrich', agent: 'Finder Agent', headline: 'An icebreaker generated at the moment of import.', body: 'AI lead enrichment surfaces pain points and relevant context per lead, and generates an opening line — before the lead even enters a sequence.', cta: { href: 'https://app.continuumapi.com/dashboard/finder', label: 'Search for Leads →' } },
+  { tag: 'finder-crm', agent: 'Finder Agent', headline: 'A CRM with the full activity timeline attached.', body: 'Every send, open, click, and reply against a lead is logged in one place — engagement history without exporting anything into a spreadsheet to piece it together.', cta: { href: 'https://app.continuumapi.com/dashboard/leads', label: 'Open Lead CRM →' } },
+  { tag: 'finder-connectors', agent: 'Finder Agent', headline: 'Already paying for Clay or Apollo? Bring them along.', body: 'Webhook intake for Clay HTTP enrichment and Apollo exports, plus a generic field-mapper for Zapier, Make, and n8n — Finder Agent doesn\'t require you to abandon an existing enrichment setup.', cta: { href: 'https://app.continuumapi.com/dashboard/connectors', label: 'View Connectors →' } },
+];
+
+export function featureSpotlightEmail(s: FeatureSpotlight, firstName?: string | null): { subject: string; html: string } {
+  return {
+    subject: s.headline,
+    html: layout(s.headline, `
+      ${greeting(firstName)}
+      <div class="mono" style="font-family:monospace;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#9CA3AF;margin:0 0 8px">${s.agent}</div>
+      ${h1(s.headline)}
+      ${p(s.body)}
+      ${BTN(s.cta.href, s.cta.label)}
+      ${DIVIDER}
+      ${p('<span style="color:#9CA3AF;font-size:12px">— Sumeet</span>')}
     `),
   };
 }
