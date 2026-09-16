@@ -62,6 +62,8 @@ import { automationRoutes } from './routes/automations/index.js';
 import { toolRoutes } from './routes/tools/index.js';
 import { logsRoutes } from './routes/logs/index.js';
 import { privacyRoutes } from './routes/privacy/index.js';
+import { ipRoutes } from './routes/ip/index.js';
+import { phoneRoutes } from './routes/phone/index.js';
 import { authRoutes } from './routes/auth/index.js';
 import { calcomWebhookRoutes } from './routes/webhooks/calcom.js';
 import { workosWebhookRoutes } from './routes/webhooks/workos.js';
@@ -220,6 +222,8 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(toolRoutes, { prefix: '/v1' });
   await app.register(logsRoutes, { prefix: '/v1' });
   await app.register(privacyRoutes, { prefix: '/v1' });
+  await app.register(ipRoutes, { prefix: '/v1' });
+  await app.register(phoneRoutes, { prefix: '/v1' });
   await app.register(connectorRoutes, { prefix: '/v1' });
   await app.register(paymentConnectorRoutes, { prefix: '/v1' });
   await app.register(salesforceConnectorRoutes, { prefix: '/v1' });
