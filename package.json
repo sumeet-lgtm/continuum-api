@@ -61,7 +61,7 @@
     "libphonenumber-js": "^1.12.42",
     "mailparser": "^3.9.16",
     "mjml": "^5.4.0",
-    "nodemailer": "^9.0.5",
+    "nodemailer": "^9.1.1",
     "pino": "^9.1.0",
     "pino-pretty": "^11.0.0",
     "smtp-server": "^3.19.3",
@@ -80,12 +80,14 @@
     "prisma": "^5.13.0",
     "tsx": "^4.11.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "fast-uri@2.x": "^2.4.5",
     "fast-uri@3.x": "^3.1.6",
     "ws": "^8.21.0",
-    "semver@5.x": "^5.7.2"
+    "semver@5.x": "^5.7.2",
+    "nodemailer": "^9.1.1",
+    "esbuild": "^0.28.1"
   }
 }
