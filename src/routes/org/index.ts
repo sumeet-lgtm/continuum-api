@@ -223,11 +223,15 @@ export async function orgRoutes(fastify: FastifyInstance): Promise<void> {
       };
 
       const [rows, total] = await Promise.all([
+        // `where` above is scoped to this session's own orgId or userId —
+        // session-based auth (requireOrgSession), not an apiKeyId directly.
+        // tenant-sweep: scoped via the dynamic `where` built above.
         prisma.auditLog.findMany({
           where,
           orderBy: { createdAt: 'desc' },
           take: limit + 1,
         }),
+        // tenant-sweep: same scope as above.
         prisma.auditLog.count({ where: orgId ? { orgId } : { actorId: userId } }),
       ]);
 

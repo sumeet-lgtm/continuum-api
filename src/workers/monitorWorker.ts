@@ -28,6 +28,7 @@ import { Worker, Queue, type Job } from 'bullmq';
 import { redisConnection, QUEUE_MONITOR, webhookQueue, disposableListQueue } from '../lib/queue.js';
 import { redis } from '../lib/redis.js';
 import { prisma } from '../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../lib/tenantContext.js';
 import { verifyEmail } from '../engine/index.js';
 import { getPlanLimit, incrementUsageBy } from '../plugins/usageMeter.js';
 import { runEmailSweep } from './emailSweep.js';
@@ -62,7 +63,10 @@ type MonitorJobData =
 async function runMonitorTick(_job: Job<MonitorCheckPayload>): Promise<void> {
   const now = new Date();
 
-  const dueMonitors = await prisma.monitor.findMany({
+  // Legitimate cross-tenant sweep — every subsequent per-row operation
+  // re-scopes to that row's own apiKeyId via withTenant instead of staying
+  // inside this bypass (see lib/tenantContext.ts).
+  const dueMonitors = await withRlsBypass((tx) => tx.monitor.findMany({
     where: {
       isActive:   true,
       pausedAt:   null,
@@ -78,7 +82,7 @@ async function runMonitorTick(_job: Job<MonitorCheckPayload>): Promise<void> {
     },
     orderBy: { nextCheckAt: 'asc' },
     take:    BATCH_SIZE,
-  });
+  }));
 
   if (dueMonitors.length === 0) {
     logger.debug('Monitor tick: no monitors due');
@@ -110,7 +114,9 @@ async function runMonitorTick(_job: Job<MonitorCheckPayload>): Promise<void> {
 async function runRecheckSingle(job: Job<{ monitorId: string; source: string }>): Promise<void> {
   const { monitorId, source } = job.data;
 
-  const monitor = await prisma.monitor.findUnique({
+  // Tenant unknown until this lookup resolves — the enqueueing route
+  // already verified ownership before scheduling this job.
+  const monitor = await withRlsBypass((tx) => tx.monitor.findUnique({
     where:  { id: monitorId },
     select: {
       id:                true,
@@ -122,7 +128,7 @@ async function runRecheckSingle(job: Job<{ monitorId: string; source: string }>)
       isActive:          true,
       pausedAt:          true,
     },
-  });
+  }));
 
   if (!monitor) {
     logger.warn({ monitorId }, 'Recheck: monitor not found');
@@ -186,16 +192,16 @@ async function processMonitor(monitor: MonitorRecord): Promise<void> {
 
     // Monitor checks consume verifications (and provider credits) — skip when
     // the key is over its monthly quota, rescheduling instead of burning credits.
-    const key = await prisma.apiKey.findUnique({
+    const key = await withTenant(monitor.apiKeyId, (tx) => tx.apiKey.findUnique({
       where:  { id: monitor.apiKeyId },
       select: { plan: true, monthlyLimit: true, currentMonthUsage: true },
-    });
+    }));
     if (key && key.currentMonthUsage >= getPlanLimit(key.plan, key.monthlyLimit)) {
       log.info({ apiKeyId: monitor.apiKeyId }, 'Monthly quota exhausted — skipping monitor check');
-      await prisma.monitor.update({
+      await withTenant(monitor.apiKeyId, (tx) => tx.monitor.update({
         where: { id: monitor.id },
         data:  { nextCheckAt: calcNextCheckAt(monitor.intervalHours) },
-      });
+      }));
       return;
     }
 
@@ -217,7 +223,7 @@ async function processMonitor(monitor: MonitorRecord): Promise<void> {
     const nextCheckAt     = calcNextCheckAt(monitor.intervalHours);
 
     // Write the MonitorCheck record
-    await prisma.monitorCheck.create({
+    await withTenant(monitor.apiKeyId, (tx) => tx.monitorCheck.create({
       data: {
         monitorId:      monitor.id,
         verificationId: result.id,
@@ -229,10 +235,10 @@ async function processMonitor(monitor: MonitorRecord): Promise<void> {
         durationMs,
         webhookSent:    false,
       },
-    });
+    }));
 
     // Update the monitor: reset failures, advance schedule
-    await prisma.monitor.update({
+    await withTenant(monitor.apiKeyId, (tx) => tx.monitor.update({
       where: { id: monitor.id },
       data: {
         lastCheckedAt:       checkedAt,
@@ -241,7 +247,7 @@ async function processMonitor(monitor: MonitorRecord): Promise<void> {
         consecutiveFailures: 0,  // success → reset
         failureReason:       null,
       },
-    });
+    }));
 
     log.info(
       { newStatus, previousStatus, statusChanged, durationMs, nextCheckAt },
@@ -259,10 +265,10 @@ async function processMonitor(monitor: MonitorRecord): Promise<void> {
     log.error({ err, durationMs }, 'Monitor check failed');
 
     // Fetch current failure count atomically
-    const fresh = await prisma.monitor.findUnique({
+    const fresh = await withTenant(monitor.apiKeyId, (tx) => tx.monitor.findUnique({
       where:  { id: monitor.id },
       select: { consecutiveFailures: true },
-    });
+    }));
     const newFailures = (fresh?.consecutiveFailures ?? 0) + 1;
     const shouldPause = newFailures >= MAX_CONSECUTIVE_FAILURES;
 
@@ -273,7 +279,7 @@ async function processMonitor(monitor: MonitorRecord): Promise<void> {
     );
     const nextCheckAt = new Date(Date.now() + backoffHours * 3600 * 1000);
 
-    await prisma.monitor.update({
+    await withTenant(monitor.apiKeyId, (tx) => tx.monitor.update({
       where: { id: monitor.id },
       data: {
         nextCheckAt,
@@ -284,7 +290,7 @@ async function processMonitor(monitor: MonitorRecord): Promise<void> {
           isActive: false,
         }),
       },
-    });
+    }));
 
     if (shouldPause) {
       log.warn(
@@ -329,14 +335,14 @@ async function dispatchStatusChangeWebhooks(
   });
 
   // Mark the MonitorCheck row as webhookSent
-  await prisma.monitorCheck.updateMany({
+  await withTenant(monitor.apiKeyId, (tx) => tx.monitorCheck.updateMany({
     where: {
       monitorId:   monitor.id,
       checkedAt:   { gte: checkedAt },
       webhookSent: false,
     },
     data: { webhookSent: true },
-  });
+  }));
 }
 
 // ─── Scheduling helpers ───────────────────────────────────────────────────────
@@ -365,7 +371,8 @@ export function calcNextCheckAt(intervalHours: number): Date {
 async function resetMonthlyUsage(): Promise<void> {
   const now = new Date();
   try {
-    const result = await prisma.apiKey.updateMany({
+    // tenant-sweep: resets every tenant whose reset date has passed, by design.
+    const result = await withRlsBypass((tx) => tx.apiKey.updateMany({
       where: {
         usageResetAt: { lte: now },
         isActive: true,
@@ -374,7 +381,7 @@ async function resetMonthlyUsage(): Promise<void> {
         currentMonthUsage: 0,
         usageResetAt: new Date(now.getFullYear(), now.getMonth() + 1, 1),
       },
-    });
+    }));
     if (result.count > 0) {
       logger.info({ count: result.count }, 'Monthly usage reset complete');
     }

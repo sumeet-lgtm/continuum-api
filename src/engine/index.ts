@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { withTenant } from '../lib/tenantContext.js';
 import { checkSyntax } from './syntax.js';
 import { extractDomain, extractLocal } from './domain.js';
 import { lookupMx } from './mx.js';
@@ -291,7 +292,7 @@ async function persistAndReturn(raw: PersistInput): Promise<VerificationResult> 
   let record: { id: string; checkedAt: Date };
 
   try {
-    record = await prisma.verification.create({
+    record = await withTenant(raw.apiKeyId, (tx) => tx.verification.create({
       data: {
         email:           raw.email,
         domain:          raw.domain,
@@ -314,7 +315,7 @@ async function persistAndReturn(raw: PersistInput): Promise<VerificationResult> 
         sourceIp:        raw.sourceIp  ?? null,
       },
       select: { id: true, checkedAt: true },
-    });
+    }));
   } catch (err) {
     // DB write failure — surface the result to the caller anyway;
     // a synthetic ID keeps the response shape intact.

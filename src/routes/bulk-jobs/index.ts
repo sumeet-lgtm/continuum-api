@@ -7,6 +7,7 @@ import { requireMonthlyQuota, getPlanLimit } from '../../plugins/usageMeter.js';
 import { uploadToStorage, createSignedUrl } from '../../lib/supabase.js';
 import { bulkQueue } from '../../lib/queue.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import type { Prisma } from '@prisma/client';
 import { config } from '../../config.js';
 import { Errors } from '../../plugins/errorHandler.js';
@@ -123,7 +124,7 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
       // under 5s and worked, which masked the bug. Creating just the job row is
       // O(1) regardless of size; the worker re-parses the CSV from storage and
       // pre-creates the email rows (batched) before it starts verifying.
-      const bulkJob = await prisma.bulkJob.create({
+      const bulkJob = await withTenant(request.apiKey.id, (tx) => tx.bulkJob.create({
         data: {
           id:             jobId,
           apiKeyId:       request.apiKey.id,
@@ -141,7 +142,7 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
           status:        true,
           createdAt:     true,
         },
-      });
+      }));
 
       // Enqueue the background job
       try {
@@ -187,7 +188,7 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request: FastifyRequest<{ Params: BulkJobParams }>, reply: FastifyReply) => {
-      const job = await prisma.bulkJob.findUnique({
+      const job = await withRlsBypass((tx) => tx.bulkJob.findUnique({
         where: { id: request.params.id },
         select: {
           id:             true,
@@ -209,7 +210,7 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
           completedAt:    true,
           cancelledAt:    true,
         },
-      });
+      }));
 
       if (!job || job.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Bulk job');
@@ -277,7 +278,7 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
       const { page, limit, status, isDuplicate } = queryResult.data;
 
       // ── Verify job ownership ───────────────────────────────────────────────
-      const job = await prisma.bulkJob.findUnique({
+      const job = await withRlsBypass((tx) => tx.bulkJob.findUnique({
         where: { id: request.params.id },
         select: {
           id:           true,
@@ -287,7 +288,7 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
           totalEmails:  true,
           exportPath:   true,
         },
-      });
+      }));
 
       if (!job || job.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Bulk job');
@@ -301,8 +302,8 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
 
       const skip = (page - 1) * limit;
 
-      const [rows, total] = await Promise.all([
-        prisma.bulkJobEmail.findMany({
+      const [rows, total] = await withTenant(request.apiKey.id, (tx) => Promise.all([
+        tx.bulkJobEmail.findMany({
           where,
           orderBy: { rowIndex: 'asc' },
           skip,
@@ -328,8 +329,8 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
             processedAt:    true,
           },
         }),
-        prisma.bulkJobEmail.count({ where }),
-      ]);
+        tx.bulkJobEmail.count({ where }),
+      ]));
 
       // ── Build download URL if export is ready ──────────────────────────────
       let exportUrl: string | null = null;

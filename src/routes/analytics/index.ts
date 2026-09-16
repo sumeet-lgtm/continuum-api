@@ -395,6 +395,8 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
 
       // Fetch domain names for the IDs we have
       const domainIds = Array.from(byDomain.keys());
+      // tenant-sweep: domainIds are derived from this account's own already-
+      // scoped send messages above — only hydrating name/status for display.
       const domains = await prisma.sendingDomain.findMany({
         where: { id: { in: domainIds } },
         select: { id: true, name: true, status: true },

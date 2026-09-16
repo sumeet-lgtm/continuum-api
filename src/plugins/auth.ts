@@ -5,6 +5,7 @@ import { hashApiKey } from '../lib/crypto.js';
 import { Errors } from './errorHandler.js';
 import { logger } from '../lib/logger.js';
 import { verifySession } from '../lib/session.js';
+import { withRlsBypass } from '../lib/tenantContext.js';
 
 // Minimal local type matching the Prisma ApiKey model shape.
 // Replace with `import type { ApiKey } from '@prisma/client'` after `prisma generate`.
@@ -114,7 +115,11 @@ async function resolveApiKey(request: FastifyRequest): Promise<void> {
 
   let apiKey: ApiKeyRecord | null;
   try {
-    apiKey = await prisma.apiKey.findUnique({ where: { keyHash: hash } });
+    // Structurally can't be tenant-scoped: this lookup is how we find out
+    // which tenant is calling in the first place. RLS denies by default
+    // with no context set, so once the app connects as the RLS-restricted
+    // role, every request would fail auth here without this bypass.
+    apiKey = await withRlsBypass((tx) => tx.apiKey.findUnique({ where: { keyHash: hash } }));
   } catch (err) {
     logger.error({ err }, 'Database error during API key lookup');
     throw Errors.serviceUnavailable('Database');

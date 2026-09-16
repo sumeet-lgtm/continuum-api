@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { getMonitorLimit } from '../../plugins/usageMeter.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { monitorQueue } from '../../lib/queue.js';
 import type { MonitorRecheckPayload } from '../../types/job.js';
 import { Errors } from '../../plugins/errorHandler.js';
@@ -141,64 +141,68 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
 
       const { email, intervalHours, tags, notifyOnAnyChange } = parsed.data;
 
-      // Enforce per-plan monitor cap
-      const monitorLimit  = getMonitorLimit(request.apiKey.plan);
-      const existingCount = await prisma.monitor.count({
-        where: { apiKeyId: request.apiKey.id },
-      });
-      if (existingCount >= monitorLimit) {
-        throw Errors.validationFailed({
-          limit: `Your ${request.apiKey.plan ?? 'free'} plan allows ${monitorLimit} monitors. Delete some or upgrade to add more.`,
+      const monitor = await withTenant(request.apiKey.id, async (tx) => {
+        // Enforce per-plan monitor cap
+        const monitorLimit  = getMonitorLimit(request.apiKey.plan);
+        const existingCount = await tx.monitor.count({
+          where: { apiKeyId: request.apiKey.id },
         });
-      }
-
-      // Check for an existing monitor for this email under this key
-      const existing = await prisma.monitor.findUnique({
-        where: { apiKeyId_email: { apiKeyId: request.apiKey.id, email } },
-        select: { id: true, isActive: true, pausedAt: true },
-      });
-
-      if (existing) {
-        if (existing.isActive && !existing.pausedAt) {
+        if (existingCount >= monitorLimit) {
           throw Errors.validationFailed({
-            email: `A monitor for "${email}" already exists (id: ${existing.id}). PATCH it to change settings.`,
+            limit: `Your ${request.apiKey.plan ?? 'free'} plan allows ${monitorLimit} monitors. Delete some or upgrade to add more.`,
           });
         }
-        // Re-activate a paused or inactive monitor
+
+        // Check for an existing monitor for this email under this key
+        const existing = await tx.monitor.findUnique({
+          where: { apiKeyId_email: { apiKeyId: request.apiKey.id, email } },
+          select: { id: true, isActive: true, pausedAt: true },
+        });
+
+        if (existing) {
+          if (existing.isActive && !existing.pausedAt) {
+            throw Errors.validationFailed({
+              email: `A monitor for "${email}" already exists (id: ${existing.id}). PATCH it to change settings.`,
+            });
+          }
+          // Re-activate a paused or inactive monitor
+          const nextCheckAt = new Date(Date.now() + intervalHours * 3600 * 1000);
+          const reactivated = await tx.monitor.update({
+            where: { id: existing.id },
+            data: {
+              isActive:            true,
+              intervalHours,
+              tags,
+              notifyOnAnyChange,
+              nextCheckAt,
+              pausedAt:            null,
+              failureReason:       null,
+              consecutiveFailures: 0,
+            },
+            select: MONITOR_SELECT,
+          });
+          return { status: 200 as const, body: formatMonitor(reactivated) };
+        }
+
         const nextCheckAt = new Date(Date.now() + intervalHours * 3600 * 1000);
-        const reactivated = await prisma.monitor.update({
-          where: { id: existing.id },
+        const created = await tx.monitor.create({
           data: {
-            isActive:            true,
+            apiKeyId:         request.apiKey.id,
+            email,
             intervalHours,
             tags,
             notifyOnAnyChange,
             nextCheckAt,
-            pausedAt:            null,
-            failureReason:       null,
-            consecutiveFailures: 0,
+            isActive:         true,
           },
           select: MONITOR_SELECT,
         });
-        return reply.status(200).send(formatMonitor(reactivated));
-      }
 
-      const nextCheckAt = new Date(Date.now() + intervalHours * 3600 * 1000);
-      const monitor = await prisma.monitor.create({
-        data: {
-          apiKeyId:         request.apiKey.id,
-          email,
-          intervalHours,
-          tags,
-          notifyOnAnyChange,
-          nextCheckAt,
-          isActive:         true,
-        },
-        select: MONITOR_SELECT,
+        logger.info({ monitorId: created.id, email, intervalHours }, 'Monitor created');
+        return { status: 201 as const, body: formatMonitor(created) };
       });
 
-      logger.info({ monitorId: monitor.id, email, intervalHours }, 'Monitor created');
-      return reply.status(201).send(formatMonitor(monitor));
+      return reply.status(monitor.status).send(monitor.body);
     },
   );
 
@@ -232,16 +236,16 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
       if (tag)                    where.tags     = { has: tag };
       if (email)                  where.email    = { contains: email, mode: 'insensitive' };
 
-      const [monitors, total] = await Promise.all([
-        prisma.monitor.findMany({
+      const [monitors, total] = await withTenant(request.apiKey.id, (tx) => Promise.all([
+        tx.monitor.findMany({
           where,
           select: MONITOR_SELECT,
           orderBy: { createdAt: 'desc' },
           skip,
           take: limit,
         }),
-        prisma.monitor.count({ where }),
-      ]);
+        tx.monitor.count({ where }),
+      ]));
 
       return reply.status(200).send({
         data: monitors.map(formatMonitor),
@@ -277,7 +281,11 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
       },
     },
     async (request: FastifyRequest<{ Params: MonitorParams }>, reply: FastifyReply) => {
-      const monitor = await prisma.monitor.findUnique({
+      // Ownership isn't known until after this lookup-by-id, so it can't be
+      // tenant-scoped up front; withRlsBypass is correct here because the
+      // very next line is the actual, explicit ownership check this route
+      // has always relied on.
+      const monitor = await withRlsBypass((tx) => tx.monitor.findUnique({
         where: { id: request.params.id },
         select: {
           ...MONITOR_SELECT,
@@ -298,7 +306,7 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
             take: 20,
           },
         },
-      });
+      }));
 
       if (!monitor || monitor.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Monitor');
@@ -347,10 +355,10 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
         throw Errors.validationFailed({ body: 'At least one field is required.' });
       }
 
-      const monitor = await prisma.monitor.findUnique({
+      const monitor = await withRlsBypass((tx) => tx.monitor.findUnique({
         where:  { id: request.params.id },
         select: { id: true, apiKeyId: true, intervalHours: true },
-      });
+      }));
       if (!monitor || monitor.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Monitor');
       }
@@ -389,11 +397,14 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
         data.nextCheckAt = new Date(Date.now() + newInterval * 3600 * 1000);
       }
 
-      const updated = await prisma.monitor.update({
+      // Ownership already verified above for this exact id — writing under
+      // bypass here is the same "app already did the real check" pattern,
+      // not a shortcut around it.
+      const updated = await withRlsBypass((tx) => tx.monitor.update({
         where: { id: request.params.id },
         data,
         select: MONITOR_SELECT,
-      });
+      }));
 
       return reply.status(200).send(formatMonitor(updated));
     },
@@ -413,15 +424,15 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
       },
     },
     async (request: FastifyRequest<{ Params: MonitorParams }>, reply: FastifyReply) => {
-      const monitor = await prisma.monitor.findUnique({
+      const monitor = await withRlsBypass((tx) => tx.monitor.findUnique({
         where:  { id: request.params.id },
         select: { id: true, apiKeyId: true },
-      });
+      }));
       if (!monitor || monitor.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Monitor');
       }
 
-      await prisma.monitor.delete({ where: { id: request.params.id } });
+      await withRlsBypass((tx) => tx.monitor.delete({ where: { id: request.params.id } }));
       return reply.status(200).send({ id: request.params.id, deleted: true });
     },
   );
@@ -441,10 +452,10 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
       },
     },
     async (request: FastifyRequest<{ Params: MonitorParams }>, reply: FastifyReply) => {
-      const monitor = await prisma.monitor.findUnique({
+      const monitor = await withRlsBypass((tx) => tx.monitor.findUnique({
         where:  { id: request.params.id },
         select: { id: true, apiKeyId: true, email: true, isActive: true },
-      });
+      }));
 
       if (!monitor || monitor.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Monitor');
@@ -458,10 +469,10 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
 
       // Set nextCheckAt to now so the next monitor tick picks it up immediately,
       // and enqueue a dedicated single-monitor job that fires right now.
-      await prisma.monitor.update({
+      await withRlsBypass((tx) => tx.monitor.update({
         where: { id: monitor.id },
         data:  { nextCheckAt: new Date() },
-      });
+      }));
 
       await monitorQueue.add(
         'recheck-single',
@@ -512,10 +523,10 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
 
       const { page, limit, statusChanged } = queryResult.data;
 
-      const monitor = await prisma.monitor.findUnique({
+      const monitor = await withRlsBypass((tx) => tx.monitor.findUnique({
         where:  { id: request.params.id },
         select: { id: true, apiKeyId: true, email: true },
-      });
+      }));
 
       if (!monitor || monitor.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Monitor');
@@ -525,8 +536,8 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
 
       const skip = (page - 1) * limit;
 
-      const [checks, total] = await Promise.all([
-        prisma.monitorCheck.findMany({
+      const [checks, total] = await withTenant(request.apiKey.id, (tx) => Promise.all([
+        tx.monitorCheck.findMany({
           where,
           select: {
             id:             true,
@@ -543,8 +554,8 @@ export async function monitoringRoutes(fastify: FastifyInstance): Promise<void> 
           skip,
           take: limit,
         }),
-        prisma.monitorCheck.count({ where }),
-      ]);
+        tx.monitorCheck.count({ where }),
+      ]));
 
       return reply.status(200).send({
         monitorId: monitor.id,

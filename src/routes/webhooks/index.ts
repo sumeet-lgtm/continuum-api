@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { webhookQueue } from '../../lib/queue.js';
 import { generateSecret as generateWebhookSecret } from '../../lib/crypto.js';
 import { dispatchWebhook, buildEventId } from '../../lib/webhooks.js';
@@ -151,29 +151,31 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
         );
       }
 
-      const count = await prisma.webhook.count({
-        where: { apiKeyId: request.apiKey.id, isActive: true },
-      });
-      if (count >= MAX_WEBHOOKS_PER_KEY) {
-        throw Errors.validationFailed({
-          limit: `Maximum of ${MAX_WEBHOOKS_PER_KEY} active webhooks per API key.`,
-        });
-      }
-
       const { url, events, label, description } = parsed.data;
       const secret = generateWebhookSecret();
 
-      const webhook = await prisma.webhook.create({
-        data: {
-          apiKeyId:    request.apiKey.id,
-          url,
-          secret,
-          events:      toDbEvents(events) as unknown as never,
-          label:       label       ?? null,
-          description: description ?? null,
-          isActive:    true,
-        },
-        select: WEBHOOK_SELECT,
+      const webhook = await withTenant(request.apiKey.id, async (tx) => {
+        const count = await tx.webhook.count({
+          where: { apiKeyId: request.apiKey.id, isActive: true },
+        });
+        if (count >= MAX_WEBHOOKS_PER_KEY) {
+          throw Errors.validationFailed({
+            limit: `Maximum of ${MAX_WEBHOOKS_PER_KEY} active webhooks per API key.`,
+          });
+        }
+
+        return tx.webhook.create({
+          data: {
+            apiKeyId:    request.apiKey.id,
+            url,
+            secret,
+            events:      toDbEvents(events) as unknown as never,
+            label:       label       ?? null,
+            description: description ?? null,
+            isActive:    true,
+          },
+          select: WEBHOOK_SELECT,
+        });
       });
 
       logger.info({ webhookId: webhook.id, url, events }, 'Webhook created');
@@ -191,11 +193,11 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
     '/webhooks',
     { preHandler: [requireAuth, requireRateLimit] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const webhooks = await prisma.webhook.findMany({
+      const webhooks = await withTenant(request.apiKey.id, (tx) => tx.webhook.findMany({
         where:   { apiKeyId: request.apiKey.id },
         select:  WEBHOOK_SELECT,
         orderBy: { createdAt: 'desc' },
-      });
+      }));
 
       return reply.status(200).send({
         data:  webhooks.map((w: WebhookRow) => formatWebhook(w)),
@@ -212,27 +214,27 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
       schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
     },
     async (request: FastifyRequest<{ Params: WebhookParams }>, reply: FastifyReply) => {
-      const webhook = await prisma.webhook.findUnique({
+      const webhook = await withRlsBypass((tx) => tx.webhook.findUnique({
         where:  { id: request.params.id },
         select: WEBHOOK_SELECT,
-      });
+      }));
 
       if (!webhook || (webhook as WebhookRow & { apiKeyId?: string }).apiKeyId !== request.apiKey.id) {
         // Re-fetch with apiKeyId to validate ownership
-        const raw = await prisma.webhook.findUnique({
+        const raw = await withRlsBypass((tx) => tx.webhook.findUnique({
           where:  { id: request.params.id },
           select: { apiKeyId: true },
-        });
+        }));
         if (!raw || raw.apiKeyId !== request.apiKey.id) {
           throw Errors.notFound('Webhook');
         }
       }
 
       // Fetch with apiKeyId included for ownership check
-      const raw = await prisma.webhook.findUnique({
+      const raw = await withRlsBypass((tx) => tx.webhook.findUnique({
         where:  { id: request.params.id },
         select: { ...WEBHOOK_SELECT, apiKeyId: true },
-      });
+      }));
 
       if (!raw || raw.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Webhook');
@@ -261,10 +263,10 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.validationFailed({ body: 'At least one field is required.' });
       }
 
-      const existing = await prisma.webhook.findUnique({
+      const existing = await withRlsBypass((tx) => tx.webhook.findUnique({
         where:  { id: request.params.id },
         select: { id: true, apiKeyId: true },
-      });
+      }));
       if (!existing || existing.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Webhook');
       }
@@ -286,11 +288,11 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
       if (description !== undefined) data.description = description ?? null;
       if (isActive    !== undefined) data.isActive    = isActive;
 
-      const updated = await prisma.webhook.update({
+      const updated = await withRlsBypass((tx) => tx.webhook.update({
         where:  { id: request.params.id },
         data,
         select: WEBHOOK_SELECT,
-      });
+      }));
 
       return reply.status(200).send(formatWebhook(updated));
     },
@@ -304,17 +306,17 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
       schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
     },
     async (request: FastifyRequest<{ Params: WebhookParams }>, reply: FastifyReply) => {
-      const webhook = await prisma.webhook.findUnique({
+      const webhook = await withRlsBypass((tx) => tx.webhook.findUnique({
         where:  { id: request.params.id },
         select: { id: true, apiKeyId: true },
-      });
+      }));
       if (!webhook || webhook.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Webhook');
       }
 
       // Delete deliveries first (Prisma can't cascade without a schema migration on the shadow DB)
-      await prisma.webhookDelivery.deleteMany({ where: { webhookId: request.params.id } });
-      await prisma.webhook.delete({ where: { id: request.params.id } });
+      await withRlsBypass((tx) => tx.webhookDelivery.deleteMany({ where: { webhookId: request.params.id } }));
+      await withRlsBypass((tx) => tx.webhook.delete({ where: { id: request.params.id } }));
       return reply.status(200).send({ id: request.params.id, deleted: true });
     },
   );
@@ -327,10 +329,10 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
       schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
     },
     async (request: FastifyRequest<{ Params: WebhookParams }>, reply: FastifyReply) => {
-      const webhook = await prisma.webhook.findUnique({
+      const webhook = await withRlsBypass((tx) => tx.webhook.findUnique({
         where:  { id: request.params.id },
         select: { id: true, apiKeyId: true, url: true, secret: true, isActive: true },
-      });
+      }));
       if (!webhook || webhook.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Webhook');
       }
@@ -359,7 +361,7 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
         _note:      'This is a test delivery triggered by POST /ping.',
       };
 
-      const delivery = await prisma.webhookDelivery.create({
+      const delivery = await withTenant(request.apiKey.id, (tx) => tx.webhookDelivery.create({
         data: {
           webhookId:   webhook.id,
           event:       'verification_complete' as never, // stored as Prisma enum value
@@ -368,7 +370,7 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
           maxAttempts: 1, // ping: single attempt only
         },
         select: { id: true },
-      });
+      }));
 
       await webhookQueue.add(
         'deliver-webhook',
@@ -409,10 +411,10 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.validationFailed(qr.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })));
       }
 
-      const webhook = await prisma.webhook.findUnique({
+      const webhook = await withRlsBypass((tx) => tx.webhook.findUnique({
         where:  { id: request.params.id },
         select: { id: true, apiKeyId: true },
-      });
+      }));
       if (!webhook || webhook.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Webhook');
       }
@@ -421,8 +423,8 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
       const skip = (page - 1) * limit;
       const where = { webhookId: webhook.id, ...(delivered !== undefined && { delivered }), ...(failedPermanently !== undefined && { failedPermanently }) };
 
-      const [deliveries, total] = await Promise.all([
-        prisma.webhookDelivery.findMany({
+      const [deliveries, total] = await withTenant(request.apiKey.id, (tx) => Promise.all([
+        tx.webhookDelivery.findMany({
           where,
           select: {
             id:                true,
@@ -443,8 +445,8 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
           skip,
           take: limit,
         }),
-        prisma.webhookDelivery.count({ where }),
-      ]);
+        tx.webhookDelivery.count({ where }),
+      ]));
 
       type DeliveryRow = typeof deliveries[number];
 
@@ -498,15 +500,15 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request: FastifyRequest<{ Params: DeliveryParams }>, reply: FastifyReply) => {
       // Verify webhook ownership first
-      const webhook = await prisma.webhook.findUnique({
+      const webhook = await withRlsBypass((tx) => tx.webhook.findUnique({
         where:  { id: request.params.id },
         select: { id: true, apiKeyId: true },
-      });
+      }));
       if (!webhook || webhook.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Webhook');
       }
 
-      const delivery = await prisma.webhookDelivery.findUnique({
+      const delivery = await withTenant(request.apiKey.id, (tx) => tx.webhookDelivery.findUnique({
         where:  { id: request.params.deliveryId },
         select: {
           id:                true,
@@ -541,7 +543,7 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
             orderBy: { attemptNumber: 'asc' },
           },
         },
-      });
+      }));
 
       if (!delivery || delivery.webhookId !== webhook.id) {
         throw Errors.notFound('Delivery');
@@ -599,10 +601,10 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request: FastifyRequest<{ Params: DeliveryParams }>, reply: FastifyReply) => {
-      const webhook = await prisma.webhook.findUnique({
+      const webhook = await withRlsBypass((tx) => tx.webhook.findUnique({
         where:  { id: request.params.id },
         select: { id: true, apiKeyId: true, url: true, secret: true, isActive: true },
-      });
+      }));
       if (!webhook || webhook.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Webhook');
       }
@@ -610,10 +612,10 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.validationFailed({ isActive: 'Webhook is inactive. Reactivate it before retrying deliveries.' });
       }
 
-      const delivery = await prisma.webhookDelivery.findUnique({
+      const delivery = await withTenant(request.apiKey.id, (tx) => tx.webhookDelivery.findUnique({
         where:  { id: request.params.deliveryId },
         select: { id: true, webhookId: true, delivered: true, event: true, eventId: true, payload: true, attempts: true, maxAttempts: true },
-      });
+      }));
       if (!delivery || delivery.webhookId !== webhook.id) {
         throw Errors.notFound('Delivery');
       }
@@ -622,14 +624,14 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       // Reset permanently-failed flag so the retry can proceed
-      await prisma.webhookDelivery.update({
+      await withTenant(request.apiKey.id, (tx) => tx.webhookDelivery.update({
         where: { id: delivery.id },
         data: {
           failedPermanently: false,
           nextRetryAt: null,
           errorMessage: null,
         },
-      });
+      }));
 
       const nextAttempt = delivery.attempts + 1;
 
@@ -673,10 +675,10 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
       schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
     },
     async (request: FastifyRequest<{ Params: WebhookParams }>, reply: FastifyReply) => {
-      const webhook = await prisma.webhook.findUnique({
+      const webhook = await withRlsBypass((tx) => tx.webhook.findUnique({
         where:  { id: request.params.id },
         select: { id: true, apiKeyId: true, url: true, isActive: true },
-      });
+      }));
       if (!webhook || webhook.apiKeyId !== request.apiKey.id) {
         throw Errors.notFound('Webhook');
       }
@@ -686,10 +688,10 @@ export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
 
       const newSecret = generateWebhookSecret();
 
-      await prisma.webhook.update({
+      await withRlsBypass((tx) => tx.webhook.update({
         where: { id: webhook.id },
         data:  { secret: newSecret },
-      });
+      }));
 
       logger.info({ webhookId: webhook.id }, 'Webhook signing secret rotated');
 

@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
 interface HistoryParams { email: string }
@@ -58,8 +58,8 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
         if (until) where.checkedAt.lte = new Date(until);
       }
 
-      const [verifications, total] = await Promise.all([
-        prisma.verification.findMany({
+      const [verifications, total] = await withTenant(request.apiKey.id, (tx) => Promise.all([
+        tx.verification.findMany({
           where,
           select: {
             id:            true,
@@ -85,8 +85,8 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
           skip,
           take: limit,
         }),
-        prisma.verification.count({ where }),
-      ]);
+        tx.verification.count({ where }),
+      ]));
 
       // Annotate with monitor check source
       type VRow = typeof verifications[number];
@@ -94,10 +94,10 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
       const monitorCheckMap = new Map<string, { monitorId: string; source: string }>();
 
       if (verificationIds.length > 0) {
-        const monitorChecks = await prisma.monitorCheck.findMany({
+        const monitorChecks = await withTenant(request.apiKey.id, (tx) => tx.monitorCheck.findMany({
           where:  { verificationId: { in: verificationIds } },
           select: { verificationId: true, monitorId: true, source: true },
-        });
+        }));
         for (const mc of monitorChecks) {
           monitorCheckMap.set(mc.verificationId, { monitorId: mc.monitorId, source: mc.source });
         }
@@ -172,11 +172,16 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
       const key = request.apiKey;
       const ownerId = key.ownerId ?? key.userId ?? key.id;
 
-      // Scope to all keys owned by this account
-      const ownedKeys = await prisma.apiKey.findMany({
+      // Scope to all keys owned by this account. Spans multiple sibling
+      // apiKeyIds at once (a multi-key account), which doesn't fit the
+      // single-tenant RLS session variable — withRlsBypass is correct here
+      // because the app-level `where: apiKeyId IN (...)` below is already
+      // the real, explicit ownership check (same reasoning as suppressions'
+      // bulk-check path), not a fallback we're hoping RLS backstops.
+      const ownedKeys = await withRlsBypass((tx) => tx.apiKey.findMany({
         where: { OR: [{ ownerId }, { userId: ownerId }, { id: key.id }] },
         select: { id: true },
-      });
+      }));
       const apiKeyIds = ownedKeys.map((k) => k.id);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -189,8 +194,8 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
         if (until) where.checkedAt.lte = new Date(until);
       }
 
-      const [rows, total] = await Promise.all([
-        prisma.verification.findMany({
+      const [rows, total] = await withRlsBypass((tx) => Promise.all([
+        tx.verification.findMany({
           where,
           select: {
             id: true, email: true, domain: true, status: true, subStatus: true,
@@ -201,8 +206,8 @@ export async function historyRoutes(fastify: FastifyInstance): Promise<void> {
           skip,
           take: limit,
         }),
-        prisma.verification.count({ where }),
-      ]);
+        tx.verification.count({ where }),
+      ]));
 
       return reply.status(200).send({
         data: rows.map((v) => ({

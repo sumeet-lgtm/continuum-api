@@ -37,6 +37,9 @@ export async function logsRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const [items, total] = await Promise.all([
+        // `where` above starts from { apiKeyId: request.apiKey.id }, built
+        // dynamically rather than inline (why the static scan misses it).
+        // tenant-sweep: scoped via the dynamic `where` built above.
         prisma.apiRequestLog.findMany({
           where,
           orderBy: { createdAt: 'desc' },
@@ -54,6 +57,7 @@ export async function logsRoutes(fastify: FastifyInstance): Promise<void> {
             createdAt: true,
           },
         }),
+        // tenant-sweep: same `where` as above.
         prisma.apiRequestLog.count({ where }),
       ]);
 

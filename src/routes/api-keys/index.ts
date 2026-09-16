@@ -4,10 +4,21 @@ import { randomBytes } from 'crypto';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withRlsBypass } from '../../lib/tenantContext.js';
 import { hashApiKey } from '../../lib/crypto.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logAudit } from '../../lib/audit.js';
 import { getPlanLimit, getSendLimit } from '../../plugins/usageMeter.js';
+import { sendEmail, apiKeyCreatedEmail, apiKeyRevokedEmail } from '../../lib/email.js';
+
+/** Same email-resolution rule as the lifecycle sweep: ownerId is either
+ *  already an email (legacy keys) or a users.id to look up. */
+async function resolveOwnerEmail(ownerId: string | null): Promise<{ to: string; firstName: string | null } | null> {
+  if (!ownerId) return null;
+  if (ownerId.includes('@')) return { to: ownerId, firstName: null };
+  const user = await prisma.user.findUnique({ where: { id: ownerId }, select: { email: true, firstName: true } });
+  return user ? { to: user.email, firstName: user.firstName } : null;
+}
 
 const createSchema = z.object({
   name: z.string().min(1).max(100),
@@ -24,7 +35,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       const key = request.apiKey;
       const ownerId = key.ownerId ?? key.userId ?? key.id;
 
-      const keys = await prisma.apiKey.findMany({
+      const keys = await withRlsBypass((tx) => tx.apiKey.findMany({
         where: { OR: [{ ownerId }, { userId: ownerId }, { id: key.id }] },
         orderBy: { createdAt: 'asc' },
         select: {
@@ -35,7 +46,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
           usageAlertEnabled: true, expiresAt: true, monthlySendLimit: true,
           allowSendFallback: true,
         },
-      });
+      }));
 
       // monthlyLimit/monthlySendLimit are raw override columns (default
       // 1,000/500) — a standard plan's real ceiling always overrides them
@@ -73,7 +84,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
 
       const effectiveOwnerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
 
-      const newKey = await prisma.apiKey.create({
+      const newKey = await withRlsBypass((tx) => tx.apiKey.create({
         data: {
           keyHash,
           keyPrefix,
@@ -94,7 +105,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
           id: true, keyPrefix: true, name: true, permission: true,
           restrictedDomainId: true, plan: true, createdAt: true,
         },
-      });
+      }));
 
       void logAudit(
         null, 'api_key.created',
@@ -102,6 +113,13 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
         [{ type: 'api_key', id: newKey.id, name: newKey.name ?? undefined }],
         parentKey.id,
       );
+
+      void resolveOwnerEmail(effectiveOwnerId).then((r) => {
+        if (r) {
+          const msg = apiKeyCreatedEmail(newKey.keyPrefix, newKey.name ?? 'Unnamed key', r.firstName);
+          void sendEmail(r.to, msg.subject, msg.html);
+        }
+      });
 
       // Return raw key once only
       return reply.status(201).send({ ...newKey, key: rawKey });
@@ -125,14 +143,14 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
-      const target = await prisma.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } });
+      const target = await withRlsBypass((tx) => tx.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } }));
       if (!target) throw Errors.notFound('API key not found.');
       if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
         throw Errors.forbidden('Not authorized to rename this key.');
       }
 
       const label = body.label.trim();
-      await prisma.apiKey.update({ where: { id }, data: { label, name: label } });
+      await withRlsBypass((tx) => tx.apiKey.update({ where: { id }, data: { label, name: label } }));
 
       return reply.status(200).send({ id, label });
     },
@@ -157,13 +175,13 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
-      const target = await prisma.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } });
+      const target = await withRlsBypass((tx) => tx.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } }));
       if (!target) throw Errors.notFound('API key not found.');
       if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
         throw Errors.forbidden('Not authorized to adjust this key.');
       }
 
-      await prisma.apiKey.update({ where: { id }, data: { monthlyLimit } });
+      await withRlsBypass((tx) => tx.apiKey.update({ where: { id }, data: { monthlyLimit } }));
 
       return reply.status(200).send({
         id,
@@ -192,13 +210,13 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
-      const target = await prisma.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } });
+      const target = await withRlsBypass((tx) => tx.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } }));
       if (!target) throw Errors.notFound('API key not found.');
       if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
         throw Errors.forbidden('Not authorized to adjust this key.');
       }
 
-      await prisma.apiKey.update({ where: { id }, data: { rateLimit } });
+      await withRlsBypass((tx) => tx.apiKey.update({ where: { id }, data: { rateLimit } }));
 
       return reply.status(200).send({ id, rateLimit, message: `Rate limit set to ${rateLimit} req/min.` });
     },
@@ -230,13 +248,13 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
-      const target = await prisma.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } });
+      const target = await withRlsBypass((tx) => tx.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } }));
       if (!target) throw Errors.notFound('API key not found.');
       if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
         throw Errors.forbidden('Not authorized to manage this key.');
       }
 
-      await prisma.apiKey.update({ where: { id }, data: { allowedIps: ips } });
+      await withRlsBypass((tx) => tx.apiKey.update({ where: { id }, data: { allowedIps: ips } }));
 
       // Evict from in-process cache so the restriction applies within seconds
       // (Cache is module-private, so we rely on its natural 60s TTL.)
@@ -259,15 +277,16 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
-      const target = await prisma.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } });
+      const target = await withRlsBypass((tx) => tx.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } }));
       if (!target) throw Errors.notFound('API key not found.');
       if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
         throw Errors.forbidden('Not authorized to manage this key.');
       }
 
-      await prisma.apiKey.update({ where: { id }, data: { usageAlertEnabled: body.enabled } });
+      const enabled = body.enabled;
+      await withRlsBypass((tx) => tx.apiKey.update({ where: { id }, data: { usageAlertEnabled: enabled } }));
 
-      return reply.status(200).send({ id, usageAlertEnabled: body.enabled });
+      return reply.status(200).send({ id, usageAlertEnabled: enabled });
     },
   );
 
@@ -286,15 +305,16 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
-      const target = await prisma.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } });
+      const target = await withRlsBypass((tx) => tx.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } }));
       if (!target) throw Errors.notFound('API key not found.');
       if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
         throw Errors.forbidden('Not authorized to manage this key.');
       }
 
-      await prisma.apiKey.update({ where: { id }, data: { allowSendFallback: body.enabled } });
+      const enabled = body.enabled;
+      await withRlsBypass((tx) => tx.apiKey.update({ where: { id }, data: { allowSendFallback: enabled } }));
 
-      return reply.status(200).send({ id, allowSendFallback: body.enabled });
+      return reply.status(200).send({ id, allowSendFallback: enabled });
     },
   );
 
@@ -321,13 +341,13 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
-      const target = await prisma.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } });
+      const target = await withRlsBypass((tx) => tx.apiKey.findUnique({ where: { id }, select: { id: true, ownerId: true, userId: true } }));
       if (!target) throw Errors.notFound('API key not found.');
       if (target.ownerId !== ownerId && target.userId !== ownerId && id !== parentKey.id) {
         throw Errors.forbidden('Not authorized to manage this key.');
       }
 
-      await prisma.apiKey.update({ where: { id }, data: { expiresAt } });
+      await withRlsBypass((tx) => tx.apiKey.update({ where: { id }, data: { expiresAt } }));
 
       return reply.status(200).send({
         id,
@@ -349,7 +369,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.forbidden('Only full_access keys can rotate API keys.');
       }
 
-      const target = await prisma.apiKey.findUnique({
+      const target = await withRlsBypass((tx) => tx.apiKey.findUnique({
         where: { id },
         select: {
           id: true, ownerId: true, userId: true, orgId: true, name: true, label: true,
@@ -357,7 +377,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
           monthlySendLimit: true, restrictedDomainId: true, allowedIps: true,
           isActive: true,
         },
-      });
+      }));
       if (!target) throw Errors.notFound('API key not found.');
       if (!target.isActive) throw Errors.forbidden('Cannot rotate a revoked key.');
 
@@ -372,7 +392,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       const keyPrefix = rawKey.slice(0, 12);
       const label     = (target.label ?? target.name ?? 'Key').replace(/\s*\(rotated.*\)$/, '');
 
-      const newKey = await prisma.apiKey.create({
+      const newKey = await withRlsBypass((tx) => tx.apiKey.create({
         data: {
           keyHash, keyPrefix, keyRaw: rawKey,
           name:               label,
@@ -389,13 +409,13 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
           orgId:              target.orgId,
         },
         select: { id: true, keyPrefix: true, name: true, permission: true, createdAt: true },
-      });
+      }));
 
       // Revoke the old key
-      await prisma.apiKey.update({
+      await withRlsBypass((tx) => tx.apiKey.update({
         where: { id },
         data:  { isActive: false, revokedAt: new Date() },
-      });
+      }));
 
       void logAudit(
         null, 'api_key.rotated',
@@ -424,10 +444,10 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.forbidden('Cannot revoke the currently authenticated key.');
       }
 
-      const target = await prisma.apiKey.findUnique({
+      const target = await withRlsBypass((tx) => tx.apiKey.findUnique({
         where: { id },
-        select: { id: true, ownerId: true, userId: true, isActive: true },
-      });
+        select: { id: true, ownerId: true, userId: true, isActive: true, keyPrefix: true, name: true },
+      }));
       if (!target) throw Errors.notFound('API key not found.');
 
       const ownerId = parentKey.ownerId ?? parentKey.userId ?? parentKey.id;
@@ -435,10 +455,10 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.forbidden('Not authorized to revoke this key.');
       }
 
-      await prisma.apiKey.update({
+      await withRlsBypass((tx) => tx.apiKey.update({
         where: { id },
         data: { isActive: false, revokedAt: new Date() },
-      });
+      }));
 
       void logAudit(
         null, 'api_key.revoked',
@@ -446,6 +466,13 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
         [{ type: 'api_key', id }],
         parentKey.id,
       );
+
+      void resolveOwnerEmail(target.ownerId ?? target.userId).then((r) => {
+        if (r) {
+          const msg = apiKeyRevokedEmail(target.keyPrefix, target.name ?? 'Unnamed key', r.firstName);
+          void sendEmail(r.to, msg.subject, msg.html);
+        }
+      });
 
       return reply.status(200).send({ revoked: true, id });
     },

@@ -18,6 +18,7 @@
  */
 
 import { prisma }       from './prisma.js';
+import { withTenant }   from './tenantContext.js';
 import { webhookQueue } from './queue.js';
 import { config }       from '../config.js';
 import { logger }       from './logger.js';
@@ -57,10 +58,10 @@ export async function dispatchWebhook(input: DispatchInput): Promise<void> {
     // Find all active webhooks for this key that subscribe to this event.
     // Because Postgres arrays don't support OR-in-array in Prisma natively,
     // we fetch all active webhooks and filter in JS (reasonable for ≤10 webhooks/key).
-    const webhooks = await prisma.webhook.findMany({
+    const webhooks = await withTenant(apiKeyId, (tx) => tx.webhook.findMany({
       where:  { apiKeyId, isActive: true },
       select: { id: true, url: true, secret: true, events: true },
-    });
+    }));
 
     const aliases = EVENT_ALIASES[event] ?? [event];
     const subscribed = webhooks.filter((wh: { id: string; url: string; secret: string; events: string[] }) =>
@@ -104,10 +105,10 @@ async function deliverToEndpoint(
     // Skip if a delivery record already exists for this eventId+webhookId
     // (prevents duplicate deliveries on double-dispatch bugs)
     if (eventId) {
-      const existing = await prisma.webhookDelivery.findFirst({
+      const existing = await withTenant(apiKeyId, (tx) => tx.webhookDelivery.findFirst({
         where:  { webhookId: wh.id, eventId },
         select: { id: true },
-      });
+      }));
       if (existing) {
         logger.debug(
           { webhookId: wh.id, eventId },
@@ -119,7 +120,7 @@ async function deliverToEndpoint(
 
     const prismaEvent = (PRISMA_EVENT_MAP[event] ?? event) as never;
 
-    const delivery = await prisma.webhookDelivery.create({
+    const delivery = await withTenant(apiKeyId, (tx) => tx.webhookDelivery.create({
       data: {
         webhookId:   wh.id,
         event:       prismaEvent,
@@ -128,7 +129,7 @@ async function deliverToEndpoint(
         maxAttempts: config.WEBHOOK_MAX_ATTEMPTS,
       },
       select: { id: true },
-    });
+    }));
 
     await webhookQueue.add(
       'deliver-webhook',

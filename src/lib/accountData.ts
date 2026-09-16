@@ -101,6 +101,8 @@ export async function exportAccountData(apiKeyId: string): Promise<Record<string
       }),
       prisma.monitorCheck.findMany({ where: { monitorId: { in: ids.monitorIds } } }),
       prisma.webhookDelivery.findMany({ where: { webhookId: { in: ids.webhookIds } } }),
+      // tenant-sweep: automationIds itself came from an apiKeyId-scoped query
+      // above (collectOwnedIds) — this is a two-hop scope, not unscoped.
       prisma.automationEnrollment.findMany({ where: { automationId: { in: ids.automationIds } } }),
     ]);
 

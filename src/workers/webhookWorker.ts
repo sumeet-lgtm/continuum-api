@@ -34,6 +34,7 @@ import { Worker, type Job } from 'bullmq';
 import { randomUUID } from 'node:crypto';
 import { redisConnection, QUEUE_WEBHOOK, webhookQueue } from '../lib/queue.js';
 import { prisma } from '../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../lib/tenantContext.js';
 import { hmacSign as signWebhookPayload } from '../lib/crypto.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
@@ -46,10 +47,10 @@ const FAILURE_ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 h between repeated 
 
 async function sendWebhookFailureAlert(webhookId: string, webhookUrl: string, apiKeyId: string, consecutiveFailures: number): Promise<void> {
   try {
-    const apiKey = await prisma.apiKey.findUnique({
+    const apiKey = await withTenant(apiKeyId, (tx) => tx.apiKey.findUnique({
       where: { id: apiKeyId },
       select: { ownerId: true, userId: true, label: true, name: true },
-    });
+    }));
     if (!apiKey) return;
 
     const userId = apiKey.ownerId ?? apiKey.userId;
@@ -76,10 +77,10 @@ async function sendWebhookFailureAlert(webhookId: string, webhookUrl: string, ap
       `,
     });
 
-    await prisma.webhook.update({
+    await withTenant(apiKeyId, (tx) => tx.webhook.update({
       where: { id: webhookId },
       data: { failureAlertSentAt: new Date() },
-    });
+    }));
 
     logger.info({ webhookId, webhookUrl, consecutiveFailures }, 'Webhook failure alert sent');
   } catch (err) {
@@ -141,10 +142,14 @@ async function processWebhookDelivery(job: Job<WebhookDeliveryPayload>): Promise
   const log = logger.child({ deliveryId, webhookId, event, attemptNumber });
 
   // ── Idempotency guard ──────────────────────────────────────────────────────
-  const delivery = await prisma.webhookDelivery.findUnique({
+  // The job carries no apiKeyId — it was enqueued by code that already
+  // validated ownership when the delivery record was created (dispatchWebhook,
+  // /ping, /retry). This worker just processes pre-validated ids off the
+  // queue, same reasoning as the monitor recheck job.
+  const delivery = await withRlsBypass((tx) => tx.webhookDelivery.findUnique({
     where:  { id: deliveryId },
     select: { id: true, delivered: true, failedPermanently: true, attempts: true, maxAttempts: true },
-  });
+  }));
 
   if (!delivery) {
     log.warn('Delivery record not found — skipping');
@@ -220,7 +225,7 @@ async function processWebhookDelivery(job: Job<WebhookDeliveryPayload>): Promise
   }
 
   // ── Write WebhookAttempt log ───────────────────────────────────────────────
-  await prisma.webhookAttempt.create({
+  await withRlsBypass((tx) => tx.webhookAttempt.create({
     data: {
       id:            randomUUID(),
       deliveryId,
@@ -234,13 +239,13 @@ async function processWebhookDelivery(job: Job<WebhookDeliveryPayload>): Promise
       errorMessage:  errorMessage?.slice(0, 500)    ?? null,
       success,
     },
-  });
+  }));
 
   const newAttemptCount = delivery.attempts + 1;
 
   // ── Success path ───────────────────────────────────────────────────────────
   if (success) {
-    await prisma.webhookDelivery.update({
+    await withRlsBypass((tx) => tx.webhookDelivery.update({
       where: { id: deliveryId },
       data: {
         delivered:     true,
@@ -251,9 +256,9 @@ async function processWebhookDelivery(job: Job<WebhookDeliveryPayload>): Promise
         nextRetryAt:   null,
         errorMessage:  null,
       },
-    });
+    }));
 
-    await prisma.webhook.update({
+    await withRlsBypass((tx) => tx.webhook.update({
       where: { id: webhookId },
       data: {
         lastPingAt:         requestedAt,
@@ -263,7 +268,7 @@ async function processWebhookDelivery(job: Job<WebhookDeliveryPayload>): Promise
         consecutiveFailures: 0,    // reset on any successful delivery
         failureAlertSentAt:  null, // allow next failure streak to alert again
       },
-    });
+    }));
 
     log.info('Webhook delivered successfully');
     return;
@@ -272,7 +277,7 @@ async function processWebhookDelivery(job: Job<WebhookDeliveryPayload>): Promise
   // ── Failure path ───────────────────────────────────────────────────────────
   const exhausted = newAttemptCount >= delivery.maxAttempts;
 
-  await prisma.webhookDelivery.update({
+  await withRlsBypass((tx) => tx.webhookDelivery.update({
     where: { id: deliveryId },
     data: {
       attempts:          newAttemptCount,
@@ -283,9 +288,9 @@ async function processWebhookDelivery(job: Job<WebhookDeliveryPayload>): Promise
       failedPermanently: exhausted,
       nextRetryAt:       exhausted ? null : new Date(Date.now() + retryDelayMs(newAttemptCount)),
     },
-  });
+  }));
 
-  const updatedWebhook = await prisma.webhook.update({
+  const updatedWebhook = await withRlsBypass((tx) => tx.webhook.update({
     where: { id: webhookId },
     data: {
       lastPingAt:          requestedAt,
@@ -300,7 +305,7 @@ async function processWebhookDelivery(job: Job<WebhookDeliveryPayload>): Promise
       url:                 true,
       apiKeyId:            true,
     },
-  });
+  }));
 
   if (exhausted) {
     log.warn({ attempts: newAttemptCount, maxAttempts: delivery.maxAttempts }, 'Webhook permanently failed — max attempts reached');

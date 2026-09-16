@@ -206,13 +206,17 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
     const where = { automationId: id, ...(q.status ? { status: q.status } : {}) };
 
+    // `id` was already verified to belong to apiKeyId above (automation.findFirst
+    // with apiKeyId) — automationId here is that same pre-validated id.
     const [items, total] = await Promise.all([
+      // tenant-sweep: see note above — id pre-validated against apiKeyId.
       prisma.automationEnrollment.findMany({
         where,
         orderBy: { enrolledAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
       }),
+      // tenant-sweep: see note above — id pre-validated against apiKeyId.
       prisma.automationEnrollment.count({ where }),
     ]);
 
@@ -227,11 +231,17 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     const automation = await prisma.automation.findFirst({ where: { id, apiKeyId } });
     if (!automation) throw Errors.notFound('Automation not found.');
 
+    // tenant-sweep (all 5 below): `id` pre-validated against apiKeyId above.
     const [total, active, completed, unsubscribed, bounced] = await Promise.all([
+      // tenant-sweep: id pre-validated against apiKeyId above.
       prisma.automationEnrollment.count({ where: { automationId: id } }),
+      // tenant-sweep: id pre-validated against apiKeyId above.
       prisma.automationEnrollment.count({ where: { automationId: id, status: 'active' } }),
+      // tenant-sweep: id pre-validated against apiKeyId above.
       prisma.automationEnrollment.count({ where: { automationId: id, status: 'completed' } }),
+      // tenant-sweep: id pre-validated against apiKeyId above.
       prisma.automationEnrollment.count({ where: { automationId: id, status: 'unsubscribed' } }),
+      // tenant-sweep: id pre-validated against apiKeyId above.
       prisma.automationEnrollment.count({ where: { automationId: id, status: 'bounced' } }),
     ]);
 

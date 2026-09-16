@@ -39,6 +39,8 @@ async function runKeyExpiryWarnings(): Promise<void> {
     for (const key of expiringKeys) {
       // Debounce: check AuditLog so we don't double-send in same window
       const dedupeAction = `api_key.expiry_warning_${daysLeft}d`;
+      // tenant-sweep: dedupe check scoped to this one key's own id
+      // (actorId: key.id) within a cross-tenant expiry sweep by design.
       const recent = await prisma.auditLog.findFirst({
         where: { action: dedupeAction, actorId: key.id, createdAt: { gte: new Date(now.getTime() - 2 * 60 * 60 * 1000) } },
         select: { id: true },

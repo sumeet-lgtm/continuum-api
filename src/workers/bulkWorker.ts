@@ -33,6 +33,7 @@ import { Worker, Queue, type Job } from 'bullmq';
 import { randomUUID } from 'node:crypto';
 import { redisConnection, QUEUE_BULK, webhookQueue } from '../lib/queue.js';
 import { prisma } from '../lib/prisma.js';
+import { withTenant, withRlsBypass } from '../lib/tenantContext.js';
 import { downloadFromStorage, uploadToStorage } from '../lib/supabase.js';
 import { dispatchWebhook, buildEventId } from '../lib/webhooks.js';
 import { verifyEmail } from '../engine/index.js';
@@ -88,10 +89,10 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
   log.info('Bulk job started');
 
   // ── 1. Mark as processing ──────────────────────────────────────────────────
-  await prisma.bulkJob.update({
+  await withTenant(apiKeyId, (tx) => tx.bulkJob.update({
     where: { id: jobId },
     data:  { status: 'processing', startedAt: new Date() },
-  });
+  }));
 
   // ── 2. Download original CSV ───────────────────────────────────────────────
   let fileBuffer: Buffer;
@@ -100,7 +101,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Storage download failed';
     log.error({ err }, 'CSV download failed');
-    await failJob(jobId, msg);
+    await failJob(jobId, apiKeyId, msg);
     return;
   }
 
@@ -108,7 +109,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
   const parsed = parseCsv(fileBuffer.toString('utf-8'));
 
   if (parsed.length === 0) {
-    await failJob(jobId, 'No email rows found in CSV after re-parsing');
+    await failJob(jobId, apiKeyId, 'No email rows found in CSV after re-parsing');
     return;
   }
 
@@ -203,10 +204,10 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
 
   for (let i = 0; i < toVerify.length; i += EMAIL_CONCURRENCY) {
     // Check for cancellation signal on each chunk
-    const fresh = await prisma.bulkJob.findUnique({
+    const fresh = await withTenant(apiKeyId, (tx) => tx.bulkJob.findUnique({
       where:  { id: jobId },
       select: { status: true, cancelledAt: true },
-    });
+    }));
     if ((fresh?.status as string) === 'cancelled' || fresh?.cancelledAt) {
       log.info('Job cancelled — stopping processing');
       // Verifications already performed still count toward the monthly quota
@@ -314,11 +315,11 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
       processedCount === totalToVerify;
 
     if (shouldFlush && rowUpdates.length > 0) {
-      await flushRowUpdates(rowUpdates.splice(0)); // drain the accumulator
-      await prisma.bulkJob.update({
+      await flushRowUpdates(apiKeyId, rowUpdates.splice(0)); // drain the accumulator
+      await withTenant(apiKeyId, (tx) => tx.bulkJob.update({
         where: { id: jobId },
         data:  { processedCount, validCount, invalidCount, riskyCount, unknownCount, errorCount },
-      });
+      }));
 
       const pct = totalToVerify > 0 ? Math.round((processedCount / totalToVerify) * 100) : 100;
       await job.updateProgress(pct);
@@ -328,7 +329,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
 
   // Final flush for any stragglers
   if (rowUpdates.length > 0) {
-    await flushRowUpdates(rowUpdates.splice(0));
+    await flushRowUpdates(apiKeyId, rowUpdates.splice(0));
   }
 
   // ── 7. Build and upload export CSV ────────────────────────────────────────
@@ -388,7 +389,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
   }
 
   // ── 8. Mark completed ─────────────────────────────────────────────────────
-  await prisma.bulkJob.update({
+  await withTenant(apiKeyId, (tx) => tx.bulkJob.update({
     where: { id: jobId },
     data: {
       status:         'completed',
@@ -404,7 +405,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
       exportPath:     exportUploaded ? exportPath : null,
       completedAt:    new Date(),
     },
-  });
+  }));
 
   // Bulk verifications count toward the key's monthly quota
   if (isFinderSourcedJob(storagePath)) {
@@ -431,7 +432,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
 
 // ─── Batch row update ─────────────────────────────────────────────────────────
 
-async function flushRowUpdates(updates: Array<{
+async function flushRowUpdates(apiKeyId: string, updates: Array<{
   id:             string;
   status:         string | null;
   subStatus:      string | null;
@@ -457,9 +458,12 @@ async function flushRowUpdates(updates: Array<{
   // Prisma doesn't support bulk UPDATE with different values per row without raw SQL.
   // We use a transaction with individual updates batched together.
   // For 25-row chunks this is fast enough; if needed, upgrade to raw SQL UNNEST.
-  await prisma.$transaction(
-    updates.map((u) =>
-      prisma.bulkJobEmail.update({
+  // withTenant requires the interactive-callback form (it needs a shared tx
+  // to SET LOCAL the tenant context into), not the array-batch form — same
+  // transactional guarantee, just awaited in sequence instead of pre-built.
+  await withTenant(apiKeyId, async (tx) => {
+    for (const u of updates) {
+      await tx.bulkJobEmail.update({
         where: { id: u.id },
         data: {
           status:         u.status,
@@ -483,9 +487,9 @@ async function flushRowUpdates(updates: Array<{
           errorMessage:   u.errorMessage,
           processedAt:    u.processedAt,
         },
-      }),
-    ),
-  );
+      });
+    }
+  });
 }
 
 // ─── Export CSV builder ───────────────────────────────────────────────────────
@@ -623,23 +627,23 @@ async function dispatchBulkCompleteWebhooks(
     },
   });
 
-  await prisma.bulkJob.update({
+  await withTenant(apiKeyId, (tx) => tx.bulkJob.update({
     where: { id: jobId },
     data:  { webhookSent: true },
-  });
+  }));
 }
 
 // ─── Failure helper ───────────────────────────────────────────────────────────
 
-async function failJob(jobId: string, errorMessage: string): Promise<void> {
-  await prisma.bulkJob.update({
+async function failJob(jobId: string, apiKeyId: string, errorMessage: string): Promise<void> {
+  await withTenant(apiKeyId, (tx) => tx.bulkJob.update({
     where: { id: jobId },
     data: {
       status:       'failed',
       errorMessage: errorMessage.slice(0, 1000),
       completedAt:  new Date(),
     },
-  });
+  }));
   logger.warn({ jobId, errorMessage }, 'Bulk job failed');
 }
 
@@ -653,13 +657,15 @@ async function failJob(jobId: string, errorMessage: string): Promise<void> {
 async function recoverStalledJobs(): Promise<void> {
   const cutoff = new Date(Date.now() - 30 * 60_000); // 30 minutes ago
 
-  const stalled = await prisma.bulkJob.findMany({
+  // tenant-sweep: finds every tenant's stalled jobs, by design — each is
+  // re-scoped to its own apiKeyId below before being written to.
+  const stalled = await withRlsBypass((tx) => tx.bulkJob.findMany({
     where: {
       status:   'processing',
       startedAt: { lt: cutoff },
     },
     select: { id: true, fileName: true, apiKeyId: true, storagePath: true },
-  });
+  }));
 
   if (stalled.length === 0) return;
 
@@ -669,10 +675,10 @@ async function recoverStalledJobs(): Promise<void> {
     // Do NOT reset the counts — the worker resumes from already-processed rows,
     // so keeping the partial progress means a reclaimed job continues instead
     // of re-verifying (and re-charging) everything from zero.
-    await prisma.bulkJob.update({
+    await withTenant(job.apiKeyId, (tx) => tx.bulkJob.update({
       where: { id: job.id },
       data:  { status: 'pending', startedAt: null },
-    });
+    }));
 
     // Re-create the BullMQ job (will no-op if it already exists due to jobId dedup)
     const queue = new Queue<BulkJobPayload>(QUEUE_BULK, { connection: redisConnection });
@@ -710,7 +716,7 @@ function startBulkWorker(): void {
 
   worker.on('failed', (job, err) => {
     logger.error({ jobId: job?.data.jobId, bullJobId: job?.id, err }, 'BullMQ job failed');
-    if (job?.data.jobId) void failJob(job.data.jobId, err.message);
+    if (job?.data.jobId) void failJob(job.data.jobId, job.data.apiKeyId, err.message);
   });
 
   worker.on('error', (err) => {
