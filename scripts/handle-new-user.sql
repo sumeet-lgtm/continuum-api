@@ -1,3 +1,11 @@
+-- REMOVED from prod (ghdkanhhfhxfbskszuqk) on 2026-09-16 — see
+-- scripts/2026-09-16-drop-handle-new-user.sql. Supabase Auth signup was
+-- fully replaced by WorkOS (see routes/auth/index.ts); auth.users had taken
+-- zero new rows since 2026-08-07, and public.profiles (inserted below) was
+-- never actually created, so a live signup here would have silently rolled
+-- back the api_keys insert too — this function only ever ran on a dead path.
+-- Kept below for history.
+--
 -- Signup automation: auth.users INSERT -> profile + free-plan API key.
 -- Applied to prod (ghdkanhhfhxfbskszuqk) on 2026-07-07.
 --
