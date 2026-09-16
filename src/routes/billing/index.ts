@@ -354,10 +354,6 @@ async function applyPlanChange(event: DodoEvent, eventType: string): Promise<voi
     logger.error({ eventType, apiKeyId, userId, email, plan }, 'PAID EVENT MATCHED NO API KEY — reconcile manually');
     return;
   }
-  if (userId) {
-    await prisma.$executeRaw`update profiles set plan = ${plan} where "userId" = ${userId}`
-      .catch(() => { /* profile plan is display-only */ });
-  }
   logger.info({ plan, monthlyLimit, updated, apiKeyId, userId }, 'Plan upgraded via Dodo');
 
   if (email) {
@@ -371,10 +367,6 @@ async function applyDowngrade(event: DodoEvent, eventType: string): Promise<void
   const updated = await updateKeys(
     { apiKeyId, userId, email }, 'free', getPlanLimit('free'), getSendLimit('free'),
   );
-  if (userId) {
-    await prisma.$executeRaw`update profiles set plan = 'free' where "userId" = ${userId}`
-      .catch(() => { /* profile plan is display-only */ });
-  }
   logger.info({ eventType, updated, apiKeyId, userId }, 'Plan downgraded to free via Dodo');
 
   if (email) {

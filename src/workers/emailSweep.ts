@@ -32,7 +32,7 @@ interface KeyRow {
   ownerId: string | null;
   userId: string | null;
   createdAt: Date;
-  email: string | null; // resolved from profiles when ownerId isn't an email
+  email: string | null; // resolved from users when ownerId isn't an email
 }
 
 /** Claim a send slot. Returns false if this email was already sent. */
@@ -69,9 +69,9 @@ export async function runEmailSweep(): Promise<void> {
   try {
     const keys = await prisma.$queryRaw<KeyRow[]>`
       select k.id, k."keyPrefix", k.plan, k."monthlyLimit", k."currentMonthUsage",
-             k."usageResetAt", k."ownerId", k."userId", k."createdAt", p.email
+             k."usageResetAt", k."ownerId", k."userId", k."createdAt", u.email
       from api_keys k
-      left join profiles p on p."userId" = k."userId"
+      left join users u on u.id = k."ownerId"
       where k."isActive" = true`;
 
     const month = new Date().toISOString().slice(0, 7); // YYYY-MM
