@@ -249,6 +249,68 @@ export async function bulkJobRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  // ── GET /v1/bulk-jobs ────────────────────────────────────────────────────────
+  // The dashboard previously had no way to list a tenant's jobs at all and
+  // relied entirely on browser localStorage remembering job IDs client-side —
+  // a job created via the API directly, or from a different browser/device,
+  // was permanently invisible in the UI even though the data existed. Added
+  // after finding this live: uploaded a job via curl, dashboard showed "No
+  // bulk jobs yet" despite the job existing and completing successfully.
+  fastify.get(
+    '/bulk-jobs',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const query = request.query as { page?: string; limit?: string };
+      const page  = Math.max(1, parseInt(query.page ?? '1', 10) || 1);
+      const limit = Math.min(50, Math.max(1, parseInt(query.limit ?? '20', 10) || 20));
+
+      const [jobs, total] = await withTenant(request.apiKey.id, (tx) => Promise.all([
+        tx.bulkJob.findMany({
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * limit,
+          take: limit,
+          select: {
+            id: true, fileName: true, totalEmails: true, processedCount: true,
+            validCount: true, invalidCount: true, riskyCount: true, unknownCount: true,
+            duplicateCount: true, errorCount: true, status: true, errorMessage: true,
+            exportPath: true, createdAt: true, startedAt: true, completedAt: true, cancelledAt: true,
+          },
+        }),
+        tx.bulkJob.count(),
+      ]));
+
+      const data: BulkJobResponse[] = jobs.map((job) => {
+        const pct = job.totalEmails > 0 ? Math.round((job.processedCount / job.totalEmails) * 100) : 0;
+        return {
+          id: job.id,
+          fileName: job.fileName,
+          status: job.status as BulkJobResponse['status'],
+          progress: {
+            total: job.totalEmails,
+            processed: job.processedCount,
+            duplicates: job.duplicateCount,
+            errors: job.errorCount,
+            percentComplete: pct,
+          },
+          results: {
+            valid: job.validCount,
+            invalid: job.invalidCount,
+            risky: job.riskyCount,
+            unknown: job.unknownCount,
+          },
+          errorMessage: job.errorMessage,
+          exportReady: job.status === 'completed' && job.exportPath !== null,
+          createdAt: job.createdAt.toISOString(),
+          startedAt: job.startedAt?.toISOString() ?? null,
+          completedAt: job.completedAt?.toISOString() ?? null,
+          cancelledAt: job.cancelledAt?.toISOString() ?? null,
+        };
+      });
+
+      return reply.status(200).send({ data, page, limit, total });
+    },
+  );
+
   // ── GET /v1/bulk-jobs/:id/results ───────────────────────────────────────────
   // Returns paginated per-email results stored in bulk_job_emails.
   // Does NOT require the export file — results are queryable from DB immediately.
