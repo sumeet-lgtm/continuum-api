@@ -3,16 +3,20 @@ import type { VerificationResult } from '../../types/verification.js';
 
 // ─── Mock all I/O dependencies ────────────────────────────────────────────────
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: any = {
     verification: {
       create: vi.fn().mockResolvedValue({
         id: 'test-id-001',
         checkedAt: new Date('2026-04-24T10:00:00Z'),
       }),
     },
-  },
-}));
+    $disconnect: vi.fn(),
+    $executeRawUnsafe: vi.fn().mockResolvedValue(undefined),
+  };
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  return { prisma, disconnectPrisma: vi.fn() };
+});
 
 vi.mock('../../engine/mx.js', () => ({
   lookupMx: vi.fn(),

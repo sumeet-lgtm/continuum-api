@@ -3,8 +3,8 @@ import type { FastifyInstance } from 'fastify';
 
 // ─── Mock all external I/O ────────────────────────────────────────────────────
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: any = {
     apiKey: { findUnique: vi.fn() },
     webhook: {
       count:      vi.fn(),
@@ -25,9 +25,11 @@ vi.mock('../../lib/prisma.js', () => ({
     },
     webhookAttempt: { create: vi.fn() },
     $disconnect: vi.fn(),
-  },
-  disconnectPrisma: vi.fn(),
-}));
+    $executeRawUnsafe: vi.fn().mockResolvedValue(undefined),
+  };
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  return { prisma, disconnectPrisma: vi.fn() };
+});
 
 vi.mock('../../lib/redis.js', () => ({
   redis: {

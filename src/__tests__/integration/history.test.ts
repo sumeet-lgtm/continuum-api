@@ -3,16 +3,18 @@ import type { FastifyInstance } from 'fastify';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
-    apiKey:       { findUnique: vi.fn() },
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: any = {
+    apiKey:       { findUnique: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     verification: { findMany: vi.fn(), count: vi.fn() },
     monitorCheck: { findMany: vi.fn() },
     webhook:      { findMany: vi.fn().mockResolvedValue([]) },
     $disconnect:  vi.fn(),
-  },
-  disconnectPrisma: vi.fn(),
-}));
+    $executeRawUnsafe: vi.fn().mockResolvedValue(undefined),
+  };
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  return { prisma, disconnectPrisma: vi.fn() };
+});
 
 vi.mock('../../lib/redis.js', () => ({
   redis: { incr: vi.fn().mockResolvedValue(1), expire: vi.fn(), ttl: vi.fn().mockResolvedValue(55), ping: vi.fn().mockResolvedValue('PONG') },

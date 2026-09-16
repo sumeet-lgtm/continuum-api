@@ -14,11 +14,13 @@ vi.mock('../../lib/prisma.js', () => ({
       create:     vi.fn(),
       findUnique: vi.fn(),
       findMany:   vi.fn(),
+      update:     vi.fn(),
     },
     bulkJobEmail: {
       findMany:    vi.fn(),
       createMany:  vi.fn(),
       count:       vi.fn(),
+      update:      vi.fn(),
     },
     webhook: {
       findMany: vi.fn().mockResolvedValue([]),
@@ -27,6 +29,7 @@ vi.mock('../../lib/prisma.js', () => ({
       create: vi.fn(),
     },
     $transaction: vi.fn(),
+    $executeRawUnsafe: vi.fn().mockResolvedValue(undefined),
     $disconnect:  vi.fn(),
   },
   disconnectPrisma: vi.fn(),
