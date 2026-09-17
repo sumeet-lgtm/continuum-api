@@ -37,6 +37,29 @@ export async function withTenant<T>(
 }
 
 /**
+ * Same shape as withTenant, but scopes by WorkOS org id (app.current_org_id)
+ * instead of apiKeyId. Covers the org-admin dashboard surface — org_members,
+ * org_settings, org-scoped audit_logs rows, and org-scoped api_keys reads —
+ * none of which have an apiKeyId available at the point of the request (the
+ * caller authenticated via requireOrgSession/requireOrgAdmin, not an API key).
+ */
+export async function withOrgTenant<T>(
+  orgId: string,
+  fn: (tx: PrismaTx) => Promise<T>,
+): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    // Same defense-in-depth as withTenant: orgId is a WorkOS org id we
+    // already looked up (never raw user input), validated here anyway
+    // since SET LOCAL can't take a bound parameter.
+    if (!/^[a-zA-Z0-9_-]+$/.test(orgId)) {
+      throw new Error(`withOrgTenant: refusing malformed orgId: ${JSON.stringify(orgId)}`);
+    }
+    await tx.$executeRawUnsafe(`SET LOCAL app.current_org_id = '${orgId}'`);
+    return fn(tx);
+  });
+}
+
+/**
  * The explicit, auditable escape hatch for a background worker's
  * legitimate "scan every tenant's due work" queries (sequenceWorker's
  * dueEnrollments, bulkWorker's stalled-job sweep, scheduledChecks' A/B

@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
 import { exportAccountData, deleteAccountData } from '../../lib/accountData.js';
@@ -16,7 +16,10 @@ import { logAudit } from '../../lib/audit.js';
 // authenticated one.
 const deleteSchema = z.object({
   confirm: z.literal('DELETE_MY_ACCOUNT', {
-    errorMap: () => ({ message: "Body must include \"confirm\": \"DELETE_MY_ACCOUNT\" to proceed — this is irreversible." }),
+    errorMap: () => ({
+      message:
+        'Body must include "confirm": "DELETE_MY_ACCOUNT" to proceed — this is irreversible.',
+    }),
   }),
 });
 
@@ -40,16 +43,26 @@ export async function accountRoutes(fastify: FastifyInstance): Promise<void> {
       const page = Math.max(1, parseInt(q.page ?? '1', 10));
       const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
-      const [items, total] = await Promise.all([
-        prisma.auditLog.findMany({
-          where: { apiKeyId },
-          orderBy: { createdAt: 'desc' },
-          skip: (page - 1) * limit,
-          take: limit,
-          select: { id: true, action: true, actorId: true, actorEmail: true, actorIp: true, targets: true, createdAt: true },
-        }),
-        prisma.auditLog.count({ where: { apiKeyId } }),
-      ]);
+      const [items, total] = await withTenant(apiKeyId, (tx) =>
+        Promise.all([
+          tx.auditLog.findMany({
+            where: { apiKeyId },
+            orderBy: { createdAt: 'desc' },
+            skip: (page - 1) * limit,
+            take: limit,
+            select: {
+              id: true,
+              action: true,
+              actorId: true,
+              actorEmail: true,
+              actorIp: true,
+              targets: true,
+              createdAt: true,
+            },
+          }),
+          tx.auditLog.count({ where: { apiKeyId } }),
+        ]),
+      );
 
       return reply.status(200).send({ data: items, total, page, limit });
     },
@@ -65,14 +78,22 @@ export async function accountRoutes(fastify: FastifyInstance): Promise<void> {
       const bundle = await exportAccountData(apiKeyId);
       logger.info({ apiKeyId }, 'Account data export requested');
       void logAudit(
-        null, 'account.data_exported',
-        { id: apiKeyId, email: request.apiKey.label ?? request.apiKey.name ?? request.apiKey.keyPrefix, ip: request.ip },
+        null,
+        'account.data_exported',
+        {
+          id: apiKeyId,
+          email: request.apiKey.label ?? request.apiKey.name ?? request.apiKey.keyPrefix,
+          ip: request.ip,
+        },
         [{ type: 'api_key', id: apiKeyId }],
         apiKeyId,
       );
       return reply
         .status(200)
-        .header('Content-Disposition', `attachment; filename="continuum-account-export-${apiKeyId}.json"`)
+        .header(
+          'Content-Disposition',
+          `attachment; filename="continuum-account-export-${apiKeyId}.json"`,
+        )
         .send(bundle);
     },
   );
@@ -89,21 +110,30 @@ export async function accountRoutes(fastify: FastifyInstance): Promise<void> {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const parsed = deleteSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw Errors.validationFailed(parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })));
+        throw Errors.validationFailed(
+          parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        );
       }
 
       const apiKeyId = request.apiKey.id;
       const counts = await deleteAccountData(apiKeyId);
 
-      await prisma.apiKey.update({
-        where: { id: apiKeyId },
-        data: { isActive: false, revokedAt: new Date() },
-      });
+      await withTenant(apiKeyId, (tx) =>
+        tx.apiKey.update({
+          where: { id: apiKeyId },
+          data: { isActive: false, revokedAt: new Date() },
+        }),
+      );
 
       logger.warn({ apiKeyId, counts }, 'Account deleted via self-service DELETE /v1/account');
       void logAudit(
-        null, 'account.deleted',
-        { id: apiKeyId, email: request.apiKey.label ?? request.apiKey.name ?? request.apiKey.keyPrefix, ip: request.ip },
+        null,
+        'account.deleted',
+        {
+          id: apiKeyId,
+          email: request.apiKey.label ?? request.apiKey.name ?? request.apiKey.keyPrefix,
+          ip: request.ip,
+        },
         [{ type: 'api_key', id: apiKeyId }],
         apiKeyId,
       );

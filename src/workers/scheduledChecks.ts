@@ -6,7 +6,8 @@
  *   1. API key expiry warnings — 7-day and 1-day advance emails
  */
 
-import { Worker, Queue, type Job } from 'bullmq';
+import type { Queue } from 'bullmq';
+import { Worker, type Job } from 'bullmq';
 import { redisConnection } from '../lib/queue.js';
 import { prisma } from '../lib/prisma.js';
 import { sendEmail } from '../lib/email.js';
@@ -21,30 +22,48 @@ const QUEUE_DAILY = 'continuum:daily-checks';
 const EXPIRY_WARN_DAYS = [7, 1]; // fire at 7 days and 1 day before expiry
 
 async function runKeyExpiryWarnings(): Promise<void> {
-  const now  = new Date();
+  const now = new Date();
   const sent: string[] = [];
 
   for (const daysLeft of EXPIRY_WARN_DAYS) {
     const windowStart = new Date(now.getTime() + daysLeft * 24 * 60 * 60 * 1000 - 30 * 60 * 1000); // ±30min window
-    const windowEnd   = new Date(now.getTime() + daysLeft * 24 * 60 * 60 * 1000 + 30 * 60 * 1000);
+    const windowEnd = new Date(now.getTime() + daysLeft * 24 * 60 * 60 * 1000 + 30 * 60 * 1000);
 
-    const expiringKeys = await prisma.apiKey.findMany({
-      where: {
-        isActive: true,
-        expiresAt: { gte: windowStart, lte: windowEnd },
-      },
-      select: { id: true, label: true, name: true, keyPrefix: true, expiresAt: true, ownerId: true, userId: true },
-    });
+    // Cross-tenant sweep by design (must see every tenant's expiring keys in
+    // one query) — withRlsBypass, same reasoning as the A/B sweep below.
+    const expiringKeys = await withRlsBypass((tx) =>
+      tx.apiKey.findMany({
+        where: {
+          isActive: true,
+          expiresAt: { gte: windowStart, lte: windowEnd },
+        },
+        select: {
+          id: true,
+          label: true,
+          name: true,
+          keyPrefix: true,
+          expiresAt: true,
+          ownerId: true,
+          userId: true,
+        },
+      }),
+    );
 
     for (const key of expiringKeys) {
       // Debounce: check AuditLog so we don't double-send in same window
       const dedupeAction = `api_key.expiry_warning_${daysLeft}d`;
-      // tenant-sweep: dedupe check scoped to this one key's own id
-      // (actorId: key.id) within a cross-tenant expiry sweep by design.
-      const recent = await prisma.auditLog.findFirst({
-        where: { action: dedupeAction, actorId: key.id, createdAt: { gte: new Date(now.getTime() - 2 * 60 * 60 * 1000) } },
-        select: { id: true },
-      });
+      // Keyed by actorId, not the apiKeyId column (this row doesn't set
+      // one) — withRlsBypass, same as bounceHandling.ts's alert dedupe.
+      const recent = await withRlsBypass((tx) =>
+        tx.auditLog.findFirst({
+          where: {
+            action: dedupeAction,
+            actorId: key.id,
+            createdAt: { gte: new Date(now.getTime() - 2 * 60 * 60 * 1000) },
+          },
+          select: { id: true },
+        }),
+      );
       if (recent) continue;
 
       const userId = key.ownerId ?? key.userId;
@@ -58,9 +77,10 @@ async function runKeyExpiryWarnings(): Promise<void> {
 
       await sendEmail({
         to: user.email,
-        subject: daysLeft === 1
-          ? `Your API key expires tomorrow — rotate it now`
-          : `Your API key expires in ${daysLeft} days`,
+        subject:
+          daysLeft === 1
+            ? `Your API key expires tomorrow — rotate it now`
+            : `Your API key expires in ${daysLeft} days`,
         html: `
           <p>Hi,</p>
           <p>Your Continuum API key is expiring ${daysLeft === 1 ? 'tomorrow' : `in ${daysLeft} days`}:</p>
@@ -74,14 +94,16 @@ async function runKeyExpiryWarnings(): Promise<void> {
         `,
       });
 
-      await prisma.auditLog.create({
-        data: {
-          action:     dedupeAction,
-          actorId:    key.id,
-          actorEmail: keyLabel,
-          targets:    [{ type: 'api_key', id: key.id, name: keyLabel }],
-        },
-      }).catch(() => {});
+      await withRlsBypass((tx) =>
+        tx.auditLog.create({
+          data: {
+            action: dedupeAction,
+            actorId: key.id,
+            actorEmail: keyLabel,
+            targets: [{ type: 'api_key', id: key.id, name: keyLabel }],
+          },
+        }),
+      ).catch(() => {});
 
       sent.push(`${keyLabel} (${daysLeft}d)`);
     }
@@ -95,10 +117,13 @@ async function runKeyExpiryWarnings(): Promise<void> {
 // ─── Auto-revoke expired keys ──────────────────────────────────────────────────
 
 async function revokeExpiredKeys(): Promise<void> {
-  const result = await prisma.apiKey.updateMany({
-    where: { isActive: true, expiresAt: { lte: new Date() } },
-    data:  { isActive: false, revokedAt: new Date() },
-  });
+  // Cross-tenant sweep by design — withRlsBypass.
+  const result = await withRlsBypass((tx) =>
+    tx.apiKey.updateMany({
+      where: { isActive: true, expiresAt: { lte: new Date() } },
+      data: { isActive: false, revokedAt: new Date() },
+    }),
+  );
   if (result.count > 0) {
     logger.info({ count: result.count }, 'Expired API keys auto-revoked');
   }
@@ -113,22 +138,30 @@ async function runABWinnerPick(): Promise<void> {
   // its downstream campaignRecipient update below via withTenant. withRlsBypass
   // here (not withTenant, no single tenant to scope to) — this must see every
   // tenant's due-for-winner-pick campaigns in one query.
-  const campaigns = await withRlsBypass((tx) => tx.campaign.findMany({
-    where: {
-      status: 'sent',
-      subjectB: { not: null },
-      sentAt: { lte: fourHoursAgo },
-    },
-    select: { id: true, apiKeyId: true, openCount: true, openCountB: true },
-  }));
+  const campaigns = await withRlsBypass((tx) =>
+    tx.campaign.findMany({
+      where: {
+        status: 'sent',
+        subjectB: { not: null },
+        sentAt: { lte: fourHoursAgo },
+      },
+      select: { id: true, apiKeyId: true, openCount: true, openCountB: true },
+    }),
+  );
 
   let picked = 0;
   for (const c of campaigns) {
-    // Skip if already auto-picked (check audit log)
-    const existing = await prisma.auditLog.findFirst({
-      where: { action: 'campaign.ab_winner_auto_picked', apiKeyId: c.apiKeyId },
-      select: { id: true, targets: true },
-    });
+    // c.apiKeyId is a real per-row tenant — withTenant to re-scope down
+    // from the cross-tenant sweep above, per tenantContext.ts's own doc
+    // comment on this exact pattern (unlike the actorId-keyed rows above,
+    // this row does set the apiKeyId column, so tenant_isolation's normal
+    // match applies here).
+    const existing = await withTenant(c.apiKeyId, (tx) =>
+      tx.auditLog.findFirst({
+        where: { action: 'campaign.ab_winner_auto_picked', apiKeyId: c.apiKeyId },
+        select: { id: true, targets: true },
+      }),
+    );
     if (existing && JSON.stringify(existing.targets).includes(c.id)) continue;
 
     // Need at least 20 total opens before picking
@@ -136,26 +169,33 @@ async function runABWinnerPick(): Promise<void> {
     if (totalOpens < 20) continue;
 
     const winner: 'a' | 'b' = c.openCount >= c.openCountB ? 'a' : 'b';
-    const loser:  'a' | 'b' = winner === 'a' ? 'b' : 'a';
+    const loser: 'a' | 'b' = winner === 'a' ? 'b' : 'a';
 
     // Flip any remaining pending loser recipients to winner variant
-    await withTenant(c.apiKeyId, (tx) => tx.campaignRecipient.updateMany({
-      where: { campaignId: c.id, variant: loser, status: 'pending' },
-      data:  { variant: winner },
-    }));
+    await withTenant(c.apiKeyId, (tx) =>
+      tx.campaignRecipient.updateMany({
+        where: { campaignId: c.id, variant: loser, status: 'pending' },
+        data: { variant: winner },
+      }),
+    );
 
-    await prisma.auditLog.create({
-      data: {
-        apiKeyId:   c.apiKeyId,
-        action:     'campaign.ab_winner_auto_picked',
-        actorId:    'system',
-        actorEmail: 'system@continuumapi.com',
-        targets:    [{ type: 'campaign', id: c.id, name: `auto winner: ${winner.toUpperCase()}` }],
-      },
-    }).catch(() => {});
+    await withTenant(c.apiKeyId, (tx) =>
+      tx.auditLog.create({
+        data: {
+          apiKeyId: c.apiKeyId,
+          action: 'campaign.ab_winner_auto_picked',
+          actorId: 'system',
+          actorEmail: 'system@continuumapi.com',
+          targets: [{ type: 'campaign', id: c.id, name: `auto winner: ${winner.toUpperCase()}` }],
+        },
+      }),
+    ).catch(() => {});
 
     picked++;
-    logger.info({ campaignId: c.id, winner, openCount: c.openCount, openCountB: c.openCountB }, 'A/B winner auto-picked by daily checks');
+    logger.info(
+      { campaignId: c.id, winner, openCount: c.openCount, openCountB: c.openCountB },
+      'A/B winner auto-picked by daily checks',
+    );
   }
 
   if (picked > 0) logger.info({ picked }, 'A/B auto-winner picks completed');
@@ -179,8 +219,8 @@ export async function scheduleDailyChecks(queue: Queue): Promise<void> {
     'daily-checks',
     {},
     {
-      repeat:   { pattern: '0 6 * * *' }, // every day at 06:00 UTC
-      jobId:    'daily-checks-singleton',
+      repeat: { pattern: '0 6 * * *' }, // every day at 06:00 UTC
+      jobId: 'daily-checks-singleton',
       priority: 10,
     },
   );
@@ -189,8 +229,8 @@ export async function scheduleDailyChecks(queue: Queue): Promise<void> {
 
 export function startDailyChecksWorker(): { close(): Promise<void> } {
   const worker = new Worker(QUEUE_DAILY, runDailyChecks, {
-    connection:      redisConnection,
-    concurrency:     1,
+    connection: redisConnection,
+    concurrency: 1,
     stalledInterval: 120_000,
   });
 

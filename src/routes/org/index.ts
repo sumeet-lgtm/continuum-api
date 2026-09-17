@@ -1,11 +1,11 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WorkOS } from '@workos-inc/node';
 import { z } from 'zod';
-import { prisma } from '../../lib/prisma.js';
 import { config } from '../../config.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { requireOrgSession, requireOrgAdmin } from '../../plugins/auth.js';
 import { logAudit } from '../../lib/audit.js';
+import { withOrgTenant, withRlsBypass } from '../../lib/tenantContext.js';
 
 let _workos: WorkOS | null = null;
 
@@ -32,179 +32,250 @@ const updateSettingsSchema = z.object({
 });
 
 export async function orgRoutes(fastify: FastifyInstance): Promise<void> {
-
   // ── GET /org ──────────────────────────────────────────────────────────────
-  fastify.get('/org', { preHandler: [requireOrgSession] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { orgId } = request.sessionUser!;
-    if (!orgId) {
-      return reply.send({ orgId: null, configured: false, message: 'Not part of an organization' });
-    }
+  fastify.get(
+    '/org',
+    { preHandler: [requireOrgSession] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { orgId } = request.sessionUser!;
+      if (!orgId) {
+        return reply.send({
+          orgId: null,
+          configured: false,
+          message: 'Not part of an organization',
+        });
+      }
 
-    const [settings, memberCount] = await Promise.all([
-      prisma.orgSettings.findUnique({ where: { orgId } }),
-      prisma.orgMember.count({ where: { orgId, status: 'active' } }),
-    ]);
+      const [settings, memberCount] = await withOrgTenant(orgId, (tx) =>
+        Promise.all([
+          tx.orgSettings.findUnique({ where: { orgId } }),
+          tx.orgMember.count({ where: { orgId, status: 'active' } }),
+        ]),
+      );
 
-    let org: { name?: string; domains?: Array<{ domain: string }> } | null = null;
-    try {
-      org = await getWorkOS().organizations.getOrganization(orgId) as { name?: string; domains?: Array<{ domain: string }> };
-    } catch {
-      // WorkOS org may not exist yet — fallback to local data
-    }
+      let org: { name?: string; domains?: Array<{ domain: string }> } | null = null;
+      try {
+        org = (await getWorkOS().organizations.getOrganization(orgId)) as {
+          name?: string;
+          domains?: Array<{ domain: string }>;
+        };
+      } catch {
+        // WorkOS org may not exist yet — fallback to local data
+      }
 
-    return reply.send({
-      orgId,
-      name: settings?.name ?? org?.name ?? null,
-      domain: settings?.domain ?? org?.domains?.[0]?.domain ?? null,
-      mfaRequired: settings?.mfaRequired ?? false,
-      memberCount,
-      configured: true,
-    });
-  });
+      return reply.send({
+        orgId,
+        name: settings?.name ?? org?.name ?? null,
+        domain: settings?.domain ?? org?.domains?.[0]?.domain ?? null,
+        mfaRequired: settings?.mfaRequired ?? false,
+        memberCount,
+        configured: true,
+      });
+    },
+  );
 
   // ── GET /org/members ──────────────────────────────────────────────────────
-  fastify.get('/org/members', { preHandler: [requireOrgSession] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { orgId } = request.sessionUser!;
-    if (!orgId) throw Errors.forbidden('Not part of an organization');
+  fastify.get(
+    '/org/members',
+    { preHandler: [requireOrgSession] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { orgId } = request.sessionUser!;
+      if (!orgId) throw Errors.forbidden('Not part of an organization');
 
-    const members = await prisma.orgMember.findMany({
-      where: { orgId, status: 'active' },
-      orderBy: { createdAt: 'asc' },
-    });
+      const members = await withOrgTenant(orgId, (tx) =>
+        tx.orgMember.findMany({
+          where: { orgId, status: 'active' },
+          orderBy: { createdAt: 'asc' },
+        }),
+      );
 
-    return reply.send({ data: members, total: members.length });
-  });
+      return reply.send({ data: members, total: members.length });
+    },
+  );
 
   // ── POST /org/invitations ─────────────────────────────────────────────────
-  fastify.post('/org/invitations', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { orgId, userId, email: actorEmail } = request.sessionUser!;
-    if (!orgId) throw Errors.forbidden('Not part of an organization');
+  fastify.post(
+    '/org/invitations',
+    { preHandler: [requireOrgAdmin] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { orgId, userId, email: actorEmail } = request.sessionUser!;
+      if (!orgId) throw Errors.forbidden('Not part of an organization');
 
-    const parsed = inviteSchema.safeParse(request.body);
-    if (!parsed.success) {
-      throw Errors.validationFailed(parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })));
-    }
+      const parsed = inviteSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw Errors.validationFailed(
+          parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        );
+      }
 
-    const { email, role } = parsed.data;
+      const { email, role } = parsed.data;
 
-    const invitation = await getWorkOS().userManagement.sendInvitation({
-      email,
-      organizationId: orgId,
-      roleSlug: role,
-      inviterUserId: userId,
-    });
+      const invitation = await getWorkOS().userManagement.sendInvitation({
+        email,
+        organizationId: orgId,
+        roleSlug: role,
+        inviterUserId: userId,
+      });
 
-    void logAudit(orgId, 'member.invited', { id: userId, email: actorEmail, ip: request.ip }, [
-      { type: 'user', id: email, name: email },
-    ]);
+      void logAudit(orgId, 'member.invited', { id: userId, email: actorEmail, ip: request.ip }, [
+        { type: 'user', id: email, name: email },
+      ]);
 
-    return reply.status(201).send({ id: invitation.id, email: invitation.email, state: invitation.state });
-  });
+      return reply
+        .status(201)
+        .send({ id: invitation.id, email: invitation.email, state: invitation.state });
+    },
+  );
 
   // ── GET /org/invitations ──────────────────────────────────────────────────
-  fastify.get('/org/invitations', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { orgId } = request.sessionUser!;
-    if (!orgId) throw Errors.forbidden('Not part of an organization');
+  fastify.get(
+    '/org/invitations',
+    { preHandler: [requireOrgAdmin] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { orgId } = request.sessionUser!;
+      if (!orgId) throw Errors.forbidden('Not part of an organization');
 
-    const invitations = await getWorkOS().userManagement.listInvitations({ organizationId: orgId });
+      const invitations = await getWorkOS().userManagement.listInvitations({
+        organizationId: orgId,
+      });
 
-    return reply.send({ data: invitations.data, total: invitations.data.length });
-  });
+      return reply.send({ data: invitations.data, total: invitations.data.length });
+    },
+  );
 
   // ── DELETE /org/invitations/:id ───────────────────────────────────────────
-  fastify.delete<{ Params: { id: string } }>('/org/invitations/:id', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-    const { orgId } = request.sessionUser!;
-    if (!orgId) throw Errors.forbidden('Not part of an organization');
+  fastify.delete<{ Params: { id: string } }>(
+    '/org/invitations/:id',
+    { preHandler: [requireOrgAdmin] },
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const { orgId } = request.sessionUser!;
+      if (!orgId) throw Errors.forbidden('Not part of an organization');
 
-    await getWorkOS().userManagement.revokeInvitation(request.params.id);
-    return reply.send({ id: request.params.id, revoked: true });
-  });
+      await getWorkOS().userManagement.revokeInvitation(request.params.id);
+      return reply.send({ id: request.params.id, revoked: true });
+    },
+  );
 
   // ── PATCH /org/members/:membershipId ──────────────────────────────────────
-  fastify.patch<{ Params: { membershipId: string } }>('/org/members/:membershipId', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest<{ Params: { membershipId: string } }>, reply: FastifyReply) => {
-    const { orgId, userId, email: actorEmail } = request.sessionUser!;
-    if (!orgId) throw Errors.forbidden('Not part of an organization');
+  fastify.patch<{ Params: { membershipId: string } }>(
+    '/org/members/:membershipId',
+    { preHandler: [requireOrgAdmin] },
+    async (request: FastifyRequest<{ Params: { membershipId: string } }>, reply: FastifyReply) => {
+      const { orgId, userId, email: actorEmail } = request.sessionUser!;
+      if (!orgId) throw Errors.forbidden('Not part of an organization');
 
-    const parsed = updateMemberSchema.safeParse(request.body);
-    if (!parsed.success) {
-      throw Errors.validationFailed(parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })));
-    }
+      const parsed = updateMemberSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw Errors.validationFailed(
+          parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        );
+      }
 
-    const { role } = parsed.data;
-    const membershipId = request.params.membershipId;
+      const { role } = parsed.data;
+      const membershipId = request.params.membershipId;
 
-    await getWorkOS().userManagement.updateOrganizationMembership(membershipId, {
-      roleSlug: role,
-    });
-    await prisma.orgMember.update({
-      where: { membershipId },
-      data: { role },
-    });
+      await getWorkOS().userManagement.updateOrganizationMembership(membershipId, {
+        roleSlug: role,
+      });
+      await withOrgTenant(orgId, (tx) =>
+        tx.orgMember.update({
+          where: { membershipId },
+          data: { role },
+        }),
+      );
 
-    void logAudit(orgId, 'member.role_changed', { id: userId, email: actorEmail, ip: request.ip }, [
-      { type: 'membership', id: membershipId },
-    ]);
+      void logAudit(
+        orgId,
+        'member.role_changed',
+        { id: userId, email: actorEmail, ip: request.ip },
+        [{ type: 'membership', id: membershipId }],
+      );
 
-    return reply.send({ membershipId, role, updated: true });
-  });
+      return reply.send({ membershipId, role, updated: true });
+    },
+  );
 
   // ── DELETE /org/members/:membershipId ─────────────────────────────────────
-  fastify.delete<{ Params: { membershipId: string } }>('/org/members/:membershipId', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest<{ Params: { membershipId: string } }>, reply: FastifyReply) => {
-    const { orgId, userId, email: actorEmail } = request.sessionUser!;
-    if (!orgId) throw Errors.forbidden('Not part of an organization');
+  fastify.delete<{ Params: { membershipId: string } }>(
+    '/org/members/:membershipId',
+    { preHandler: [requireOrgAdmin] },
+    async (request: FastifyRequest<{ Params: { membershipId: string } }>, reply: FastifyReply) => {
+      const { orgId, userId, email: actorEmail } = request.sessionUser!;
+      if (!orgId) throw Errors.forbidden('Not part of an organization');
 
-    const membershipId = request.params.membershipId;
+      const membershipId = request.params.membershipId;
 
-    await getWorkOS().userManagement.deactivateOrganizationMembership(membershipId);
-    await prisma.orgMember.update({
-      where: { membershipId },
-      data: { status: 'inactive' },
-    });
+      await getWorkOS().userManagement.deactivateOrganizationMembership(membershipId);
+      await withOrgTenant(orgId, (tx) =>
+        tx.orgMember.update({
+          where: { membershipId },
+          data: { status: 'inactive' },
+        }),
+      );
 
-    void logAudit(orgId, 'member.removed', { id: userId, email: actorEmail, ip: request.ip }, [
-      { type: 'membership', id: membershipId },
-    ]);
+      void logAudit(orgId, 'member.removed', { id: userId, email: actorEmail, ip: request.ip }, [
+        { type: 'membership', id: membershipId },
+      ]);
 
-    return reply.send({ membershipId, removed: true });
-  });
+      return reply.send({ membershipId, removed: true });
+    },
+  );
 
   // ── PATCH /org/settings ───────────────────────────────────────────────────
-  fastify.patch('/org/settings', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { orgId, userId, email: actorEmail } = request.sessionUser!;
-    if (!orgId) throw Errors.forbidden('Not part of an organization');
+  fastify.patch(
+    '/org/settings',
+    { preHandler: [requireOrgAdmin] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { orgId, userId, email: actorEmail } = request.sessionUser!;
+      if (!orgId) throw Errors.forbidden('Not part of an organization');
 
-    const parsed = updateSettingsSchema.safeParse(request.body);
-    if (!parsed.success) {
-      throw Errors.validationFailed(parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })));
-    }
+      const parsed = updateSettingsSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw Errors.validationFailed(
+          parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        );
+      }
 
-    const { name, mfaRequired } = parsed.data;
+      const { name, mfaRequired } = parsed.data;
 
-    const settings = await prisma.orgSettings.upsert({
-      where: { orgId },
-      create: { orgId, name: name ?? null, mfaRequired: mfaRequired ?? false },
-      update: { ...(name !== undefined ? { name } : {}), ...(mfaRequired !== undefined ? { mfaRequired } : {}) },
-    });
+      const settings = await withOrgTenant(orgId, (tx) =>
+        tx.orgSettings.upsert({
+          where: { orgId },
+          create: { orgId, name: name ?? null, mfaRequired: mfaRequired ?? false },
+          update: {
+            ...(name !== undefined ? { name } : {}),
+            ...(mfaRequired !== undefined ? { mfaRequired } : {}),
+          },
+        }),
+      );
 
-    void logAudit(orgId, 'org.settings_updated', { id: userId, email: actorEmail, ip: request.ip }, [
-      { type: 'org', id: orgId },
-    ]);
+      void logAudit(
+        orgId,
+        'org.settings_updated',
+        { id: userId, email: actorEmail, ip: request.ip },
+        [{ type: 'org', id: orgId }],
+      );
 
-    return reply.send(settings);
-  });
+      return reply.send(settings);
+    },
+  );
 
   // ── POST /org/portal ──────────────────────────────────────────────────────
-  fastify.post('/org/portal', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { orgId } = request.sessionUser!;
-    if (!orgId) throw Errors.forbidden('Not part of an organization');
+  fastify.post(
+    '/org/portal',
+    { preHandler: [requireOrgAdmin] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { orgId } = request.sessionUser!;
+      if (!orgId) throw Errors.forbidden('Not part of an organization');
 
-    const { link } = await getWorkOS().adminPortal.generateLink({
-      organization: orgId,
-      intent: 'sso',
-    });
+      const { link } = await getWorkOS().adminPortal.generateLink({
+        organization: orgId,
+        intent: 'sso',
+      });
 
-    return reply.send({ link, organizationId: orgId });
-  });
+      return reply.send({ link, organizationId: orgId });
+    },
+  );
 
   // ── GET /org/audit-logs/events ────────────────────────────────────────────
   // Local DB table — works for every user regardless of WorkOS/org config.
@@ -222,22 +293,27 @@ export async function orgRoutes(fastify: FastifyInstance): Promise<void> {
         ...(before ? { createdAt: { lt: before } } : {}),
       };
 
-      const [rows, total] = await Promise.all([
-        // `where` above is scoped to this session's own orgId or userId —
-        // session-based auth (requireOrgSession), not an apiKeyId directly.
-        // tenant-sweep: scoped via the dynamic `where` built above.
-        prisma.auditLog.findMany({
-          where,
-          orderBy: { createdAt: 'desc' },
-          take: limit + 1,
-        }),
-        // tenant-sweep: same scope as above.
-        prisma.auditLog.count({ where: orgId ? { orgId } : { actorId: userId } }),
-      ]);
+      // orgId can be null (user isn't part of any org yet), in which case
+      // this falls back to an actorId-only view — neither withTenant nor
+      // withOrgTenant applies to that case (no apiKeyId or orgId context
+      // exists at all), so this uses withRlsBypass with the app-level
+      // `where` above doing the actual scoping, same as the identity-
+      // discovery reads in auth/index.ts.
+      const [rows, total] = await withRlsBypass((tx) =>
+        Promise.all([
+          tx.auditLog.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            take: limit + 1,
+          }),
+          tx.auditLog.count({ where: orgId ? { orgId } : { actorId: userId } }),
+        ]),
+      );
 
       const hasMore = rows.length > limit;
       if (hasMore) rows.pop();
-      const nextBefore = hasMore && rows.length > 0 ? rows[rows.length - 1]!.createdAt.toISOString() : null;
+      const nextBefore =
+        hasMore && rows.length > 0 ? rows[rows.length - 1]!.createdAt.toISOString() : null;
 
       return reply.send({ data: rows, total, hasMore, nextBefore });
     },
@@ -245,23 +321,36 @@ export async function orgRoutes(fastify: FastifyInstance): Promise<void> {
 
   // ── GET /org/audit-logs ───────────────────────────────────────────────────
   // WorkOS export — requires org admin + WorkOS Audit Logs integration.
-  fastify.get('/org/audit-logs', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { orgId } = request.sessionUser!;
-    if (!orgId) throw Errors.forbidden('Not part of an organization');
+  fastify.get(
+    '/org/audit-logs',
+    { preHandler: [requireOrgAdmin] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { orgId } = request.sessionUser!;
+      if (!orgId) throw Errors.forbidden('Not part of an organization');
 
-    try {
-      const workos = getWorkOS();
-      const exportResult = await workos.auditLogs.createExport({
-        organizationId: orgId,
-        rangeStart: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-        rangeEnd: new Date(),
-      });
+      try {
+        const workos = getWorkOS();
+        const exportResult = await workos.auditLogs.createExport({
+          organizationId: orgId,
+          rangeStart: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+          rangeEnd: new Date(),
+        });
 
-      return reply.send({ exportId: exportResult.id, state: exportResult.state, url: exportResult.url ?? null });
-    } catch {
-      return reply.send({ exportId: null, state: 'unavailable', url: null, message: 'Audit logs not yet configured for this organization.' });
-    }
-  });
+        return reply.send({
+          exportId: exportResult.id,
+          state: exportResult.state,
+          url: exportResult.url ?? null,
+        });
+      } catch {
+        return reply.send({
+          exportId: null,
+          state: 'unavailable',
+          url: null,
+          message: 'Audit logs not yet configured for this organization.',
+        });
+      }
+    },
+  );
 
   // ── GET /org/api-keys ──────────────────────────────────────────────────────
   // Previously nothing let an org admin see, let alone act on, the actual
@@ -270,44 +359,72 @@ export async function orgRoutes(fastify: FastifyInstance): Promise<void> {
   // This and the endpoint below are the first real teeth on that: an org
   // admin can now see every key tagged with their org and revoke one,
   // the same way they could already remove a member's org access.
-  fastify.get('/org/api-keys', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { orgId } = request.sessionUser!;
-    if (!orgId) throw Errors.forbidden('Not part of an organization');
+  fastify.get(
+    '/org/api-keys',
+    { preHandler: [requireOrgAdmin] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { orgId } = request.sessionUser!;
+      if (!orgId) throw Errors.forbidden('Not part of an organization');
 
-    const keys = await prisma.apiKey.findMany({
-      where: { orgId },
-      orderBy: { createdAt: 'asc' },
-      select: {
-        id: true, keyPrefix: true, name: true, label: true, permission: true,
-        plan: true, isActive: true, revokedAt: true, createdAt: true, lastUsedAt: true,
-      },
-    });
+      const keys = await withOrgTenant(orgId, (tx) =>
+        tx.apiKey.findMany({
+          where: { orgId },
+          orderBy: { createdAt: 'asc' },
+          select: {
+            id: true,
+            keyPrefix: true,
+            name: true,
+            label: true,
+            permission: true,
+            plan: true,
+            isActive: true,
+            revokedAt: true,
+            createdAt: true,
+            lastUsedAt: true,
+          },
+        }),
+      );
 
-    return reply.send({ data: keys, total: keys.length });
-  });
+      return reply.send({ data: keys, total: keys.length });
+    },
+  );
 
   // ── DELETE /org/api-keys/:id ───────────────────────────────────────────────
-  fastify.delete<{ Params: { id: string } }>('/org/api-keys/:id', { preHandler: [requireOrgAdmin] }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-    const { orgId, userId, email: actorEmail } = request.sessionUser!;
-    if (!orgId) throw Errors.forbidden('Not part of an organization');
+  fastify.delete<{ Params: { id: string } }>(
+    '/org/api-keys/:id',
+    { preHandler: [requireOrgAdmin] },
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const { orgId, userId, email: actorEmail } = request.sessionUser!;
+      if (!orgId) throw Errors.forbidden('Not part of an organization');
 
-    const { id } = request.params;
+      const { id } = request.params;
 
-    // Scoped to this org specifically — both "doesn't exist" and "exists
-    // but belongs to a different org" return the same 404, rather than
-    // confirming which, the same reasoning as the suppressions delete fix.
-    const target = await prisma.apiKey.findFirst({ where: { id, orgId }, select: { id: true, isActive: true } });
-    if (!target) throw Errors.notFound('API key not found in this organization.');
+      // Scoped to this org specifically — both "doesn't exist" and "exists
+      // but belongs to a different org" return the same 404, rather than
+      // confirming which, the same reasoning as the suppressions delete fix.
+      const revoked = await withOrgTenant(orgId, async (tx) => {
+        const target = await tx.apiKey.findFirst({
+          where: { id, orgId },
+          select: { id: true, isActive: true },
+        });
+        if (!target) return null;
+        await tx.apiKey.update({
+          where: { id },
+          data: { isActive: false, revokedAt: new Date() },
+        });
+        return target;
+      });
+      if (!revoked) throw Errors.notFound('API key not found in this organization.');
 
-    await prisma.apiKey.update({
-      where: { id },
-      data: { isActive: false, revokedAt: new Date() },
-    });
+      void logAudit(
+        orgId,
+        'api_key.revoked_by_org_admin',
+        { id: userId, email: actorEmail, ip: request.ip },
+        [{ type: 'api_key', id }],
+        id,
+      );
 
-    void logAudit(orgId, 'api_key.revoked_by_org_admin', { id: userId, email: actorEmail, ip: request.ip }, [
-      { type: 'api_key', id },
-    ], id);
-
-    return reply.send({ id, revoked: true });
-  });
+      return reply.send({ id, revoked: true });
+    },
+  );
 }

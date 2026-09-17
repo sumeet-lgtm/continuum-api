@@ -18,13 +18,13 @@ import { monitorQueue } from './queue.js';
 import type { MonitorRecheckPayload } from '../types/job.js';
 import { withTenant, withRlsBypass } from './tenantContext.js';
 
-const BOUNCE_WARN_PCT          = 2.0;
-const BOUNCE_DANGER_PCT        = 5.0;
-const COMPLAINT_WARN_PCT       = 0.08;  // Gmail/Yahoo threshold is 0.1%; warn just below
-const COMPLAINT_DANGER_PCT     = 0.3;   // above this = likely blocklisted
-const BOUNCE_WINDOW_MS         = 24 * 60 * 60 * 1000;
+const BOUNCE_WARN_PCT = 2.0;
+const BOUNCE_DANGER_PCT = 5.0;
+const COMPLAINT_WARN_PCT = 0.08; // Gmail/Yahoo threshold is 0.1%; warn just below
+const COMPLAINT_DANGER_PCT = 0.3; // above this = likely blocklisted
+const BOUNCE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const BOUNCE_ALERT_COOLDOWN_MS = 4 * 60 * 60 * 1000;
-const BOUNCE_MIN_SENT          = 50;
+const BOUNCE_MIN_SENT = 50;
 
 /**
  * Upsert-by-email: the unique constraint on Suppression.email makes a
@@ -36,12 +36,18 @@ const BOUNCE_MIN_SENT          = 50;
  * to INSERT instead of no-op, and crash on the unique-constraint
  * violation instead of correctly finding the row.
  */
-export async function suppress(email: string, reason: 'hard_bounce' | 'complaint' | 'soft_bounce', apiKeyId: string): Promise<void> {
-  await withRlsBypass((tx) => tx.suppression.upsert({
-    where: { email },
-    update: {}, // first reason wins; don't overwrite an existing suppression's cause
-    create: { email, reason, apiKeyId },
-  })).catch((err) => {
+export async function suppress(
+  email: string,
+  reason: 'hard_bounce' | 'complaint' | 'soft_bounce',
+  apiKeyId: string,
+): Promise<void> {
+  await withRlsBypass((tx) =>
+    tx.suppression.upsert({
+      where: { email },
+      update: {}, // first reason wins; don't overwrite an existing suppression's cause
+      create: { email, reason, apiKeyId },
+    }),
+  ).catch((err) => {
     logger.error({ err, email, reason }, 'Failed to write suppression');
   });
 }
@@ -96,7 +102,10 @@ export async function correctOnGroundTruth(email: string, apiKeyId: string): Pro
       { monitorId: monitor.id, source: 'bounce_ground_truth' } satisfies MonitorRecheckPayload,
       { jobId: `recheck-${monitor.id}-${Date.now()}`, priority: 1 },
     );
-    logger.info({ email: lower, monitorId: monitor.id }, 'Hard bounce triggered immediate monitor recheck');
+    logger.info(
+      { email: lower, monitorId: monitor.id },
+      'Hard bounce triggered immediate monitor recheck',
+    );
   } catch (err) {
     logger.warn({ err, email: lower }, 'Ground-truth monitor recheck failed — non-fatal');
   }
@@ -105,10 +114,12 @@ export async function correctOnGroundTruth(email: string, apiKeyId: string): Pro
 export async function checkBounceRate(apiKeyId: string): Promise<void> {
   try {
     const since = new Date(Date.now() - BOUNCE_WINDOW_MS);
-    const [sent, bounced] = await withTenant(apiKeyId, (tx) => Promise.all([
-      tx.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since } } }),
-      tx.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since }, status: 'bounced' } }),
-    ]));
+    const [sent, bounced] = await withTenant(apiKeyId, (tx) =>
+      Promise.all([
+        tx.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since } } }),
+        tx.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since }, status: 'bounced' } }),
+      ]),
+    );
 
     if (sent < BOUNCE_MIN_SENT) return;
 
@@ -117,10 +128,19 @@ export async function checkBounceRate(apiKeyId: string): Promise<void> {
     if (!level) return;
 
     const cooldownSince = new Date(Date.now() - BOUNCE_ALERT_COOLDOWN_MS);
-    const recentAlert = await prisma.auditLog.findFirst({
-      where: { action: `bounce_rate.${level}`, actorId: apiKeyId, createdAt: { gte: cooldownSince } },
-      select: { id: true },
-    });
+    // These alert rows are keyed by actorId, not apiKeyId (a pre-existing
+    // shape mismatch with logAudit()'s usual rows) — withRlsBypass, same as
+    // logAudit()'s own internal write, not withTenant.
+    const recentAlert = await withRlsBypass((tx) =>
+      tx.auditLog.findFirst({
+        where: {
+          action: `bounce_rate.${level}`,
+          actorId: apiKeyId,
+          createdAt: { gte: cooldownSince },
+        },
+        select: { id: true },
+      }),
+    );
     if (recentAlert) return;
 
     const apiKey = await prisma.apiKey.findUnique({
@@ -136,9 +156,10 @@ export async function checkBounceRate(apiKeyId: string): Promise<void> {
     if (!user?.email) return;
 
     const keyLabel = apiKey.label ?? apiKey.name ?? apiKeyId.slice(0, 8);
-    const subject  = level === 'critical'
-      ? `Action required: bounce rate at ${pct.toFixed(1)}% on your account`
-      : `Heads up: bounce rate reaching ${pct.toFixed(1)}% — action recommended`;
+    const subject =
+      level === 'critical'
+        ? `Action required: bounce rate at ${pct.toFixed(1)}% on your account`
+        : `Heads up: bounce rate reaching ${pct.toFixed(1)}% — action recommended`;
 
     await sendEmail({
       to: user.email,
@@ -152,9 +173,11 @@ export async function checkBounceRate(apiKeyId: string): Promise<void> {
           <li><strong>Bounced:</strong> ${bounced.toLocaleString()}</li>
           <li><strong>Bounce rate:</strong> ${pct.toFixed(1)}%</li>
         </ul>
-        ${level === 'critical'
-          ? '<p><strong>⚠️ Gmail, Yahoo, and Outlook block senders above 5% bounce rate.</strong> If this continues, your sending reputation may be impacted immediately.</p>'
-          : '<p>ISPs typically begin throttling at 2% and blocking at 5%. Taking action now prevents deliverability issues.</p>'}
+        ${
+          level === 'critical'
+            ? '<p><strong>⚠️ Gmail, Yahoo, and Outlook block senders above 5% bounce rate.</strong> If this continues, your sending reputation may be impacted immediately.</p>'
+            : '<p>ISPs typically begin throttling at 2% and blocking at 5%. Taking action now prevents deliverability issues.</p>'
+        }
         <p><strong>Recommended actions:</strong></p>
         <ul>
           <li>Review and clean your recipient lists — remove unengaged addresses.</li>
@@ -165,14 +188,16 @@ export async function checkBounceRate(apiKeyId: string): Promise<void> {
       `,
     });
 
-    await prisma.auditLog.create({
-      data: {
-        action:     `bounce_rate.${level}`,
-        actorId:    apiKeyId,
-        actorEmail: keyLabel,
-        targets:    [{ type: 'api_key', id: apiKeyId, name: keyLabel }],
-      },
-    }).catch(() => {});
+    await withRlsBypass((tx) =>
+      tx.auditLog.create({
+        data: {
+          action: `bounce_rate.${level}`,
+          actorId: apiKeyId,
+          actorEmail: keyLabel,
+          targets: [{ type: 'api_key', id: apiKeyId, name: keyLabel }],
+        },
+      }),
+    ).catch(() => {});
 
     logger.info({ apiKeyId, pct: pct.toFixed(1), level, sent, bounced }, 'Bounce rate alert sent');
   } catch (err) {
@@ -183,22 +208,33 @@ export async function checkBounceRate(apiKeyId: string): Promise<void> {
 export async function checkComplaintRate(apiKeyId: string): Promise<void> {
   try {
     const since = new Date(Date.now() - BOUNCE_WINDOW_MS);
-    const [sent, complained] = await withTenant(apiKeyId, (tx) => Promise.all([
-      tx.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since } } }),
-      tx.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since }, status: 'complained' } }),
-    ]));
+    const [sent, complained] = await withTenant(apiKeyId, (tx) =>
+      Promise.all([
+        tx.sendMessage.count({ where: { apiKeyId, createdAt: { gte: since } } }),
+        tx.sendMessage.count({
+          where: { apiKeyId, createdAt: { gte: since }, status: 'complained' },
+        }),
+      ]),
+    );
 
     if (sent < BOUNCE_MIN_SENT) return;
 
     const pct = (complained / sent) * 100;
-    const level = pct >= COMPLAINT_DANGER_PCT ? 'critical' : pct >= COMPLAINT_WARN_PCT ? 'warning' : null;
+    const level =
+      pct >= COMPLAINT_DANGER_PCT ? 'critical' : pct >= COMPLAINT_WARN_PCT ? 'warning' : null;
     if (!level) return;
 
     const cooldownSince = new Date(Date.now() - BOUNCE_ALERT_COOLDOWN_MS);
-    const recentAlert = await prisma.auditLog.findFirst({
-      where: { action: `complaint_rate.${level}`, actorId: apiKeyId, createdAt: { gte: cooldownSince } },
-      select: { id: true },
-    });
+    const recentAlert = await withRlsBypass((tx) =>
+      tx.auditLog.findFirst({
+        where: {
+          action: `complaint_rate.${level}`,
+          actorId: apiKeyId,
+          createdAt: { gte: cooldownSince },
+        },
+        select: { id: true },
+      }),
+    );
     if (recentAlert) return;
 
     const apiKey = await prisma.apiKey.findUnique({
@@ -214,9 +250,10 @@ export async function checkComplaintRate(apiKeyId: string): Promise<void> {
     if (!user?.email) return;
 
     const keyLabel = apiKey.label ?? apiKey.name ?? apiKeyId.slice(0, 8);
-    const subject  = level === 'critical'
-      ? `Urgent: spam complaint rate at ${pct.toFixed(2)}% — immediate action required`
-      : `Warning: spam complaint rate at ${pct.toFixed(2)}% on your account`;
+    const subject =
+      level === 'critical'
+        ? `Urgent: spam complaint rate at ${pct.toFixed(2)}% — immediate action required`
+        : `Warning: spam complaint rate at ${pct.toFixed(2)}% on your account`;
 
     await sendEmail({
       to: user.email,
@@ -230,9 +267,11 @@ export async function checkComplaintRate(apiKeyId: string): Promise<void> {
           <li><strong>Complained:</strong> ${complained.toLocaleString()}</li>
           <li><strong>Complaint rate:</strong> ${pct.toFixed(2)}%</li>
         </ul>
-        ${level === 'critical'
-          ? '<p><strong>🚨 Gmail and Yahoo actively block senders above 0.3% complaint rate.</strong> You may already be in their blocklist.</p>'
-          : '<p>Gmail and Yahoo start filtering at 0.1% complaint rate. You are approaching that threshold.</p>'}
+        ${
+          level === 'critical'
+            ? '<p><strong>🚨 Gmail and Yahoo actively block senders above 0.3% complaint rate.</strong> You may already be in their blocklist.</p>'
+            : '<p>Gmail and Yahoo start filtering at 0.1% complaint rate. You are approaching that threshold.</p>'
+        }
         <p><strong>Immediate actions recommended:</strong></p>
         <ul>
           <li>Ensure every email has a clear, one-click unsubscribe link.</li>
@@ -243,16 +282,21 @@ export async function checkComplaintRate(apiKeyId: string): Promise<void> {
       `,
     });
 
-    await prisma.auditLog.create({
-      data: {
-        action:     `complaint_rate.${level}`,
-        actorId:    apiKeyId,
-        actorEmail: keyLabel,
-        targets:    [{ type: 'api_key', id: apiKeyId, name: keyLabel }],
-      },
-    }).catch(() => {});
+    await withRlsBypass((tx) =>
+      tx.auditLog.create({
+        data: {
+          action: `complaint_rate.${level}`,
+          actorId: apiKeyId,
+          actorEmail: keyLabel,
+          targets: [{ type: 'api_key', id: apiKeyId, name: keyLabel }],
+        },
+      }),
+    ).catch(() => {});
 
-    logger.info({ apiKeyId, pct: pct.toFixed(2), level, sent, complained }, 'Complaint rate alert sent');
+    logger.info(
+      { apiKeyId, pct: pct.toFixed(2), level, sent, complained },
+      'Complaint rate alert sent',
+    );
   } catch (err) {
     logger.warn({ err, apiKeyId }, 'Complaint rate check failed — non-fatal');
   }

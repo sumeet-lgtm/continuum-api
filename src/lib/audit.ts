@@ -2,7 +2,7 @@ import { WorkOS } from '@workos-inc/node';
 import type { Prisma } from '@prisma/client';
 import { config } from '../config.js';
 import { logger } from './logger.js';
-import { prisma } from './prisma.js';
+import { withRlsBypass } from './tenantContext.js';
 
 let _workos: WorkOS | null = null;
 
@@ -41,6 +41,15 @@ export interface AuditTarget {
  * apiKeyId is optional and separate from orgId: some audited actions (key
  * creation/revocation, account export/deletion) are scoped to a specific
  * API key rather than an org membership.
+ *
+ * The local write goes through withRlsBypass rather than withTenant/
+ * withOrgTenant: this function has 13+ call sites across the codebase with
+ * heterogeneous context (apiKeyId only, orgId only, both, or neither — e.g.
+ * auth/index.ts's sign_in_failed case, where no user/key was ever
+ * resolved), and it's a best-effort, non-fatal system write, not a
+ * caller-scoped read/write of the caller's own data. Requiring every
+ * caller to pre-establish a matching tenant/org transaction just to write
+ * one audit row would be a lot of ceremony for no real safety gain here.
  */
 export async function logAudit(
   orgId: string | null | undefined,
@@ -50,17 +59,19 @@ export async function logAudit(
   apiKeyId?: string,
 ): Promise<void> {
   try {
-    await prisma.auditLog.create({
-      data: {
-        orgId: orgId ?? null,
-        apiKeyId: apiKeyId ?? null,
-        action,
-        actorId: actor.id,
-        actorEmail: actor.email,
-        actorIp: actor.ip ?? null,
-        targets: targets as unknown as Prisma.InputJsonValue,
-      },
-    });
+    await withRlsBypass((tx) =>
+      tx.auditLog.create({
+        data: {
+          orgId: orgId ?? null,
+          apiKeyId: apiKeyId ?? null,
+          action,
+          actorId: actor.id,
+          actorEmail: actor.email,
+          actorIp: actor.ip ?? null,
+          targets: targets as unknown as Prisma.InputJsonValue,
+        },
+      }),
+    );
   } catch (err) {
     logger.warn({ err, action, orgId, apiKeyId }, 'Local audit log write failed (non-fatal)');
   }

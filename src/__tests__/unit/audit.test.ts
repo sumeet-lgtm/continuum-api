@@ -11,9 +11,19 @@ const { auditLogCreateMock, workosCreateEventMock } = vi.hoisted(() => ({
   workosCreateEventMock: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: { auditLog: { create: auditLogCreateMock } },
-}));
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: {
+    auditLog: { create: typeof auditLogCreateMock };
+    $transaction?: ReturnType<typeof vi.fn>;
+    $executeRawUnsafe?: ReturnType<typeof vi.fn>;
+  } = { auditLog: { create: auditLogCreateMock } };
+  // logAudit's write goes through withRlsBypass, which calls
+  // prisma.$transaction(fn) and hands fn the tx — here the same mock
+  // object, so tx.auditLog resolves to the mock above.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  prisma.$executeRawUnsafe = vi.fn().mockResolvedValue(undefined);
+  return { prisma };
+});
 
 vi.mock('@workos-inc/node', () => ({
   WorkOS: vi.fn().mockImplementation(function FakeWorkOS(this: { auditLogs: unknown }) {
@@ -36,12 +46,22 @@ beforeEach(() => {
 describe('logAudit', () => {
   it('writes a local record even with no orgId and no WorkOS configured (previously a total no-op)', async () => {
     const logAudit = await freshLogAudit({});
-    await logAudit(null, 'api_key.created', { id: 'key-1', email: 'k1', ip: '1.2.3.4' }, [{ type: 'api_key', id: 'key-1' }], 'key-1');
+    await logAudit(
+      null,
+      'api_key.created',
+      { id: 'key-1', email: 'k1', ip: '1.2.3.4' },
+      [{ type: 'api_key', id: 'key-1' }],
+      'key-1',
+    );
 
     expect(auditLogCreateMock).toHaveBeenCalledWith({
       data: {
-        orgId: null, apiKeyId: 'key-1', action: 'api_key.created',
-        actorId: 'key-1', actorEmail: 'k1', actorIp: '1.2.3.4',
+        orgId: null,
+        apiKeyId: 'key-1',
+        action: 'api_key.created',
+        actorId: 'key-1',
+        actorEmail: 'k1',
+        actorIp: '1.2.3.4',
         targets: [{ type: 'api_key', id: 'key-1' }],
       },
     });
@@ -50,23 +70,31 @@ describe('logAudit', () => {
 
   it('writes a local record for an org-scoped action too', async () => {
     const logAudit = await freshLogAudit({ WORKOS_API_KEY: 'sk_test_123' });
-    await logAudit('org-1', 'member.invited', { id: 'user-1', email: 'a@example.com' }, [{ type: 'user', id: 'b@example.com' }]);
+    await logAudit('org-1', 'member.invited', { id: 'user-1', email: 'a@example.com' }, [
+      { type: 'user', id: 'b@example.com' },
+    ]);
 
-    expect(auditLogCreateMock).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ orgId: 'org-1', apiKeyId: null, action: 'member.invited' }),
-    }));
+    expect(auditLogCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ orgId: 'org-1', apiKeyId: null, action: 'member.invited' }),
+      }),
+    );
   });
 
   it('additionally mirrors to WorkOS only when both orgId and WORKOS_API_KEY are present', async () => {
     const logAudit = await freshLogAudit({ WORKOS_API_KEY: 'sk_test_123' });
-    await logAudit('org-1', 'member.invited', { id: 'user-1', email: 'a@example.com' }, [{ type: 'user', id: 'b@example.com' }]);
+    await logAudit('org-1', 'member.invited', { id: 'user-1', email: 'a@example.com' }, [
+      { type: 'user', id: 'b@example.com' },
+    ]);
 
     expect(workosCreateEventMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not mirror to WorkOS when orgId is set but WORKOS_API_KEY is not', async () => {
     const logAudit = await freshLogAudit({});
-    await logAudit('org-1', 'member.invited', { id: 'user-1', email: 'a@example.com' }, [{ type: 'user', id: 'b@example.com' }]);
+    await logAudit('org-1', 'member.invited', { id: 'user-1', email: 'a@example.com' }, [
+      { type: 'user', id: 'b@example.com' },
+    ]);
 
     expect(auditLogCreateMock).toHaveBeenCalled();
     expect(workosCreateEventMock).not.toHaveBeenCalled();
@@ -76,6 +104,8 @@ describe('logAudit', () => {
     auditLogCreateMock.mockRejectedValueOnce(new Error('db down'));
     const logAudit = await freshLogAudit({});
 
-    await expect(logAudit(null, 'account.deleted', { id: 'key-1', email: 'k1' }, [])).resolves.toBeUndefined();
+    await expect(
+      logAudit(null, 'account.deleted', { id: 'key-1', email: 'k1' }, []),
+    ).resolves.toBeUndefined();
   });
 });
