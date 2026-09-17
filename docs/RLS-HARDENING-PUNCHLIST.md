@@ -17,12 +17,13 @@ The reason it was never flipped: a large number of routes and workers query RLS-
 
 **Not done:** everything below. None of it is urgent in the sense of "actively leaking" — app-level `WHERE apiKeyId` filters are still the only protection either way, exactly as before this pass started. It's about making the eventual role cutover safe, not about an active vulnerability.
 
+- `email_templates`, `email_template_versions` — RLS enabled, policies live. `templates/index.ts` (every route), `connectors/payment.ts` (one read, previously left plain on purpose pending this), `send/index.ts` converted.
+- `automations`, `automation_steps`, `automation_enrollments` — RLS enabled, policies live (note: this table family uses snake_case `@map`s throughout, unlike most of the schema — double-checked every column against schema.prisma before writing SQL this time). `automations/index.ts`, `automationWorker.ts` (cross-tenant sweep via `withRlsBypass()`) converted. Bonus find: `privacy/index.ts` had two calls textually inside a `withTenant()` callback that used the plain `prisma` client instead of the callback's own `tx` — silently escaping the transaction (and, for `verification`, escaping RLS scope on an already-protected table). Fixed both.
+
 ## Remaining tables, by call-site count (smallest first — do these first)
 
 | Table(s) | Column | Call sites | Files |
 |---|---|---|---|
-| `email_templates`, `email_template_versions` | `apiKeyId` (direct join for versions) | ~18 | `src/routes/templates/index.ts`, `src/routes/connectors/payment.ts` (one read, already inside a `withTenant`-scoped caller — trivial), `src/routes/send/index.ts` |
-| `automations`, `automation_steps`, `automation_enrollments` | `api_key_id` (direct join for children) | ~25 | `src/routes/automations/index.ts`, `src/workers/automationWorker.ts` (cross-tenant sweep — `withRlsBypass()` + per-row `withTenant()`), `src/routes/privacy/index.ts` |
 | `sequence_steps`, `sequence_variants` | via `sequenceId`/`stepId` join to `sequences.apiKeyId` | ~15 | `src/routes/sequences/index.ts` |
 | `warmup_configs` | via `mailboxId` join to `mailboxes.apiKeyId` | 4 | `src/routes/mailboxes/index.ts`, `src/workers/warmupWorker.ts`, `src/workers/agentRunWorker.ts` (one call) |
 | `tracking_events`, `send_events` | via `sendMessageId` join to `send_messages.apiKeyId` (nullable — some tracking events may have no resolvable sendMessageId; check this before writing the policy) | ~30 | `src/routes/analytics/index.ts`, `src/routes/contacts/index.ts`, `src/routes/messages/index.ts`, `src/routes/sequences/index.ts`, `src/routes/lists/index.ts`, `src/routes/campaigns/index.ts`, `src/routes/track/index.ts` (public, unauthenticated pixel/redirect endpoint — needs `withRlsBypass()`, tenant isn't known until after the lookup), `src/routes/send/events.ts`, `src/routes/send/smtp2goEvents.ts`, `src/engine/botDetection.ts`, `src/workers/sequenceWorker.ts` |
