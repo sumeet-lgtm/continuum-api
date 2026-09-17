@@ -523,7 +523,7 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     // first (if the list doesn't exist, membership can't either, so this
     // preserves the original "Subscription not found" 404 for that case),
     // then scope the rest of the work with withTenant using that tenant.
-    const list = await prisma.mailingList.findUnique({ where: { id: listId }, select: { apiKeyId: true } });
+    const list = await withRlsBypass((tx) => tx.mailingList.findUnique({ where: { id: listId }, select: { apiKeyId: true } }));
     if (!list) {
       return reply.status(404).type('text/html').send('<h2>Subscription not found.</h2>');
     }
