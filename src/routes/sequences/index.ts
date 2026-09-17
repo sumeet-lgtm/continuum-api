@@ -622,8 +622,8 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       return Promise.all([
         tx.sequenceEnrollment.groupBy({ by: ['status'], where: { sequenceId: id }, _count: { _all: true } }),
         stepIds.length > 0 ? tx.sendMessage.count({ where: { sequenceStepId: { in: stepIds } } }) : Promise.resolve(0),
-        stepIds.length > 0 ? prisma.trackingEvent.count({ where: { type: 'open', isLikelyBot: false, sendMessage: { sequenceStepId: { in: stepIds } } } }) : Promise.resolve(0),
-        stepIds.length > 0 ? prisma.trackingEvent.count({ where: { type: 'click', isLikelyBot: false, sendMessage: { sequenceStepId: { in: stepIds } } } }) : Promise.resolve(0),
+        stepIds.length > 0 ? tx.trackingEvent.count({ where: { type: 'open', isLikelyBot: false, sendMessage: { sequenceStepId: { in: stepIds } } } }) : Promise.resolve(0),
+        stepIds.length > 0 ? tx.trackingEvent.count({ where: { type: 'click', isLikelyBot: false, sendMessage: { sequenceStepId: { in: stepIds } } } }) : Promise.resolve(0),
         tx.replyEvent.count({ where: { enrollment: { sequenceId: id } } }),
       ]);
     });

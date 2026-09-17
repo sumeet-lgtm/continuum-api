@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { prisma } from '../../lib/prisma.js';
 import { dispatchWebhook, buildEventId } from '../../lib/webhooks.js';
 import { verifySnsMessage, type SnsMessage } from '../../lib/snsVerify.js';
 import { logger } from '../../lib/logger.js';
@@ -129,9 +128,9 @@ async function handleSesEvent(
   const occurredAt = new Date().toISOString();
 
   if (eventType === 'Bounce') {
-    await prisma.sendEvent.create({
+    await withTenant(apiKeyId, (tx) => tx.sendEvent.create({
       data: { sendMessageId, type: 'bounced', rawPayload: sesEvent as object },
-    });
+    }));
     await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'bounced' } }));
 
     const bounceType = sesEvent.bounce?.bounceType ?? null;
@@ -156,9 +155,9 @@ async function handleSesEvent(
   }
 
   if (eventType === 'Complaint') {
-    await prisma.sendEvent.create({
+    await withTenant(apiKeyId, (tx) => tx.sendEvent.create({
       data: { sendMessageId, type: 'complained', rawPayload: sesEvent as object },
-    });
+    }));
     await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'complained' } }));
 
     const recipients = sesEvent.complaint?.complainedRecipients?.map((r) => r.emailAddress).filter((e): e is string => Boolean(e)) ?? [];
@@ -177,9 +176,9 @@ async function handleSesEvent(
   }
 
   if (eventType === 'Delivery') {
-    await prisma.sendEvent.create({
+    await withTenant(apiKeyId, (tx) => tx.sendEvent.create({
       data: { sendMessageId, type: 'delivered', rawPayload: sesEvent as object },
-    });
+    }));
     await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'delivered' } }));
 
     const recipients = sesEvent.delivery?.recipients ?? [];

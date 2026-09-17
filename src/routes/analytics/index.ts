@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
 import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
@@ -42,10 +41,10 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
         tx.sendMessage.count({ where: { ...where, status: 'delivered' } }),
         tx.sendMessage.count({ where: { ...where, status: 'bounced' } }),
         tx.sendMessage.count({ where: { ...where, status: 'complained' } }),
-        prisma.trackingEvent.count({ where: { type: 'open', sendMessage: { apiKeyId } } }),
-        prisma.trackingEvent.count({ where: { type: 'click', sendMessage: { apiKeyId } } }),
-        prisma.trackingEvent.count({ where: { type: 'open', isLikelyBot: true, sendMessage: { apiKeyId } } }),
-        prisma.trackingEvent.count({ where: { type: 'click', isLikelyBot: true, sendMessage: { apiKeyId } } }),
+        tx.trackingEvent.count({ where: { type: 'open', sendMessage: { apiKeyId } } }),
+        tx.trackingEvent.count({ where: { type: 'click', sendMessage: { apiKeyId } } }),
+        tx.trackingEvent.count({ where: { type: 'open', isLikelyBot: true, sendMessage: { apiKeyId } } }),
+        tx.trackingEvent.count({ where: { type: 'click', isLikelyBot: true, sendMessage: { apiKeyId } } }),
       ]));
 
       // Apple Mail Privacy Protection and corporate security gateways
@@ -439,7 +438,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       // isLikelyBot:false — a bot/scanner prefetch's timing has nothing to
       // do with when real recipients read email, and would corrupt this
       // recommendation otherwise.
-      const opens = await prisma.trackingEvent.findMany({
+      const opens = await withTenant(apiKeyId, (tx) => tx.trackingEvent.findMany({
         where: {
           type: 'open',
           isLikelyBot: false,
@@ -447,7 +446,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
           sendMessage: { apiKeyId },
         },
         select: { occurredAt: true },
-      });
+      }));
 
       if (opens.length < 10) {
         return reply.send({
@@ -562,7 +561,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
         // OR branch) — otherwise MPP/scanner noise makes every step look
         // like it's performing, hiding which ones are actually working.
         const allMsgIds = stepSendIds.map(m => m.id);
-        const events = allMsgIds.length > 0 ? await prisma.trackingEvent.findMany({
+        const events = allMsgIds.length > 0 ? await tx.trackingEvent.findMany({
           where: {
             sendMessageId: { in: allMsgIds },
             OR: [
@@ -659,10 +658,10 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       // iCloud's open rate as artificially, misleadingly close to 100%
       // next to every other provider's real number.
       const trackingEvents = msgIds.length > 0
-        ? await prisma.trackingEvent.findMany({
+        ? await withTenant(apiKeyId, (tx) => tx.trackingEvent.findMany({
             where: { sendMessageId: { in: msgIds }, type: { in: ['open', 'click'] }, isLikelyBot: false },
             select: { sendMessageId: true, type: true },
-          })
+          }))
         : [];
 
       // Index tracking events by sendMessageId

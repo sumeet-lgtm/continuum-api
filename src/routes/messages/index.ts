@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { withTenant } from '../../lib/tenantContext.js';
 
@@ -15,8 +14,8 @@ export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
       const apiKeyId = request.apiKey.id;
       const limit = Math.min(50, Math.max(1, parseInt(q.limit ?? '30', 10)));
 
-      const [sendEvents, trackEvents] = await Promise.all([
-        prisma.sendEvent.findMany({
+      const [sendEvents, trackEvents] = await withTenant(apiKeyId, (tx) => Promise.all([
+        tx.sendEvent.findMany({
           where: { sendMessage: { apiKeyId } },
           orderBy: { occurredAt: 'desc' },
           take: limit,
@@ -27,7 +26,7 @@ export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
             sendMessage: { select: { id: true, to: true, subject: true } },
           },
         }),
-        prisma.trackingEvent.findMany({
+        tx.trackingEvent.findMany({
           where: { sendMessage: { apiKeyId } },
           orderBy: { occurredAt: 'desc' },
           take: limit,
@@ -38,7 +37,7 @@ export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
             sendMessage: { select: { id: true, to: true, subject: true } },
           },
         }),
-      ]);
+      ]));
 
       const combined = [
         ...sendEvents.map((e) => ({
@@ -150,8 +149,8 @@ export async function messagesRoutes(fastify: FastifyInstance): Promise<void> {
           tx.sendMessage.count({ where: { ...baseWhere, status: 'bounced' } as never }),
           tx.sendMessage.count({ where: { ...baseWhere, status: 'complained' } as never }),
         ])),
-        prisma.trackingEvent.count({ where: { type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } } }),
-        prisma.trackingEvent.count({ where: { type: 'click', isLikelyBot: false, sendMessage: { apiKeyId } } }),
+        withTenant(apiKeyId, (tx) => tx.trackingEvent.count({ where: { type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } } })),
+        withTenant(apiKeyId, (tx) => tx.trackingEvent.count({ where: { type: 'click', isLikelyBot: false, sendMessage: { apiKeyId } } })),
       ]);
 
       return reply.status(200).send({

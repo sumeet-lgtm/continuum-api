@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { prisma } from '../../lib/prisma.js';
 import { dispatchWebhook, buildEventId } from '../../lib/webhooks.js';
 import { logger } from '../../lib/logger.js';
 import { config } from '../../config.js';
@@ -93,9 +92,9 @@ async function handleSmtp2goEvent(
   const email = event.rcpt;
 
   if (event.event === 'bounce') {
-    await prisma.sendEvent.create({
+    await withTenant(apiKeyId, (tx) => tx.sendEvent.create({
       data: { sendMessageId, type: 'bounced', rawPayload: event as object },
-    });
+    }));
     await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'bounced' } }));
 
     if (email) {
@@ -119,9 +118,9 @@ async function handleSmtp2goEvent(
   }
 
   if (event.event === 'spam') {
-    await prisma.sendEvent.create({
+    await withTenant(apiKeyId, (tx) => tx.sendEvent.create({
       data: { sendMessageId, type: 'complained', rawPayload: event as object },
-    });
+    }));
     await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'complained' } }));
 
     if (email) {
@@ -139,9 +138,9 @@ async function handleSmtp2goEvent(
   }
 
   if (event.event === 'delivered') {
-    await prisma.sendEvent.create({
+    await withTenant(apiKeyId, (tx) => tx.sendEvent.create({
       data: { sendMessageId, type: 'delivered', rawPayload: event as object },
-    });
+    }));
     await withTenant(apiKeyId, (tx) => tx.sendMessage.update({ where: { id: sendMessageId }, data: { status: 'delivered' } }));
 
     if (email) {

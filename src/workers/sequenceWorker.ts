@@ -1,6 +1,5 @@
 import { Worker, type Job } from 'bullmq';
 import { QUEUE_SEQUENCE, redisConnection } from '../lib/queue.js';
-import { prisma } from '../lib/prisma.js';
 import { sendViaSes } from '../lib/ses.js';
 import { sendViaSmtp } from '../lib/smtp.js';
 import { generateUnsubToken, generateUnsubHtml } from '../lib/unsubscribe.js';
@@ -15,6 +14,7 @@ interface SequenceTickPayload {
 }
 
 async function evaluateCondition(
+  apiKeyId: string,
   enrollment: { sequenceId: string; email: string; currentStep: number },
   step: { condition: string },
 ): Promise<boolean> {
@@ -28,23 +28,23 @@ async function evaluateCondition(
   // essentially every iOS/macOS Mail recipient, regardless of whether a
   // human ever actually engaged.
   if (step.condition === 'if_not_opened') {
-    const opened = await prisma.trackingEvent.findFirst({
+    const opened = await withTenant(apiKeyId, (tx) => tx.trackingEvent.findFirst({
       where: { sendMessageId: trackingId, type: 'open', isLikelyBot: false },
-    });
+    }));
     return !opened;
   }
 
   if (step.condition === 'if_opened') {
-    const opened = await prisma.trackingEvent.findFirst({
+    const opened = await withTenant(apiKeyId, (tx) => tx.trackingEvent.findFirst({
       where: { sendMessageId: trackingId, type: 'open', isLikelyBot: false },
-    });
+    }));
     return !!opened;
   }
 
   if (step.condition === 'if_not_clicked') {
-    const clicked = await prisma.trackingEvent.findFirst({
+    const clicked = await withTenant(apiKeyId, (tx) => tx.trackingEvent.findFirst({
       where: { sendMessageId: trackingId, type: 'click', isLikelyBot: false },
-    });
+    }));
     return !clicked;
   }
 
@@ -146,7 +146,7 @@ export async function processSequenceTick(): Promise<void> {
     const seqAny = sequence as { stopOnOpen?: boolean; stopOnClick?: boolean; stopOnReply: boolean };
     if (seqAny.stopOnOpen) {
       const openTrackId = `${sequence.id}_step${enrollment.currentStep - 1}_${enrollment.email}`;
-      const opened = await prisma.trackingEvent.findFirst({ where: { sendMessageId: openTrackId, type: 'open', isLikelyBot: false } });
+      const opened = await withTenant(sequence.apiKeyId, (tx) => tx.trackingEvent.findFirst({ where: { sendMessageId: openTrackId, type: 'open', isLikelyBot: false } }));
       if (opened) {
         await withTenant(sequence.apiKeyId, async (tx) => {
           await tx.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } });
@@ -168,7 +168,7 @@ export async function processSequenceTick(): Promise<void> {
     // enrollment email, stop
     if (seqAny.stopOnClick) {
       const clickTrackId = `${sequence.id}_step${enrollment.currentStep - 1}_${enrollment.email}`;
-      const clicked = await prisma.trackingEvent.findFirst({ where: { sendMessageId: clickTrackId, type: 'click', isLikelyBot: false } });
+      const clicked = await withTenant(sequence.apiKeyId, (tx) => tx.trackingEvent.findFirst({ where: { sendMessageId: clickTrackId, type: 'click', isLikelyBot: false } }));
       if (clicked) {
         await withTenant(sequence.apiKeyId, async (tx) => {
           await tx.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'completed', completedAt: now } });
@@ -204,7 +204,7 @@ export async function processSequenceTick(): Promise<void> {
     }
 
     // Evaluate condition
-    const shouldSend = await evaluateCondition(enrollment, step);
+    const shouldSend = await evaluateCondition(sequence.apiKeyId, enrollment, step);
     if (!shouldSend) {
       // Skip this step, move to next
       const nextStep = steps[nextStepIndex + 1];

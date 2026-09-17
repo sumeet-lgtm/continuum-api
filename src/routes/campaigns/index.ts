@@ -457,7 +457,7 @@ export async function campaignRoutes(fastify: FastifyInstance): Promise<void> {
       // without it, an MPP-prefetched "open" would wrongly exclude a
       // recipient who never actually saw the email from the retarget send,
       // which is the exact opposite of what retargeting is for.
-      const openers = await prisma.trackingEvent.findMany({
+      const openers = await tx.trackingEvent.findMany({
         where: { campaignId: id, type: 'open', isLikelyBot: false },
         select: { email: true },
         distinct: ['email'],

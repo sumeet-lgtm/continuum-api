@@ -19,7 +19,7 @@
  * classifyTrackingEvent stays a pure, dependency-free unit under test.
  */
 
-import { prisma } from '../lib/prisma.js';
+import { withRlsBypass } from '../lib/tenantContext.js';
 
 // Apple's Mail Privacy Protection proxy egresses from Apple's own
 // allocated 17.0.0.0/8 block — never a residential or mobile ISP range —
@@ -116,7 +116,10 @@ const FANOUT_DISTINCT_THRESHOLD = 8; // distinct messages from one IP within the
 export async function checkIpFanout(ip: string | null, occurredAt: Date): Promise<boolean> {
   if (!ip) return false;
   try {
-    const recent = await prisma.trackingEvent.findMany({
+    // Deliberately cross-tenant: a shared scanning proxy fans out across
+    // recipients that can belong to different customers' sends, so this
+    // check must see every tenant's tracking events, not just one.
+    const recent = await withRlsBypass((tx) => tx.trackingEvent.findMany({
       where: {
         ip,
         occurredAt: { gte: new Date(occurredAt.getTime() - FANOUT_WINDOW_MS) },
@@ -124,7 +127,7 @@ export async function checkIpFanout(ip: string | null, occurredAt: Date): Promis
       distinct: ['sendMessageId'],
       select: { sendMessageId: true },
       take: FANOUT_DISTINCT_THRESHOLD,
-    });
+    }));
     return recent.length >= FANOUT_DISTINCT_THRESHOLD;
   } catch {
     return false; // fail open — a DB hiccup here shouldn't block a real tracking event

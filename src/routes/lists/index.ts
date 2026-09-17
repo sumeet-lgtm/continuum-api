@@ -2,7 +2,6 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
 import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
@@ -125,13 +124,15 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     // MPP-enabled contact "active" forever regardless of real engagement,
     // defeating the entire point of this report (finding who to actually
     // clean off the list).
-    // trackingEvent is not an RLS-covered table, so this stays on the
-    // outer `prisma` client.
-    const recentEvents = await prisma.trackingEvent.groupBy({
+    // sendMessage: { apiKeyId } matters here, not just RLS scoping — email
+    // alone isn't unique across tenants, so without it a different
+    // customer's send to the same address could count toward this one's
+    // engagement bucket.
+    const recentEvents = await withTenant(apiKeyId, (tx) => tx.trackingEvent.groupBy({
       by:       ['email'],
-      where:    { email: { in: emails }, type: { in: ['open', 'click'] }, isLikelyBot: false },
+      where:    { email: { in: emails }, type: { in: ['open', 'click'] }, isLikelyBot: false, sendMessage: { apiKeyId } },
       _max:     { occurredAt: true },
-    });
+    }));
 
     const lastEngagement = new Map(recentEvents.map((e) => [e.email, e._max.occurredAt]));
 
@@ -187,13 +188,14 @@ export async function listRoutes(fastify: FastifyInstance): Promise<void> {
     // endpoint actually suppresses contacts; letting a bot-inflated "open"
     // mask real disengagement would mean it never suppresses anyone it
     // should.
-    // trackingEvent is not an RLS-covered table, so this stays on the
-    // outer `prisma` client.
-    const recentEvents = await prisma.trackingEvent.groupBy({
+    // sendMessage: { apiKeyId } — same cross-tenant email-collision
+    // reasoning as the report above; matters even more here since this
+    // endpoint actually suppresses contacts based on the result.
+    const recentEvents = await withTenant(apiKeyId, (tx) => tx.trackingEvent.groupBy({
       by:    ['email'],
-      where: { email: { in: emails }, type: { in: ['open', 'click'] }, isLikelyBot: false },
+      where: { email: { in: emails }, type: { in: ['open', 'click'] }, isLikelyBot: false, sendMessage: { apiKeyId } },
       _max:  { occurredAt: true },
-    });
+    }));
     const lastEngagement = new Map(recentEvents.map((e) => [e.email, e._max.occurredAt]));
 
     const toSuppress = members.filter((m) => {

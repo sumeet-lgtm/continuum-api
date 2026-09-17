@@ -4,11 +4,20 @@ const { findManyMock } = vi.hoisted(() => ({
   findManyMock: vi.fn(),
 }));
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: {
+    trackingEvent: { findMany: typeof findManyMock };
+    $transaction?: ReturnType<typeof vi.fn>;
+    $executeRawUnsafe?: ReturnType<typeof vi.fn>;
+  } = {
     trackingEvent: { findMany: findManyMock },
-  },
-}));
+  };
+  // withRlsBypass() calls prisma.$transaction(fn) and hands fn the tx —
+  // here the same mock object, so tx.trackingEvent resolves to the mock above.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  prisma.$executeRawUnsafe = vi.fn().mockResolvedValue(undefined);
+  return { prisma };
+});
 
 import { classifyTrackingEvent, checkIpFanout } from '../../engine/botDetection.js';
 

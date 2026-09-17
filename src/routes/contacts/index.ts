@@ -301,20 +301,17 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     // score and recency, which is exactly backwards from what this
     // endpoint exists to tell a customer (who is actually worth
     // prioritizing outreach to).
-    // trackingEvent is not an RLS-covered table, so those two queries stay
-    // on the outer `prisma` client even though they run alongside the
-    // sendMessage counts inside this tenant-scoped transaction.
     const { sendCount, opens, clicks, bounces, complaints, lastEvent } = await withTenant(apiKeyId, async (tx) => {
       const contact = await tx.contact.findUnique({ where: { apiKeyId_email: { apiKeyId, email } } });
       if (!contact) throw Errors.notFound('Contact not found.');
 
       const [sendCount, opens, clicks, bounces, complaints, lastEvent] = await Promise.all([
         tx.sendMessage.count({ where: { apiKeyId, to: email } }),
-        prisma.trackingEvent.count({ where: { email, type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } } }),
-        prisma.trackingEvent.count({ where: { email, type: 'click', isLikelyBot: false, sendMessage: { apiKeyId } } }),
+        tx.trackingEvent.count({ where: { email, type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } } }),
+        tx.trackingEvent.count({ where: { email, type: 'click', isLikelyBot: false, sendMessage: { apiKeyId } } }),
         tx.sendMessage.count({ where: { apiKeyId, to: email, status: 'bounced' } }),
         tx.sendMessage.count({ where: { apiKeyId, to: email, status: 'complained' } }),
-        prisma.trackingEvent.findFirst({
+        tx.trackingEvent.findFirst({
           where: { email, isLikelyBot: false, sendMessage: { apiKeyId } },
           orderBy: { occurredAt: 'desc' },
           select: { occurredAt: true },
@@ -403,12 +400,12 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
       // isLikelyBot:false — this timeline is presented to the customer as
       // "email_opened"/"email_clicked" (real engagement), which a bot
       // prefetch or security-gateway scan is not.
-      prisma.trackingEvent.findMany({
+      withTenant(apiKeyId, (tx) => tx.trackingEvent.findMany({
         where: { email, isLikelyBot: false, sendMessage: { apiKeyId } },
         orderBy: { occurredAt: 'desc' },
         take: limit,
         select: { id: true, type: true, linkUrl: true, occurredAt: true, sendMessageId: true },
-      }),
+      })),
       withRlsBypass((tx) => tx.suppression.findFirst({ where: { email }, select: { reason: true, createdAt: true } })),
     ]);
 
@@ -458,15 +455,12 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
     // isLikelyBot:false — a bot/scanner prefetch's timing has nothing to
     // do with when this contact actually reads email, and would corrupt
     // the recommended send window otherwise.
-    // trackingEvent is not an RLS-covered table, so this query stays on
-    // the outer `prisma` client — only the contact-ownership check above
-    // needs to run inside withTenant.
-    const opens = await prisma.trackingEvent.findMany({
+    const opens = await withTenant(apiKeyId, (tx) => tx.trackingEvent.findMany({
       where: { email, type: 'open', isLikelyBot: false, sendMessage: { apiKeyId } },
       select: { occurredAt: true },
       orderBy: { occurredAt: 'desc' },
       take: 200,
-    });
+    }));
 
     if (opens.length < 3) {
       return reply.send({ email, sufficient_data: false, opens_analyzed: opens.length, message: 'Not enough data yet — at least 3 opens needed.' });

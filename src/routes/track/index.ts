@@ -1,6 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { prisma } from '../../lib/prisma.js';
-import { withTenant } from '../../lib/tenantContext.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { verifyOpenToken, verifyClickToken, TRANSPARENT_GIF } from '../../lib/tracking.js';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 import { classifyTrackingEvent, checkIpFanout, type BotReason } from '../../engine/botDetection.js';
@@ -36,16 +35,18 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
       if (payload) {
         // First try by primary key (transactional sends), then by trackingToken
         // (campaign sends use campaignId_email as the tracking ID stored in
-        // trackingToken, not the row's cuid id).
-        let msg = await prisma.sendMessage.findUnique({
+        // trackingToken, not the row's cuid id). No apiKeyId known yet — this
+        // is identity discovery (which tenant does this token belong to),
+        // hence withRlsBypass.
+        let msg = await withRlsBypass((tx) => tx.sendMessage.findUnique({
           where: { id: payload.sendMessageId },
           select: { id: true, to: true, apiKeyId: true, trackingToken: true, sentAt: true },
-        });
+        }));
         if (!msg) {
-          msg = await prisma.sendMessage.findUnique({
+          msg = await withRlsBypass((tx) => tx.sendMessage.findUnique({
             where: { trackingToken: payload.sendMessageId },
             select: { id: true, to: true, apiKeyId: true, trackingToken: true, sentAt: true },
-          });
+          }));
         }
 
         if (msg) {
@@ -60,7 +61,7 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
           const fast = classifyTrackingEvent({ ip, userAgent, sentAt: msg.sentAt, occurredAt });
           const { isLikelyBot, botReason } = await classifyWithFanout(fast, ip, occurredAt);
 
-          await prisma.trackingEvent.create({
+          await withTenant(msg.apiKeyId, (tx) => tx.trackingEvent.create({
             data: {
               sendMessageId: msg.id,
               email: msg.to,
@@ -72,7 +73,7 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
               isLikelyBot,
               botReason,
             },
-          }).catch(() => { /* ignore if already logged */ });
+          })).catch(() => { /* ignore if already logged */ });
 
           // Apple MPP prefetches this pixel for every MPP-enabled recipient
           // regardless of whether a human ever opens the message — flipping
@@ -127,15 +128,15 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
       const payload = verifyClickToken(token);
 
       if (payload) {
-        let msg = await prisma.sendMessage.findUnique({
+        let msg = await withRlsBypass((tx) => tx.sendMessage.findUnique({
           where: { id: payload.sendMessageId },
           select: { id: true, to: true, apiKeyId: true, trackingToken: true, sentAt: true },
-        });
+        }));
         if (!msg) {
-          msg = await prisma.sendMessage.findUnique({
+          msg = await withRlsBypass((tx) => tx.sendMessage.findUnique({
             where: { trackingToken: payload.sendMessageId },
             select: { id: true, to: true, apiKeyId: true, trackingToken: true, sentAt: true },
-          });
+          }));
         }
 
         if (msg) {
@@ -149,7 +150,7 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
           const fast = classifyTrackingEvent({ ip, userAgent, sentAt: msg.sentAt, occurredAt });
           const { isLikelyBot, botReason } = await classifyWithFanout(fast, ip, occurredAt);
 
-          await prisma.trackingEvent.create({
+          await withTenant(msg.apiKeyId, (tx) => tx.trackingEvent.create({
             data: {
               sendMessageId: msg.id,
               email: msg.to,
@@ -162,7 +163,7 @@ export async function trackRoutes(fastify: FastifyInstance): Promise<void> {
               isLikelyBot,
               botReason,
             },
-          }).catch(() => { /* ignore */ });
+          })).catch(() => { /* ignore */ });
 
           // Same reasoning as the open handler above — a security gateway's
           // pre-send link scan shouldn't count as a real click or trigger
