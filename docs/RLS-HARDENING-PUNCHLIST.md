@@ -10,6 +10,9 @@ The reason it was never flipped: a large number of routes and workers query RLS-
 - `accountData.ts` (GDPR export/delete) — fixed to use `tx` for monitor/webhook/automation/verification/bulkJob/monitorCheck/webhookDelivery/sendingDomain/emailTemplate/inboxTest/trackingEvent/automationEnrollment.
 - `contacts/index.ts` double opt-in confirmation — fixed to use `withRlsBypass()` for the tenant-discovery lookup.
 - `connector_secrets`, `connector_rules`, `connector_events`, `salesforce_connections`, `salesforce_lead_syncs` — RLS enabled, policies live, every call site in `payment.ts`/`salesforce.ts`/`salesforceSyncWorker.ts` converted.
+- `team_invites`, `team_members` — RLS enabled, policies live. `team/index.ts` converted to `withTenant()` (real apiKeyId at every call site). `auth/index.ts` converted to `withRlsBypass()` instead — every apiKey/teamMember/teamInvite call there happens during login/identity discovery, before any tenant is known. This is the highest-risk file touched (breaks login if wrong) — verified live: dashboard loads authenticated, `/v1/team` and `/v1/team/invites` both return correct 200s post-deploy.
+- `inbox_tests`, `brand_kits`, `api_request_logs` — RLS enabled, policies live. All single apiKeyId-scoped, request-scoped call sites; `server.ts`'s fire-and-forget request-logging hook also converted.
+- `sending_domains` — RLS enabled, policy live. `domainVerify.ts` (shared by the manual verify route and the worker), `domainVerifyWorker.ts` (`withRlsBypass()` for the cross-tenant "every pending domain" scan), `domains/index.ts`, `send/index.ts`, `analytics/index.ts` (one call) all converted. Also fixed two test files whose prisma mocks didn't implement `$transaction` — now the established `prisma.$transaction = vi.fn((fn) => fn(prisma))` pattern.
 
 **Not done:** everything below. None of it is urgent in the sense of "actively leaking" — app-level `WHERE apiKeyId` filters are still the only protection either way, exactly as before this pass started. It's about making the eventual role cutover safe, not about an active vulnerability.
 
@@ -17,11 +20,6 @@ The reason it was never flipped: a large number of routes and workers query RLS-
 
 | Table(s) | Column | Call sites | Files |
 |---|---|---|---|
-| `team_invites`, `team_members` | `workspaceKeyId` | ~11 | `src/routes/team/index.ts`, `src/routes/auth/index.ts` (accept-invite flow) |
-| `inbox_tests` | `apiKeyId` | 4 | `src/routes/inbox-test/index.ts` |
-| `brand_kits` | `api_key_id` | 3 | `src/routes/brand/index.ts` |
-| `api_request_logs` | `apiKeyId` (mapped `api_key_id`) | 3 + 1 fire-and-forget | `src/routes/logs/index.ts`, `src/server.ts` (onResponse hook — check this doesn't need `withRlsBypass` instead, since it fires outside any per-request transaction context) |
-| `sending_domains` | `apiKeyId` | ~13 | `src/routes/domains/index.ts`, `src/lib/domainVerify.ts`, `src/workers/domainVerifyWorker.ts` (this one is a cross-tenant sweep — needs `withRlsBypass()` for the scan, `withTenant()` per row) |
 | `agent_runs`, `agent_run_events` | `apiKeyId` (direct join for events) | ~30 | `src/routes/agentRuns/index.ts`, `src/workers/agentRunWorker.ts`, `src/lib/nurtureAgent.ts`, `src/lib/outboundAgent.ts` — **worker has multiple internal loops processing runs across tenants; needs the most careful per-call review of this batch** |
 | `email_templates`, `email_template_versions` | `apiKeyId` (direct join for versions) | ~18 | `src/routes/templates/index.ts`, `src/routes/connectors/payment.ts` (one read, already inside a `withTenant`-scoped caller — trivial), `src/routes/send/index.ts` |
 | `automations`, `automation_steps`, `automation_enrollments` | `api_key_id` (direct join for children) | ~25 | `src/routes/automations/index.ts`, `src/workers/automationWorker.ts` (cross-tenant sweep — `withRlsBypass()` + per-row `withTenant()`), `src/routes/privacy/index.ts` |
