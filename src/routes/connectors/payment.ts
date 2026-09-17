@@ -230,8 +230,8 @@ async function executeRule(apiKeyId: string, connector: string, normalized: Norm
   if (!rule) return { status: 'no_rule' };
 
   if (rule.action === 'send_template' && rule.template_id && normalized.customer_email) {
-    // email_templates has no RLS policy yet, so this stays on the plain client.
-    const template = await prisma.emailTemplate.findFirst({ where: { id: rule.template_id, apiKeyId } });
+    const templateId = rule.template_id;
+    const template = await withTenant(apiKeyId, (tx) => tx.emailTemplate.findFirst({ where: { id: templateId, apiKeyId } }));
     if (!template) return { status: 'error', error: 'template not found' };
 
     const apiKey = await withTenant(apiKeyId, (tx) => tx.apiKey.findUnique({ where: { id: apiKeyId }, select: { keyRaw: true } }));

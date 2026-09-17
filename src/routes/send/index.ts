@@ -79,9 +79,10 @@ async function buildEmailContent(
 
   // Template resolution
   if (input.template_id) {
-    const tmpl = await prisma.emailTemplate.findFirst({
-      where: { id: input.template_id, apiKeyId },
-    });
+    const templateId = input.template_id;
+    const tmpl = await withTenant(apiKeyId, (tx) => tx.emailTemplate.findFirst({
+      where: { id: templateId, apiKeyId },
+    }));
     if (!tmpl) throw Errors.notFound(`Template ${input.template_id} not found.`);
     subject = input.subject || tmpl.subject;
     htmlBody = htmlBody ?? tmpl.htmlBody;

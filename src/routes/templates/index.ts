@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { compileMjml } from '../../lib/mjml.js';
 import { sendViaSes } from '../../lib/ses.js';
@@ -47,10 +47,10 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       // Compile MJML to HTML if provided
       const htmlBody = mjml_body ? await compileMjml(mjml_body) : html_body!;
 
-      const template = await prisma.emailTemplate.create({
+      const template = await withTenant(apiKeyId, (tx) => tx.emailTemplate.create({
         data: { apiKeyId, name, subject, htmlBody, textBody: text_body ?? null, preheader: preheader ?? null, variables: variables ?? [] },
         select: { id: true, name: true, subject: true, variables: true, createdAt: true },
-      });
+      }));
 
       return reply.status(201).send(template);
     },
@@ -66,16 +66,16 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       const page = Math.max(1, parseInt(q.page ?? '1', 10));
       const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '50', 10)));
 
-      const [items, total] = await Promise.all([
-        prisma.emailTemplate.findMany({
+      const [items, total] = await withTenant(apiKeyId, (tx) => Promise.all([
+        tx.emailTemplate.findMany({
           where: { apiKeyId },
           orderBy: { createdAt: 'desc' },
           skip: (page - 1) * limit,
           take: limit,
           select: { id: true, name: true, subject: true, variables: true, createdAt: true, updatedAt: true },
         }),
-        prisma.emailTemplate.count({ where: { apiKeyId } }),
-      ]);
+        tx.emailTemplate.count({ where: { apiKeyId } }),
+      ]));
 
       return reply.status(200).send({ data: items, total, page, limit });
     },
@@ -89,10 +89,10 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const template = await prisma.emailTemplate.findFirst({
+      const template = await withTenant(apiKeyId, (tx) => tx.emailTemplate.findFirst({
         where: { id, apiKeyId },
         select: { id: true, name: true, subject: true, htmlBody: true, textBody: true, preheader: true, variables: true, createdAt: true, updatedAt: true },
-      });
+      }));
       if (!template) throw Errors.notFound('Template not found.');
 
       return reply.status(200).send(template);
@@ -109,12 +109,12 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map((i: { path: (string | number)[]; message: string }) => ({ field: i.path.join('.'), message: i.message })));
 
       const apiKeyId = request.apiKey.id;
-      const existing = await prisma.emailTemplate.findFirst({ where: { id, apiKeyId } });
+      const existing = await withTenant(apiKeyId, (tx) => tx.emailTemplate.findFirst({ where: { id, apiKeyId } }));
       if (!existing) throw Errors.notFound('Template not found.');
 
       // Save the current state as a version snapshot before overwriting
-      const versionCount = await prisma.emailTemplateVersion.count({ where: { templateId: id } });
-      void prisma.emailTemplateVersion.create({
+      const versionCount = await withTenant(apiKeyId, (tx) => tx.emailTemplateVersion.count({ where: { templateId: id } }));
+      void withTenant(apiKeyId, (tx) => tx.emailTemplateVersion.create({
         data: {
           templateId: id,
           version:    versionCount + 1,
@@ -125,12 +125,12 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
           variables:  existing.variables ?? [],
           savedBy:    request.apiKey.label ?? null,
         },
-      }).catch(() => { /* best-effort */ });
+      })).catch(() => { /* best-effort */ });
 
       const { name, subject, html_body, mjml_body, text_body, preheader, variables } = parsed.data;
       const htmlBody = mjml_body ? await compileMjml(mjml_body) : html_body;
 
-      const updated = await prisma.emailTemplate.update({
+      const updated = await withTenant(apiKeyId, (tx) => tx.emailTemplate.update({
         where: { id },
         data: {
           ...(name !== undefined && { name }),
@@ -141,7 +141,7 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
           ...(variables !== undefined && { variables }),
         },
         select: { id: true, name: true, subject: true, variables: true, updatedAt: true },
-      });
+      }));
 
       return reply.status(200).send(updated);
     },
@@ -155,14 +155,14 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const template = await prisma.emailTemplate.findFirst({ where: { id, apiKeyId }, select: { id: true } });
+      const template = await withTenant(apiKeyId, (tx) => tx.emailTemplate.findFirst({ where: { id, apiKeyId }, select: { id: true } }));
       if (!template) throw Errors.notFound('Template not found.');
 
-      const versions = await prisma.emailTemplateVersion.findMany({
+      const versions = await withTenant(apiKeyId, (tx) => tx.emailTemplateVersion.findMany({
         where: { templateId: id },
         orderBy: { version: 'desc' },
         select: { id: true, version: true, name: true, subject: true, savedAt: true, savedBy: true },
-      });
+      }));
 
       return reply.status(200).send({ data: versions });
     },
@@ -176,12 +176,12 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       const { id, versionId } = request.params as { id: string; versionId: string };
       const apiKeyId = request.apiKey.id;
 
-      const template = await prisma.emailTemplate.findFirst({ where: { id, apiKeyId }, select: { id: true } });
+      const template = await withTenant(apiKeyId, (tx) => tx.emailTemplate.findFirst({ where: { id, apiKeyId }, select: { id: true } }));
       if (!template) throw Errors.notFound('Template not found.');
 
-      const version = await prisma.emailTemplateVersion.findFirst({
+      const version = await withTenant(apiKeyId, (tx) => tx.emailTemplateVersion.findFirst({
         where: { id: versionId, templateId: id },
-      });
+      }));
       if (!version) throw Errors.notFound('Version not found.');
 
       return reply.status(200).send(version);
@@ -196,17 +196,17 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       const { id, versionId } = request.params as { id: string; versionId: string };
       const apiKeyId = request.apiKey.id;
 
-      const existing = await prisma.emailTemplate.findFirst({ where: { id, apiKeyId } });
+      const existing = await withTenant(apiKeyId, (tx) => tx.emailTemplate.findFirst({ where: { id, apiKeyId } }));
       if (!existing) throw Errors.notFound('Template not found.');
 
-      const version = await prisma.emailTemplateVersion.findFirst({
+      const version = await withTenant(apiKeyId, (tx) => tx.emailTemplateVersion.findFirst({
         where: { id: versionId, templateId: id },
-      });
+      }));
       if (!version) throw Errors.notFound('Version not found.');
 
       // Save the current state before restoring
-      const versionCount = await prisma.emailTemplateVersion.count({ where: { templateId: id } });
-      void prisma.emailTemplateVersion.create({
+      const versionCount = await withTenant(apiKeyId, (tx) => tx.emailTemplateVersion.count({ where: { templateId: id } }));
+      void withTenant(apiKeyId, (tx) => tx.emailTemplateVersion.create({
         data: {
           templateId: id,
           version:    versionCount + 1,
@@ -217,9 +217,9 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
           variables:  existing.variables ?? [],
           savedBy:    request.apiKey.label ?? null,
         },
-      }).catch(() => { /* best-effort */ });
+      })).catch(() => { /* best-effort */ });
 
-      const restored = await prisma.emailTemplate.update({
+      const restored = await withTenant(apiKeyId, (tx) => tx.emailTemplate.update({
         where: { id },
         data: {
           name:     version.name,
@@ -229,7 +229,7 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
           variables: version.variables ?? [],
         },
         select: { id: true, name: true, subject: true, variables: true, updatedAt: true },
-      });
+      }));
 
       return reply.status(200).send({ ...restored, restoredFromVersion: version.version });
     },
@@ -255,10 +255,10 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw Errors.validationFailed([{ field: 'to', message: 'A valid recipient email is required.' }]);
       if (!fromEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromEmail)) throw Errors.validationFailed([{ field: 'from_email', message: 'A valid sender email is required.' }]);
 
-      const template = await prisma.emailTemplate.findFirst({
+      const template = await withTenant(apiKeyId, (tx) => tx.emailTemplate.findFirst({
         where: { id, apiKeyId },
         select: { subject: true, htmlBody: true, textBody: true },
-      });
+      }));
       if (!template) throw Errors.notFound('Template not found.');
 
       // Replace {{ variable }} placeholders with supplied values (or a placeholder)
@@ -289,10 +289,10 @@ export async function templateRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const existing = await prisma.emailTemplate.findFirst({ where: { id, apiKeyId } });
+      const existing = await withTenant(apiKeyId, (tx) => tx.emailTemplate.findFirst({ where: { id, apiKeyId } }));
       if (!existing) throw Errors.notFound('Template not found.');
 
-      await prisma.emailTemplate.delete({ where: { id } });
+      await withTenant(apiKeyId, (tx) => tx.emailTemplate.delete({ where: { id } }));
       return reply.status(200).send({ deleted: true, id });
     },
   );
