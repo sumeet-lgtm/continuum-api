@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
 import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 
 interface DataSubjectQuery { email?: string; }
@@ -46,9 +45,9 @@ export async function privacyRoutes(fastify: FastifyInstance): Promise<void> {
               },
             }),
           ])),
-          prisma.verification.count({
+          withTenant(apiKeyId, (tx) => tx.verification.count({
             where: { email: { equals: lc, mode: 'insensitive' }, apiKeyId },
-          }),
+          })),
           // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
           // withRlsBypass (not withTenant): a GDPR data-subject lookup must report
           // whether this address is suppressed platform-wide, regardless of which
@@ -57,12 +56,12 @@ export async function privacyRoutes(fastify: FastifyInstance): Promise<void> {
             where: { email: { equals: lc, mode: 'insensitive' } },
             select: { reason: true, createdAt: true },
           })),
-          prisma.automationEnrollment.count({
+          withTenant(apiKeyId, (tx) => tx.automationEnrollment.count({
             where: {
               email: { equals: lc, mode: 'insensitive' },
               automation: { apiKeyId },
             },
-          }),
+          })),
         ]);
 
       return reply.status(200).send({
@@ -107,7 +106,7 @@ export async function privacyRoutes(fastify: FastifyInstance): Promise<void> {
         tx.contact.deleteMany({
           where: { email: { equals: email, mode: 'insensitive' }, apiKeyId },
         }),
-        prisma.verification.deleteMany({
+        tx.verification.deleteMany({
           where: { email: { equals: email, mode: 'insensitive' }, apiKeyId },
         }),
         tx.lead.deleteMany({
@@ -120,7 +119,7 @@ export async function privacyRoutes(fastify: FastifyInstance): Promise<void> {
         tx.sequenceEnrollment.deleteMany({
           where: { email: { equals: email, mode: 'insensitive' }, sequence: { apiKeyId } },
         }),
-        prisma.automationEnrollment.deleteMany({
+        tx.automationEnrollment.deleteMany({
           where: { email: { equals: email, mode: 'insensitive' }, automation: { apiKeyId } },
         }),
         tx.campaignRecipient.deleteMany({

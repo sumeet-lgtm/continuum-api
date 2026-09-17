@@ -1,8 +1,7 @@
-import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { config } from '../config.js';
-import { withTenant } from '../lib/tenantContext.js';
+import { withTenant, withRlsBypass } from '../lib/tenantContext.js';
 
 const sesClient = new SESv2Client({ region: config.AWS_REGION ?? 'us-east-1' });
 
@@ -19,7 +18,7 @@ export async function runAutomationWorker(): Promise<void> {
   // automation.apiKeyId, used below (SendMessage.apiKeyId) to scope every
   // downstream write to that row's own tenant.
   // tenant-sweep: see comment above
-  const enrollments = await prisma.automationEnrollment.findMany({
+  const enrollments = await withRlsBypass((tx) => tx.automationEnrollment.findMany({
     where: {
       status: 'active',
       nextSendAt: { lte: now },
@@ -32,7 +31,7 @@ export async function runAutomationWorker(): Promise<void> {
       },
     },
     take: 200,
-  });
+  }));
 
   logger.info({ count: enrollments.length }, 'Automation enrollments due');
 
@@ -44,20 +43,20 @@ export async function runAutomationWorker(): Promise<void> {
 
     if (!step) {
       // All steps done — mark completed
-      await prisma.automationEnrollment.update({
+      await withTenant(apiKeyId, (tx) => tx.automationEnrollment.update({
         where: { id: enrollment.id },
         data: { status: 'completed', completedAt: now },
-      });
+      }));
       continue;
     }
 
     // Check suppression
     const suppressed = await withTenant(apiKeyId, (tx) => tx.suppression.findUnique({ where: { email: enrollment.email } }));
     if (suppressed) {
-      await prisma.automationEnrollment.update({
+      await withTenant(apiKeyId, (tx) => tx.automationEnrollment.update({
         where: { id: enrollment.id },
         data: { status: 'unsubscribed', completedAt: now },
-      });
+      }));
       continue;
     }
 
@@ -108,24 +107,24 @@ export async function runAutomationWorker(): Promise<void> {
         : null;
 
       if (nextSendAt) {
-        await prisma.automationEnrollment.update({
+        await withTenant(apiKeyId, (tx) => tx.automationEnrollment.update({
           where: { id: enrollment.id },
           data: { currentStep: enrollment.currentStep + 1, nextSendAt },
-        });
+        }));
       } else {
-        await prisma.automationEnrollment.update({
+        await withTenant(apiKeyId, (tx) => tx.automationEnrollment.update({
           where: { id: enrollment.id },
           data: { status: 'completed', completedAt: new Date() },
-        });
+        }));
       }
     } catch (err) {
       logger.error({ err, enrollmentId: enrollment.id }, 'Automation step send failed');
       // Leave status as active; nextSendAt will be re-tried on next worker run
       // Bump nextSendAt by 15 minutes to avoid tight retry loop
-      await prisma.automationEnrollment.update({
+      await withTenant(apiKeyId, (tx) => tx.automationEnrollment.update({
         where: { id: enrollment.id },
         data: { nextSendAt: new Date(Date.now() + 15 * 60 * 1000) },
-      });
+      }));
     }
   }
 

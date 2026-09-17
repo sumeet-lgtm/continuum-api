@@ -2,8 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
-import { withRlsBypass } from '../../lib/tenantContext.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
 const stepSchema = z.object({
@@ -37,7 +36,7 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
 
     const { name, trigger_event, steps } = parsed.data;
 
-    const automation = await prisma.automation.create({
+    const automation = await withTenant(apiKeyId, (tx) => tx.automation.create({
       data: {
         apiKeyId,
         name,
@@ -56,7 +55,7 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
         },
       },
       include: { steps: { orderBy: { stepOrder: 'asc' } } },
-    });
+    }));
 
     return reply.status(201).send(automation);
   });
@@ -68,8 +67,8 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     const page = Math.max(1, parseInt(q.page ?? '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? '20', 10)));
 
-    const [items, total] = await Promise.all([
-      prisma.automation.findMany({
+    const [items, total] = await withTenant(apiKeyId, (tx) => Promise.all([
+      tx.automation.findMany({
         where: { apiKeyId },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
@@ -79,8 +78,8 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
           _count: { select: { enrollments: true } },
         },
       }),
-      prisma.automation.count({ where: { apiKeyId } }),
-    ]);
+      tx.automation.count({ where: { apiKeyId } }),
+    ]));
 
     return reply.status(200).send({ data: items, total, page, limit });
   });
@@ -90,13 +89,13 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const automation = await prisma.automation.findFirst({
+    const automation = await withTenant(apiKeyId, (tx) => tx.automation.findFirst({
       where: { id, apiKeyId },
       include: {
         steps: { orderBy: { stepOrder: 'asc' } },
         _count: { select: { enrollments: true } },
       },
-    });
+    }));
     if (!automation) throw Errors.notFound('Automation not found.');
     return reply.status(200).send(automation);
   });
@@ -107,17 +106,17 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     const apiKeyId = request.apiKey.id;
     const body = request.body as { name?: string; status?: string };
 
-    const existing = await prisma.automation.findFirst({ where: { id, apiKeyId } });
+    const existing = await withTenant(apiKeyId, (tx) => tx.automation.findFirst({ where: { id, apiKeyId } }));
     if (!existing) throw Errors.notFound('Automation not found.');
 
-    const updated = await prisma.automation.update({
+    const updated = await withTenant(apiKeyId, (tx) => tx.automation.update({
       where: { id },
       data: {
         ...(body.name ? { name: body.name } : {}),
         ...(body.status ? { status: body.status } : {}),
       },
       include: { steps: { orderBy: { stepOrder: 'asc' } } },
-    });
+    }));
     return reply.status(200).send(updated);
   });
 
@@ -126,10 +125,10 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const existing = await prisma.automation.findFirst({ where: { id, apiKeyId } });
+    const existing = await withTenant(apiKeyId, (tx) => tx.automation.findFirst({ where: { id, apiKeyId } }));
     if (!existing) throw Errors.notFound('Automation not found.');
 
-    await prisma.automation.delete({ where: { id } });
+    await withTenant(apiKeyId, (tx) => tx.automation.delete({ where: { id } }));
     return reply.status(200).send({ deleted: true });
   });
 
@@ -150,10 +149,10 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     }
 
     // Find active automations listening for this event
-    const automations = await prisma.automation.findMany({
+    const automations = await withTenant(apiKeyId, (tx) => tx.automation.findMany({
       where: { apiKeyId, triggerEvent: event, status: 'active' },
       include: { steps: { orderBy: { stepOrder: 'asc' }, take: 1 } },
-    });
+    }));
 
     if (automations.length === 0) {
       return reply.status(200).send({ enrolled: false, reason: 'no_matching_automation' });
@@ -166,7 +165,7 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
         : null;
 
       try {
-        const enrollment = await prisma.automationEnrollment.upsert({
+        const enrollment = await withTenant(apiKeyId, (tx) => tx.automationEnrollment.upsert({
           where: { automationId_email: { automationId: automation.id, email } },
           create: {
             automationId: automation.id,
@@ -183,7 +182,7 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
             ...(nextSendAt ? { nextSendAt } : {}),
             completedAt: null,
           },
-        });
+        }));
         return { automationId: automation.id, enrollmentId: enrollment.id, enrolled: true };
       } catch {
         return { automationId: automation.id, enrolled: false, reason: 'already_active' };
@@ -199,7 +198,7 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     const apiKeyId = request.apiKey.id;
     const q = request.query as { status?: string; page?: string; limit?: string };
 
-    const automation = await prisma.automation.findFirst({ where: { id, apiKeyId } });
+    const automation = await withTenant(apiKeyId, (tx) => tx.automation.findFirst({ where: { id, apiKeyId } }));
     if (!automation) throw Errors.notFound('Automation not found.');
 
     const page = Math.max(1, parseInt(q.page ?? '1', 10));
@@ -208,17 +207,15 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
 
     // `id` was already verified to belong to apiKeyId above (automation.findFirst
     // with apiKeyId) — automationId here is that same pre-validated id.
-    const [items, total] = await Promise.all([
-      // tenant-sweep: see note above — id pre-validated against apiKeyId.
-      prisma.automationEnrollment.findMany({
+    const [items, total] = await withTenant(apiKeyId, (tx) => Promise.all([
+      tx.automationEnrollment.findMany({
         where,
         orderBy: { enrolledAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
       }),
-      // tenant-sweep: see note above — id pre-validated against apiKeyId.
-      prisma.automationEnrollment.count({ where }),
-    ]);
+      tx.automationEnrollment.count({ where }),
+    ]));
 
     return reply.status(200).send({ data: items, total, page, limit });
   });
@@ -228,22 +225,17 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const automation = await prisma.automation.findFirst({ where: { id, apiKeyId } });
+    const automation = await withTenant(apiKeyId, (tx) => tx.automation.findFirst({ where: { id, apiKeyId } }));
     if (!automation) throw Errors.notFound('Automation not found.');
 
     // tenant-sweep (all 5 below): `id` pre-validated against apiKeyId above.
-    const [total, active, completed, unsubscribed, bounced] = await Promise.all([
-      // tenant-sweep: id pre-validated against apiKeyId above.
-      prisma.automationEnrollment.count({ where: { automationId: id } }),
-      // tenant-sweep: id pre-validated against apiKeyId above.
-      prisma.automationEnrollment.count({ where: { automationId: id, status: 'active' } }),
-      // tenant-sweep: id pre-validated against apiKeyId above.
-      prisma.automationEnrollment.count({ where: { automationId: id, status: 'completed' } }),
-      // tenant-sweep: id pre-validated against apiKeyId above.
-      prisma.automationEnrollment.count({ where: { automationId: id, status: 'unsubscribed' } }),
-      // tenant-sweep: id pre-validated against apiKeyId above.
-      prisma.automationEnrollment.count({ where: { automationId: id, status: 'bounced' } }),
-    ]);
+    const [total, active, completed, unsubscribed, bounced] = await withTenant(apiKeyId, (tx) => Promise.all([
+      tx.automationEnrollment.count({ where: { automationId: id } }),
+      tx.automationEnrollment.count({ where: { automationId: id, status: 'active' } }),
+      tx.automationEnrollment.count({ where: { automationId: id, status: 'completed' } }),
+      tx.automationEnrollment.count({ where: { automationId: id, status: 'unsubscribed' } }),
+      tx.automationEnrollment.count({ where: { automationId: id, status: 'bounced' } }),
+    ]));
 
     return reply.status(200).send({
       automationId: id,
@@ -258,13 +250,13 @@ export async function automationRoutes(fastify: FastifyInstance): Promise<void> 
     const { id, email } = request.params as { id: string; email: string };
     const apiKeyId = request.apiKey.id;
 
-    const automation = await prisma.automation.findFirst({ where: { id, apiKeyId } });
+    const automation = await withTenant(apiKeyId, (tx) => tx.automation.findFirst({ where: { id, apiKeyId } }));
     if (!automation) throw Errors.notFound('Automation not found.');
 
-    await prisma.automationEnrollment.updateMany({
+    await withTenant(apiKeyId, (tx) => tx.automationEnrollment.updateMany({
       where: { automationId: id, email },
       data: { status: 'unsubscribed', completedAt: new Date() },
-    });
+    }));
 
     return reply.status(200).send({ unenrolled: true });
   });
