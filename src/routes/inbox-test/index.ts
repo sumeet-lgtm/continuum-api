@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { sendViaSes, isSesConfigured } from '../../lib/ses.js';
 import { checkInboxPlacement, type PlacementResult } from '../../lib/inboxPlacement.js';
@@ -38,10 +38,10 @@ export async function inboxTestRoutes(fastify: FastifyInstance): Promise<void> {
     const { subject, html_body, from_name, from_email } = parsed.data;
 
     // Create test record
-    const test = await prisma.inboxTest.create({
+    const test = await withTenant(apiKeyId, (tx) => tx.inboxTest.create({
       data: { apiKeyId, subject, fromEmail: `${from_name} <${from_email}>`, status: 'pending' },
       select: { id: true, subject: true, fromEmail: true, status: true, createdAt: true },
-    });
+    }));
 
     // Send to all seed addresses (non-blocking). Each probe carries a
     // unique header so the placement check below can find this exact
@@ -59,10 +59,10 @@ export async function inboxTestRoutes(fastify: FastifyInstance): Promise<void> {
       // Give the probe time to actually land before checking for it.
       await new Promise(r => setTimeout(r, 90000));
       const results = await checkInboxPlacement(testMarker);
-      await prisma.inboxTest.update({
+      await withTenant(apiKeyId, (tx) => tx.inboxTest.update({
         where: { id: test.id },
         data: { status: 'complete', results, score: calculateScore(results), checkedAt: new Date() },
-      });
+      }));
     });
 
     return reply.status(202).send({ ...test, message: 'Test emails sent. Results available in ~2 minutes.' });
@@ -71,12 +71,12 @@ export async function inboxTestRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /v1/inbox-tests
   fastify.get('/inbox-tests', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const apiKeyId = request.apiKey.id;
-    const tests = await prisma.inboxTest.findMany({
+    const tests = await withTenant(apiKeyId, (tx) => tx.inboxTest.findMany({
       where: { apiKeyId },
       orderBy: { createdAt: 'desc' },
       take: 50,
       select: { id: true, subject: true, fromEmail: true, status: true, score: true, createdAt: true, checkedAt: true },
-    });
+    }));
     return reply.status(200).send({ data: tests });
   });
 
@@ -84,7 +84,7 @@ export async function inboxTestRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/inbox-tests/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
-    const test = await prisma.inboxTest.findFirst({ where: { id, apiKeyId } });
+    const test = await withTenant(apiKeyId, (tx) => tx.inboxTest.findFirst({ where: { id, apiKeyId } }));
     if (!test) throw Errors.notFound('Test not found.');
     return reply.status(200).send(test);
   });

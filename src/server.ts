@@ -9,7 +9,8 @@ import { initSentry, installCrashReporting } from './lib/sentry.js';
 
 initSentry('api');
 installCrashReporting('api');
-import { prisma, disconnectPrisma } from './lib/prisma.js';
+import { disconnectPrisma } from './lib/prisma.js';
+import { withTenant } from './lib/tenantContext.js';
 import { closeQueues } from './lib/queue.js';
 import { authPlugin } from './plugins/auth.js';
 import { rateLimitPlugin } from './plugins/rateLimit.js';
@@ -133,7 +134,7 @@ async function buildApp(): Promise<FastifyInstance> {
       const path = request.url.split('?')[0] ?? request.url;
       // Collapse dynamic segments: /v1/verify/:id → /v1/verify/*
       const cleanPath = path.replace(/\/[a-z0-9_-]{20,}/gi, '/*');
-      prisma.apiRequestLog.create({
+      withTenant(apiKey.id, (tx) => tx.apiRequestLog.create({
         data: {
           apiKeyId:   apiKey.id,
           method:     request.method,
@@ -143,7 +144,7 @@ async function buildApp(): Promise<FastifyInstance> {
           sourceIp:   request.ip ?? null,
           requestId:  request.id ?? null,
         },
-      }).catch(() => { /* best-effort — discard on error */ });
+      })).catch(() => { /* best-effort — discard on error */ });
     }
   });
 

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
 export async function brandRoutes(fastify: FastifyInstance): Promise<void> {
@@ -11,7 +12,7 @@ export async function brandRoutes(fastify: FastifyInstance): Promise<void> {
   /** GET /v1/brand-kit — returns the brand kit for the authenticated key */
   fastify.get('/brand-kit', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const apiKeyId = request.apiKey.id;
-    const kit = await prisma.brand_kits.findUnique({ where: { api_key_id: apiKeyId } });
+    const kit = await withTenant(apiKeyId, (tx) => tx.brand_kits.findUnique({ where: { api_key_id: apiKeyId } }));
     return reply.send(kit ?? {});
   });
 
@@ -37,11 +38,11 @@ export async function brandRoutes(fastify: FastifyInstance): Promise<void> {
     if ('footer_text'   in body) data.footer_text   = body.footer_text   ?? null;
     if ('website_url'   in body) data.website_url   = body.website_url   ?? null;
 
-    const kit = await prisma.brand_kits.upsert({
+    const kit = await withTenant(apiKeyId, (tx) => tx.brand_kits.upsert({
       where:  { api_key_id: apiKeyId },
       create: { api_key_id: apiKeyId, ...data } as Parameters<typeof prisma.brand_kits.create>[0]['data'],
       update: data as Parameters<typeof prisma.brand_kits.update>[0]['data'],
-    });
+    }));
 
     return reply.send(kit);
   });

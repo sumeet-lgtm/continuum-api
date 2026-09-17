@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 
 interface LogsQuery {
   method?: string;
@@ -36,11 +36,11 @@ export async function logsRoutes(fastify: FastifyInstance): Promise<void> {
         where.statusCode = { gte: 400 };
       }
 
-      const [items, total] = await Promise.all([
+      const [items, total] = await withTenant(request.apiKey.id, (tx) => Promise.all([
         // `where` above starts from { apiKeyId: request.apiKey.id }, built
         // dynamically rather than inline (why the static scan misses it).
         // tenant-sweep: scoped via the dynamic `where` built above.
-        prisma.apiRequestLog.findMany({
+        tx.apiRequestLog.findMany({
           where,
           orderBy: { createdAt: 'desc' },
           skip,
@@ -58,8 +58,8 @@ export async function logsRoutes(fastify: FastifyInstance): Promise<void> {
           },
         }),
         // tenant-sweep: same `where` as above.
-        prisma.apiRequestLog.count({ where }),
-      ]);
+        tx.apiRequestLog.count({ where }),
+      ]));
 
       return reply.status(200).send({ data: items, total, page, limit });
     },
@@ -73,10 +73,10 @@ export async function logsRoutes(fastify: FastifyInstance): Promise<void> {
       const apiKeyId = request.apiKey.id;
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-      const rows = await prisma.apiRequestLog.findMany({
+      const rows = await withTenant(apiKeyId, (tx) => tx.apiRequestLog.findMany({
         where: { apiKeyId, createdAt: { gte: since } },
         select: { statusCode: true, durationMs: true, path: true },
-      });
+      }));
 
       const total    = rows.length;
       const success  = rows.filter(r => r.statusCode >= 200 && r.statusCode < 300).length;
