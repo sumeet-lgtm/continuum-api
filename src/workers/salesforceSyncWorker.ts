@@ -1,12 +1,11 @@
 import { Worker, type Job } from 'bullmq';
 import { QUEUE_SALESFORCE_SYNC, redisConnection } from '../lib/queue.js';
-import { prisma } from '../lib/prisma.js';
 import { decryptValue } from '../lib/crypto.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { getSalesforceAccessToken } from '../lib/oauth/salesforce.js';
 import { findLeadByEmail, createLead, updateLead, logActivity, queryLeadsById, SalesforceApiError, applyFieldMappings, type SalesforceFieldMapping } from '../lib/salesforceApi.js';
-import { withTenant } from '../lib/tenantContext.js';
+import { withTenant, withRlsBypass } from '../lib/tenantContext.js';
 
 interface SalesforceSyncTickPayload {
   tick: true;
@@ -32,7 +31,7 @@ async function pushLeadsForConnection(
   accessToken: string,
   fieldMappings: SalesforceFieldMapping[] | null,
 ): Promise<{ pushed: number; errors: number }> {
-  const existingSyncs = await prisma.salesforceLeadSync.findMany({ where: { apiKeyId } });
+  const existingSyncs = await withTenant(apiKeyId, (tx) => tx.salesforceLeadSync.findMany({ where: { apiKeyId } }));
   const syncedByEmail = new Map(existingSyncs.map((s) => [s.leadEmail, s]));
 
   // New leads (never synced) + leads updated since their last push.
@@ -88,11 +87,11 @@ async function pushLeadsForConnection(
         salesforceId = found?.id ?? await createLead(instanceUrl, accessToken, fields);
       }
 
-      await prisma.salesforceLeadSync.upsert({
+      await withTenant(apiKeyId, (tx) => tx.salesforceLeadSync.upsert({
         where: { apiKeyId_leadEmail: { apiKeyId, leadEmail: lead.email } },
         create: { apiKeyId, leadEmail: lead.email, salesforceId, sfObjectType: 'Lead' },
         update: { salesforceId, lastPushedAt: new Date() },
-      });
+      }));
       pushed++;
     } catch (err) {
       errors++;
@@ -123,9 +122,9 @@ async function pushRepliesForConnection(
   }));
   if (replies.length === 0) return 0;
 
-  const syncs = await prisma.salesforceLeadSync.findMany({
+  const syncs = await withTenant(apiKeyId, (tx) => tx.salesforceLeadSync.findMany({
     where: { apiKeyId, leadEmail: { in: [...new Set(replies.map((r) => r.fromEmail))] } },
-  });
+  }));
   const syncByEmail = new Map(syncs.map((s) => [s.leadEmail, s]));
 
   let logged = 0;
@@ -156,7 +155,7 @@ async function pushRepliesForConnection(
 const SF_STOP_STATUSES = new Set(['unqualified', 'disqualified', 'closed', 'do not contact', 'converted']);
 
 async function pullStatusForConnection(apiKeyId: string, instanceUrl: string, accessToken: string): Promise<number> {
-  const syncs = await prisma.salesforceLeadSync.findMany({ where: { apiKeyId, sfObjectType: 'Lead' }, take: 200 });
+  const syncs = await withTenant(apiKeyId, (tx) => tx.salesforceLeadSync.findMany({ where: { apiKeyId, sfObjectType: 'Lead' }, take: 200 }));
   if (syncs.length === 0) return 0;
 
   const records = await queryLeadsById(instanceUrl, accessToken, syncs.map((s) => s.salesforceId));
@@ -169,10 +168,10 @@ async function pullStatusForConnection(apiKeyId: string, instanceUrl: string, ac
     const statusChanged = record.Status !== sync.lastSfStatus;
     if (!statusChanged && !record.IsConverted) continue;
 
-    await prisma.salesforceLeadSync.update({
+    await withTenant(apiKeyId, (tx) => tx.salesforceLeadSync.update({
       where: { id: sync.id },
       data: { lastSfStatus: record.Status, lastSfSyncedAt: new Date(), sfObjectType: record.IsConverted ? 'Contact' : 'Lead' },
-    });
+    }));
 
     const shouldStop = record.IsConverted || (record.Status && SF_STOP_STATUSES.has(record.Status.toLowerCase()));
     if (shouldStop) {
@@ -196,9 +195,10 @@ async function pullStatusForConnection(apiKeyId: string, instanceUrl: string, ac
 export async function processSalesforceSyncTick(): Promise<void> {
   // Every tenant with an active Salesforce connection; each row's own
   // conn.apiKeyId is threaded through push/pull below, scoping every
-  // downstream read/write to that row's tenant.
-  // tenant-sweep: see comment above
-  const connections = await prisma.salesforceConnection.findMany({ where: { syncEnabled: true } });
+  // downstream read/write to that row's tenant. This top-level scan itself
+  // is the one legitimate use of the RLS bypass — it must see every
+  // tenant's connection to know which ones to process.
+  const connections = await withRlsBypass((tx) => tx.salesforceConnection.findMany({ where: { syncEnabled: true } }));
 
   for (const conn of connections) {
     try {
@@ -212,18 +212,18 @@ export async function processSalesforceSyncTick(): Promise<void> {
 
       logger.info({ apiKeyId: conn.apiKeyId, pushed, logged, pulled, errors }, 'Salesforce sync tick complete');
 
-      await prisma.salesforceConnection.update({
+      await withTenant(conn.apiKeyId, (tx) => tx.salesforceConnection.update({
         where: { id: conn.id },
         data: {
           lastPushedAt: new Date(),
           lastPulledAt: new Date(),
           lastErrorMsg: errors > 0 ? `${errors} lead(s) failed to sync — check logs` : null,
         },
-      });
+      }));
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Salesforce sync failed';
       logger.error({ err: message, apiKeyId: conn.apiKeyId }, 'Salesforce sync tick failed for connection');
-      await prisma.salesforceConnection.update({ where: { id: conn.id }, data: { lastErrorMsg: message } }).catch(() => {});
+      await withTenant(conn.apiKeyId, (tx) => tx.salesforceConnection.update({ where: { id: conn.id }, data: { lastErrorMsg: message } })).catch(() => {});
     }
   }
 }

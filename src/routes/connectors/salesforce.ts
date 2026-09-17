@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { encryptValue, decryptValue } from '../../lib/crypto.js';
 import { config } from '../../config.js';
@@ -66,11 +66,11 @@ export async function salesforceConnectorRoutes(fastify: FastifyInstance): Promi
         const { refreshToken, instanceUrl, orgId, email } = await exchangeSalesforceCode(code);
         const refreshTokenEnc = encryptValue(refreshToken, getSecret());
 
-        await prisma.salesforceConnection.upsert({
+        await withTenant(verified.apiKeyId, (tx) => tx.salesforceConnection.upsert({
           where: { apiKeyId: verified.apiKeyId },
           create: { apiKeyId: verified.apiKeyId, instanceUrl, refreshTokenEnc, orgId, connectedEmail: email, syncEnabled: true },
           update: { instanceUrl, refreshTokenEnc, orgId, connectedEmail: email, syncEnabled: true, lastErrorMsg: null },
-        });
+        }));
 
         return reply.redirect(`${dashboardUrl}?connected=salesforce`);
       } catch (err) {
@@ -82,22 +82,24 @@ export async function salesforceConnectorRoutes(fastify: FastifyInstance): Promi
 
   // GET /v1/connectors/salesforce — connection status
   fastify.get('/connectors/salesforce', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const conn = await prisma.salesforceConnection.findUnique({
-      where: { apiKeyId: request.apiKey.id },
+    const apiKeyId = request.apiKey.id;
+    const conn = await withTenant(apiKeyId, (tx) => tx.salesforceConnection.findUnique({
+      where: { apiKeyId },
       select: { instanceUrl: true, orgId: true, connectedEmail: true, syncEnabled: true, fieldMappings: true, lastPushedAt: true, lastPulledAt: true, lastErrorMsg: true, createdAt: true },
-    });
+    }));
     if (!conn) return reply.status(200).send({ connected: false });
 
-    const syncedCount = await prisma.salesforceLeadSync.count({ where: { apiKeyId: request.apiKey.id } });
+    const syncedCount = await withTenant(apiKeyId, (tx) => tx.salesforceLeadSync.count({ where: { apiKeyId } }));
     return reply.status(200).send({ connected: true, ...conn, syncedLeadCount: syncedCount });
   });
 
   // GET /v1/connectors/salesforce/field-mapping — current custom field mappings
   fastify.get('/connectors/salesforce/field-mapping', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const conn = await prisma.salesforceConnection.findUnique({
-      where: { apiKeyId: request.apiKey.id },
+    const apiKeyId = request.apiKey.id;
+    const conn = await withTenant(apiKeyId, (tx) => tx.salesforceConnection.findUnique({
+      where: { apiKeyId },
       select: { fieldMappings: true },
-    });
+    }));
     if (!conn) throw Errors.notFound('Salesforce connection');
     return reply.status(200).send({ field_mappings: conn.fieldMappings ?? [] });
   });
@@ -112,52 +114,57 @@ export async function salesforceConnectorRoutes(fastify: FastifyInstance): Promi
     const body = request.body as { field_mappings?: unknown };
     const mappings = validateFieldMappings(body.field_mappings ?? []);
 
-    const conn = await prisma.salesforceConnection.findUnique({ where: { apiKeyId: request.apiKey.id } });
+    const apiKeyId = request.apiKey.id;
+    const conn = await withTenant(apiKeyId, (tx) => tx.salesforceConnection.findUnique({ where: { apiKeyId } }));
     if (!conn) throw Errors.notFound('Salesforce connection');
 
-    await prisma.salesforceConnection.update({
-      where: { apiKeyId: request.apiKey.id },
+    await withTenant(apiKeyId, (tx) => tx.salesforceConnection.update({
+      where: { apiKeyId },
       data: { fieldMappings: mappings as unknown as Prisma.InputJsonValue },
-    });
+    }));
     return reply.status(200).send({ field_mappings: mappings });
   });
 
   // PATCH /v1/connectors/salesforce — toggle sync on/off without disconnecting
   fastify.patch('/connectors/salesforce', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const apiKeyId = request.apiKey.id;
     const body = request.body as { sync_enabled?: boolean };
-    const conn = await prisma.salesforceConnection.findUnique({ where: { apiKeyId: request.apiKey.id } });
+    const conn = await withTenant(apiKeyId, (tx) => tx.salesforceConnection.findUnique({ where: { apiKeyId } }));
     if (!conn) throw Errors.notFound('Salesforce connection');
     if (body.sync_enabled === undefined) throw Errors.validationFailed({ sync_enabled: 'sync_enabled is required' });
+    const syncEnabled = body.sync_enabled;
 
-    await prisma.salesforceConnection.update({ where: { apiKeyId: request.apiKey.id }, data: { syncEnabled: body.sync_enabled } });
+    await withTenant(apiKeyId, (tx) => tx.salesforceConnection.update({ where: { apiKeyId }, data: { syncEnabled } }));
     return reply.status(200).send({ updated: true });
   });
 
   // DELETE /v1/connectors/salesforce — disconnect (keeps the lead-sync
   // history rows so reconnecting doesn't re-create duplicate SFDC records)
   fastify.delete('/connectors/salesforce', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    await prisma.salesforceConnection.delete({ where: { apiKeyId: request.apiKey.id } }).catch(() => {});
+    const apiKeyId = request.apiKey.id;
+    await withTenant(apiKeyId, (tx) => tx.salesforceConnection.delete({ where: { apiKeyId } })).catch(() => {});
     return reply.status(200).send({ disconnected: true });
   });
 
   // POST /v1/connectors/salesforce/test — verify the stored refresh token
   // still works, same shape as the mailbox test-connection endpoint.
   fastify.post('/connectors/salesforce/test', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const conn = await prisma.salesforceConnection.findUnique({ where: { apiKeyId: request.apiKey.id } });
+    const apiKeyId = request.apiKey.id;
+    const conn = await withTenant(apiKeyId, (tx) => tx.salesforceConnection.findUnique({ where: { apiKeyId } }));
     if (!conn) throw Errors.notFound('Salesforce connection');
 
     try {
       const refreshToken = decryptValue(conn.refreshTokenEnc, getSecret());
       const accessToken = await getSalesforceAccessToken(refreshToken);
       const ok = await testConnection(conn.instanceUrl, accessToken);
-      await prisma.salesforceConnection.update({
-        where: { apiKeyId: request.apiKey.id },
+      await withTenant(apiKeyId, (tx) => tx.salesforceConnection.update({
+        where: { apiKeyId },
         data: { lastErrorMsg: ok ? null : 'Connection test failed' },
-      });
+      }));
       return reply.status(200).send({ ok });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Connection test failed';
-      await prisma.salesforceConnection.update({ where: { apiKeyId: request.apiKey.id }, data: { lastErrorMsg: message } });
+      await withTenant(apiKeyId, (tx) => tx.salesforceConnection.update({ where: { apiKeyId }, data: { lastErrorMsg: message } }));
       return reply.status(200).send({ ok: false, error: message });
     }
   });

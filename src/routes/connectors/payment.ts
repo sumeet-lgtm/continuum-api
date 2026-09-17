@@ -202,7 +202,7 @@ function normalizeHubSpot(body: unknown[]): NormalizedEvent[] {
 // ─── Signature verification ───────────────────────────────────────────────────
 
 async function getSecret(apiKeyId: string, connector: string): Promise<string | null> {
-  const row = await prisma.connector_secrets.findUnique({ where: { api_key_id_connector: { api_key_id: apiKeyId, connector } } });
+  const row = await withTenant(apiKeyId, (tx) => tx.connector_secrets.findUnique({ where: { api_key_id_connector: { api_key_id: apiKeyId, connector } } }));
   return row?.secret ?? null;
 }
 
@@ -223,17 +223,18 @@ function verifyRazorpaySignature(payload: string, signature: string, secret: str
 // ─── Execute connector rule ───────────────────────────────────────────────────
 
 async function executeRule(apiKeyId: string, connector: string, normalized: NormalizedEvent): Promise<{ status: string; error?: string }> {
-  const rule = await prisma.connector_rules.findFirst({
+  const rule = await withTenant(apiKeyId, (tx) => tx.connector_rules.findFirst({
     where: { api_key_id: apiKeyId, connector, event_type: normalized.event_type, enabled: true },
-  });
+  }));
 
   if (!rule) return { status: 'no_rule' };
 
   if (rule.action === 'send_template' && rule.template_id && normalized.customer_email) {
+    // email_templates has no RLS policy yet, so this stays on the plain client.
     const template = await prisma.emailTemplate.findFirst({ where: { id: rule.template_id, apiKeyId } });
     if (!template) return { status: 'error', error: 'template not found' };
 
-    const apiKey = await prisma.apiKey.findUnique({ where: { id: apiKeyId }, select: { keyRaw: true } });
+    const apiKey = await withTenant(apiKeyId, (tx) => tx.apiKey.findUnique({ where: { id: apiKeyId }, select: { keyRaw: true } }));
     if (!apiKey?.keyRaw) return { status: 'error', error: 'api key not found' };
 
     const variables: Record<string, string> = {
@@ -301,7 +302,7 @@ async function handlePaymentWebhook(
   const results = await Promise.all(events.map(async (normalized) => {
     try {
       const result = await executeRule(apiKeyId, connector, normalized);
-      await prisma.connector_events.create({
+      await withTenant(apiKeyId, (tx) => tx.connector_events.create({
         data: {
           api_key_id: apiKeyId,
           connector,
@@ -310,7 +311,7 @@ async function handlePaymentWebhook(
           status:     result.status,
           error_msg:  result.error ?? null,
         },
-      });
+      }));
       return { event_type: normalized.event_type, status: result.status };
     } catch (err) {
       logger.warn({ connector, err }, 'connector event processing error');
@@ -358,25 +359,25 @@ export async function paymentConnectorRoutes(fastify: FastifyInstance): Promise<
 
   fastify.get('/connectors/rules', { preHandler: [requireAuth, requireRateLimit] }, async (req, reply) => {
     const apiKeyId = req.apiKey.id;
-    const rules = await prisma.connector_rules.findMany({ where: { api_key_id: apiKeyId }, orderBy: { created_at: 'asc' } });
+    const rules = await withTenant(apiKeyId, (tx) => tx.connector_rules.findMany({ where: { api_key_id: apiKeyId }, orderBy: { created_at: 'asc' } }));
     return reply.send({ data: rules });
   });
 
   fastify.post('/connectors/rules', { preHandler: [requireAuth, requireRateLimit] }, async (req, reply) => {
     const apiKeyId = req.apiKey.id;
     const body = req.body as { connector: string; event_type: string; action?: string; template_id?: string; sequence_id?: string; enabled?: boolean };
-    const rule = await prisma.connector_rules.upsert({
+    const rule = await withTenant(apiKeyId, (tx) => tx.connector_rules.upsert({
       where:  { api_key_id_connector_event_type: { api_key_id: apiKeyId, connector: body.connector, event_type: body.event_type } },
       create: { api_key_id: apiKeyId, connector: body.connector, event_type: body.event_type, action: body.action ?? 'send_template', template_id: body.template_id ?? null, sequence_id: body.sequence_id ?? null, enabled: body.enabled ?? true },
       update: { action: body.action ?? 'send_template', template_id: body.template_id ?? null, sequence_id: body.sequence_id ?? null, enabled: body.enabled ?? true },
-    });
+    }));
     return reply.send(rule);
   });
 
   fastify.delete('/connectors/rules/:id', { preHandler: [requireAuth, requireRateLimit] }, async (req, reply) => {
     const apiKeyId = req.apiKey.id;
     const id = (req.params as { id: string }).id;
-    await prisma.connector_rules.deleteMany({ where: { id, api_key_id: apiKeyId } });
+    await withTenant(apiKeyId, (tx) => tx.connector_rules.deleteMany({ where: { id, api_key_id: apiKeyId } }));
     return reply.send({ deleted: true });
   });
 
@@ -384,25 +385,25 @@ export async function paymentConnectorRoutes(fastify: FastifyInstance): Promise<
 
   fastify.get('/connectors/secrets', { preHandler: [requireAuth, requireRateLimit] }, async (req, reply) => {
     const apiKeyId = req.apiKey.id;
-    const secrets = await prisma.connector_secrets.findMany({ where: { api_key_id: apiKeyId }, select: { connector: true, created_at: true } });
+    const secrets = await withTenant(apiKeyId, (tx) => tx.connector_secrets.findMany({ where: { api_key_id: apiKeyId }, select: { connector: true, created_at: true } }));
     return reply.send({ data: secrets });
   });
 
   fastify.post('/connectors/secrets', { preHandler: [requireAuth, requireRateLimit] }, async (req, reply) => {
     const apiKeyId = req.apiKey.id;
     const body = req.body as { connector: string; secret: string };
-    await prisma.connector_secrets.upsert({
+    await withTenant(apiKeyId, (tx) => tx.connector_secrets.upsert({
       where:  { api_key_id_connector: { api_key_id: apiKeyId, connector: body.connector } },
       create: { api_key_id: apiKeyId, connector: body.connector, secret: body.secret },
       update: { secret: body.secret },
-    });
+    }));
     return reply.send({ saved: true, connector: body.connector });
   });
 
   fastify.delete('/connectors/secrets/:connector', { preHandler: [requireAuth, requireRateLimit] }, async (req, reply) => {
     const apiKeyId  = req.apiKey.id;
     const connector = (req.params as { connector: string }).connector;
-    await prisma.connector_secrets.deleteMany({ where: { api_key_id: apiKeyId, connector } });
+    await withTenant(apiKeyId, (tx) => tx.connector_secrets.deleteMany({ where: { api_key_id: apiKeyId, connector } }));
     return reply.send({ deleted: true });
   });
 
@@ -412,11 +413,11 @@ export async function paymentConnectorRoutes(fastify: FastifyInstance): Promise<
     const apiKeyId = req.apiKey.id;
     const query = req.query as { connector?: string; limit?: string };
     const limit = Math.min(100, parseInt(query.limit ?? '50', 10));
-    const events = await prisma.connector_events.findMany({
+    const events = await withTenant(apiKeyId, (tx) => tx.connector_events.findMany({
       where: { api_key_id: apiKeyId, ...(query.connector ? { connector: query.connector } : {}) },
       orderBy: { created_at: 'desc' },
       take: limit,
-    });
+    }));
     return reply.send({ data: events });
   });
 }
