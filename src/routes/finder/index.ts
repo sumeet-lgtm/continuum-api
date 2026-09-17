@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
 import { withTenant } from '../../lib/tenantContext.js';
 import { AppError, Errors } from '../../plugins/errorHandler.js';
 import { config } from '../../config.js';
@@ -179,10 +178,10 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
 
       // Apify done. Check if Continuum verify job already exists for this run.
       const verifyTag = `finder-${runId}`;
-      let verifyJob = await prisma.bulkJob.findFirst({
+      let verifyJob = await withTenant(apiKeyId, (tx) => tx.bulkJob.findFirst({
         where: { apiKeyId, storagePath: { contains: verifyTag } },
         select: { id: true, status: true, processedCount: true, totalEmails: true },
-      });
+      }));
 
       // ── Phase 2: create verify job if not exists ─────────────────────────────
       // Guard: if two polls land simultaneously we may try to create twice.
@@ -220,7 +219,7 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
               await uploadToStorage(config.STORAGE_BUCKET_UPLOADS, storagePath, Buffer.from(csv, 'utf-8'), 'text/csv');
 
               try {
-                verifyJob = await prisma.bulkJob.create({
+                verifyJob = await withTenant(apiKeyId, (tx) => tx.bulkJob.create({
                   data: {
                     id: jobId,
                     apiKeyId,
@@ -231,7 +230,7 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
                     status: 'pending',
                   },
                   select: { id: true, status: true, processedCount: true, totalEmails: true },
-                });
+                }));
 
                 await bulkQueue.add(
                   'process-bulk',
@@ -240,10 +239,10 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
                 );
               } catch {
                 // Concurrent create — look up the job the other request created
-                verifyJob = await prisma.bulkJob.findFirst({
+                verifyJob = await withTenant(apiKeyId, (tx) => tx.bulkJob.findFirst({
                   where: { apiKeyId, storagePath: { contains: verifyTag } },
                   select: { id: true, status: true, processedCount: true, totalEmails: true },
-                });
+                }));
               }
             }
           }
@@ -325,25 +324,25 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
       const verifyJobId = q.verifyJobId ?? undefined;
 
       // Find the bulk verify job for this finder run
-      const verifyJob = await prisma.bulkJob.findFirst({
+      const verifyJob = await withTenant(apiKeyId, (tx) => tx.bulkJob.findFirst({
         where: {
           apiKeyId,
           ...(verifyJobId ? { id: verifyJobId } : { storagePath: { contains: verifyTag } }),
           status: 'completed',
         },
         select: { id: true },
-      });
+      }));
 
       let verifiedEmailSet: Set<string> | null = null;
       if (verifyJob) {
         // Pull the verified/risky email results from Continuum's bulk job
-        const verifiedRows = await prisma.bulkJobEmail.findMany({
+        const verifiedRows = await withTenant(apiKeyId, (tx) => tx.bulkJobEmail.findMany({
           where: {
             bulkJobId: verifyJob.id,
             status: { in: ['valid', 'risky'] },
           },
           select: { email: true },
-        });
+        }));
         verifiedEmailSet = new Set(verifiedRows.map((r) => r.email.toLowerCase()));
       }
 
@@ -408,21 +407,21 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
 
       // Load which emails Continuum verified as safe to send to
       const verifyTag = `finder-${runId}`;
-      const verifyJob = await prisma.bulkJob.findFirst({
+      const verifyJob = await withTenant(apiKeyId, (tx) => tx.bulkJob.findFirst({
         where: {
           apiKeyId,
           ...(body.verifyJobId ? { id: body.verifyJobId } : { storagePath: { contains: verifyTag } }),
           status: 'completed',
         },
         select: { id: true },
-      });
+      }));
 
       let verifiedEmailSet: Set<string> | null = null;
       if (verifyJob) {
-        const verifiedRows = await prisma.bulkJobEmail.findMany({
+        const verifiedRows = await withTenant(apiKeyId, (tx) => tx.bulkJobEmail.findMany({
           where: { bulkJobId: verifyJob.id, status: { in: ['valid', 'risky'] } },
           select: { email: true },
-        });
+        }));
         verifiedEmailSet = new Set(verifiedRows.map((r) => r.email.toLowerCase()));
       }
 
@@ -556,7 +555,7 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.serviceUnavailable('Storage');
       }
 
-      await prisma.bulkJob.create({
+      await withTenant(apiKeyId, (tx) => tx.bulkJob.create({
         data: {
           id: jobId,
           apiKeyId,
@@ -566,7 +565,7 @@ export async function finderRoutes(fastify: FastifyInstance): Promise<void> {
           duplicateCount: 0,
           status: 'pending',
         },
-      });
+      }));
 
       await bulkQueue.add(
         'process-bulk',

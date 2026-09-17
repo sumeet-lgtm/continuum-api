@@ -119,11 +119,11 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
   // processedAt/status are read so a re-run RESUMES: rows already verified in a
   // previous attempt are skipped instead of re-charged and re-verified.
   type EmailRowRecord = { id: string; email: string; rowIndex: number; isDuplicate: boolean; processedAt: Date | null; status: string | null };
-  const emailRows: EmailRowRecord[] = await prisma.bulkJobEmail.findMany({
+  const emailRows: EmailRowRecord[] = await withTenant(apiKeyId, (tx) => tx.bulkJobEmail.findMany({
     where:   { bulkJobId: jobId },
     orderBy: { rowIndex: 'asc' },
     select:  { id: true, email: true, rowIndex: true, isDuplicate: true, processedAt: true, status: true },
-  });
+  }));
 
   if (emailRows.length === 0) {
     // Primary path now: the creation route no longer pre-creates these rows
@@ -133,7 +133,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
     log.info({ rows: parsed.length }, 'Creating BulkJobEmail rows (batched)');
     const CREATE_BATCH = 500;
     for (let i = 0; i < parsed.length; i += CREATE_BATCH) {
-      await prisma.bulkJobEmail.createMany({
+      await withTenant(apiKeyId, (tx) => tx.bulkJobEmail.createMany({
         data: parsed.slice(i, i + CREATE_BATCH).map((r) => ({
           id:          randomUUID(),
           bulkJobId:   jobId,
@@ -141,14 +141,14 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
           rowIndex:    r.rowIndex,
           isDuplicate: r.isDuplicate,
         })),
-      });
+      }));
     }
 
-    const refetched: EmailRowRecord[] = await prisma.bulkJobEmail.findMany({
+    const refetched: EmailRowRecord[] = await withTenant(apiKeyId, (tx) => tx.bulkJobEmail.findMany({
       where:   { bulkJobId: jobId },
       orderBy: { rowIndex: 'asc' },
       select:  { id: true, email: true, rowIndex: true, isDuplicate: true, processedAt: true, status: true },
-    });
+    }));
     emailRows.push(...refetched);
   }
 
@@ -342,7 +342,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
   try {
     const csvParts: string[] = [EXPORT_CSV_HEADER];
     for (let offset = 0; ; offset += EXPORT_PAGE) {
-      const page = await prisma.bulkJobEmail.findMany({
+      const page = await withTenant(apiKeyId, (tx) => tx.bulkJobEmail.findMany({
         where:   { bulkJobId: jobId },
         orderBy: { rowIndex: 'asc' },
         skip:    offset,
@@ -370,7 +370,7 @@ async function processBulkJob(job: Job<BulkJobPayload>): Promise<void> {
           errorMessage:  true,
           processedAt:   true,
         },
-      });
+      }));
       if (page.length === 0) break;
       csvParts.push(buildExportCsvRows(page));
       if (page.length < EXPORT_PAGE) break;
