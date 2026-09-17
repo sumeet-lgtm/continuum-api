@@ -1,6 +1,7 @@
 import { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import { WorkOS } from '@workos-inc/node';
 import { prisma } from '../../lib/prisma.js';
+import { withRlsBypass } from '../../lib/tenantContext.js';
 import { signSession, verifySession } from '../../lib/session.js';
 import { config } from '../../config.js';
 import { Errors } from '../../plugins/errorHandler.js';
@@ -163,23 +164,28 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         }
       }
 
-      // Check if this email belongs to a team member of another workspace
-      const teamMembership = await prisma.teamMember.findFirst({
+      // Check if this email belongs to a team member of another workspace.
+      // No apiKeyId is known yet at this point — this call and every other
+      // apiKey/teamMember/teamInvite call in this file is identity discovery
+      // (find which tenant this session belongs to), not an operation
+      // already scoped to one — hence withRlsBypass() throughout, not
+      // withTenant(). See tenantContext.ts.
+      const teamMembership = await withRlsBypass((tx) => tx.teamMember.findFirst({
         where: { email: workosUser.email.toLowerCase() },
         orderBy: { joinedAt: 'asc' },
-      });
+      }));
 
       // Find or create a primary API key scoped to this user
-      let apiKey = await prisma.apiKey.findFirst({
+      let apiKey = await withRlsBypass((tx) => tx.apiKey.findFirst({
         where: { ownerId: user.id, isActive: true },
         orderBy: { createdAt: 'asc' },
-      });
+      }));
 
       if (!apiKey) {
         const raw = `cont_live_${crypto.randomUUID().replace(/-/g, '')}`;
         const keyHash = hashApiKey(raw);
 
-        apiKey = await prisma.apiKey.create({
+        apiKey = await withRlsBypass((tx) => tx.apiKey.create({
           data: {
             keyHash,
             keyPrefix: raw.slice(0, 8),
@@ -189,23 +195,24 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
             plan: 'free',
             orgId: workosOrgId ?? null,
           },
-        });
+        }));
       } else if (workosOrgId && !apiKey.orgId) {
         // Key predates the user joining this org (or predates this field
         // existing at all) — backfill it so org-admin key management
         // covers keys that were already active, not just newly created ones.
-        apiKey = await prisma.apiKey.update({
-          where: { id: apiKey.id },
+        const existingKeyId = apiKey.id;
+        apiKey = await withRlsBypass((tx) => tx.apiKey.update({
+          where: { id: existingKeyId },
           data: { orgId: workosOrgId },
-        });
+        }));
       }
 
       // If the user is a team member, override the primary key to the workspace key
       let workspaceRole: string | undefined;
       if (teamMembership) {
-        const workspaceKey = await prisma.apiKey.findFirst({
+        const workspaceKey = await withRlsBypass((tx) => tx.apiKey.findFirst({
           where: { id: teamMembership.workspaceKeyId, isActive: true },
-        });
+        }));
         if (workspaceKey) {
           apiKey = workspaceKey;
           workspaceRole = teamMembership.role;
@@ -213,7 +220,8 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       // Welcome email on first sign-in (new key = new user)
-      const isNewUser = !await prisma.apiKey.findFirst({ where: { ownerId: user.id, isActive: true, NOT: { id: apiKey.id } } });
+      const currentKeyId = apiKey.id;
+      const isNewUser = !await withRlsBypass((tx) => tx.apiKey.findFirst({ where: { ownerId: user.id, isActive: true, NOT: { id: currentKeyId } } }));
       if (isNewUser) {
         const msg = welcomeEmail(apiKey.keyPrefix, workosUser.firstName);
         void sendEmail(user.email, msg.subject, msg.html);
@@ -285,11 +293,11 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
     const [user, ownKeys] = await Promise.all([
       prisma.user.findUnique({ where: { id: payload.userId } }),
-      prisma.apiKey.findMany({
+      withRlsBypass((tx) => tx.apiKey.findMany({
         where: { ownerId: payload.userId, isActive: true },
         select: KEY_SELECT,
         orderBy: { createdAt: 'asc' },
-      }),
+      })),
     ]);
 
     if (!user) {
@@ -299,11 +307,12 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     // If primaryKeyId belongs to a workspace the user is a member of (not their own key),
     // fetch it separately so the frontend can use it as the active key.
     let apiKeys = ownKeys as typeof ownKeys;
-    if (payload.primaryKeyId && !ownKeys.find((k) => k.id === payload.primaryKeyId)) {
-      const workspaceKey = await prisma.apiKey.findUnique({
-        where: { id: payload.primaryKeyId },
+    const primaryKeyId = payload.primaryKeyId;
+    if (primaryKeyId && !ownKeys.find((k) => k.id === primaryKeyId)) {
+      const workspaceKey = await withRlsBypass((tx) => tx.apiKey.findUnique({
+        where: { id: primaryKeyId },
         select: KEY_SELECT,
-      });
+      }));
       if (workspaceKey) {
         apiKeys = [workspaceKey, ...ownKeys];
       }
@@ -374,10 +383,10 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     if (!user) throw Errors.notFound('User not found');
 
     // Revoke all API keys first so running integrations fail fast
-    await prisma.apiKey.updateMany({
+    await withRlsBypass((tx) => tx.apiKey.updateMany({
       where: { ownerId: user.id },
       data: { isActive: false, revokedAt: new Date() },
-    });
+    }));
 
     // Delete WorkOS identity (removes SSO connection, memberships, etc.)
     if (user.workosId && config.WORKOS_API_KEY) {
@@ -409,7 +418,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     const { token } = request.body as { token?: string };
     if (!token) throw Errors.validationFailed('Missing invite token');
 
-    const invite = await prisma.teamInvite.findUnique({ where: { token } });
+    const invite = await withRlsBypass((tx) => tx.teamInvite.findUnique({ where: { token } }));
     if (!invite || invite.status !== 'pending') throw Errors.notFound('Invite not found or already used');
     if (invite.expiresAt < new Date()) throw Errors.validationFailed('This invite link has expired. Ask the workspace owner for a new one.');
     if (invite.inviteeEmail !== payload.email.toLowerCase()) {
@@ -417,7 +426,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     // Create team member (idempotent)
-    await prisma.teamMember.upsert({
+    await withRlsBypass((tx) => tx.teamMember.upsert({
       where: { workspaceKeyId_email: { workspaceKeyId: invite.workspaceKeyId, email: invite.inviteeEmail } },
       create: {
         workspaceKeyId: invite.workspaceKeyId,
@@ -426,11 +435,11 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         invitedBy: invite.invitedBy,
       },
       update: { role: invite.role },
-    });
+    }));
 
-    await prisma.teamInvite.update({ where: { token }, data: { status: 'accepted' } });
+    await withRlsBypass((tx) => tx.teamInvite.update({ where: { token }, data: { status: 'accepted' } }));
 
-    const workspaceKey = await prisma.apiKey.findFirst({ where: { id: invite.workspaceKeyId, isActive: true } });
+    const workspaceKey = await withRlsBypass((tx) => tx.apiKey.findFirst({ where: { id: invite.workspaceKeyId, isActive: true } }));
     if (!workspaceKey) throw Errors.notFound('Workspace not found or no longer active');
 
     const newToken = await signSession({

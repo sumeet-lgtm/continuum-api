@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors, AppError } from '../../plugins/errorHandler.js';
 import { sendEmail } from '../../lib/email.js';
 import { config } from '../../config.js';
@@ -29,10 +29,10 @@ export async function teamRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/team', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const apiKeyId = request.apiKey.id;
 
-    const members = await prisma.teamMember.findMany({
+    const members = await withTenant(apiKeyId, (tx) => tx.teamMember.findMany({
       where: { workspaceKeyId: apiKeyId },
       orderBy: { joinedAt: 'asc' },
-    });
+    }));
 
     // Include the owner (the API key itself)
     const ownerKey = request.apiKey;
@@ -50,10 +50,10 @@ export async function teamRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /v1/team/invites — list pending invites
   fastify.get('/team/invites', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const apiKeyId = request.apiKey.id;
-    const invites = await prisma.teamInvite.findMany({
+    const invites = await withTenant(apiKeyId, (tx) => tx.teamInvite.findMany({
       where: { workspaceKeyId: apiKeyId, status: 'pending', expiresAt: { gt: new Date() } },
       orderBy: { createdAt: 'desc' },
-    });
+    }));
     return reply.status(200).send({ data: invites });
   });
 
@@ -71,17 +71,17 @@ export async function teamRoutes(fastify: FastifyInstance): Promise<void> {
     const lowerEmail = email.toLowerCase();
 
     // Check not already a member
-    const existing = await prisma.teamMember.findFirst({ where: { workspaceKeyId: apiKeyId, email: lowerEmail } });
+    const existing = await withTenant(apiKeyId, (tx) => tx.teamMember.findFirst({ where: { workspaceKeyId: apiKeyId, email: lowerEmail } }));
     if (existing) throw new AppError(409, 'CONFLICT', `${email} is already a member of this workspace.`);
 
     // Revoke any existing pending invite for this email
-    await prisma.teamInvite.updateMany({
+    await withTenant(apiKeyId, (tx) => tx.teamInvite.updateMany({
       where: { workspaceKeyId: apiKeyId, inviteeEmail: lowerEmail, status: 'pending' },
       data: { status: 'revoked' },
-    });
+    }));
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    const invite = await prisma.teamInvite.create({
+    const invite = await withTenant(apiKeyId, (tx) => tx.teamInvite.create({
       data: {
         workspaceKeyId: apiKeyId,
         inviteeEmail: lowerEmail,
@@ -89,7 +89,7 @@ export async function teamRoutes(fastify: FastifyInstance): Promise<void> {
         expiresAt,
         invitedBy: request.apiKey.label ?? request.apiKey.keyPrefix,
       },
-    });
+    }));
 
     // Get workspace name for the invite email
     const workspaceName = request.apiKey.label ?? `${request.apiKey.keyPrefix}…`;
@@ -107,10 +107,10 @@ export async function teamRoutes(fastify: FastifyInstance): Promise<void> {
     const body = z.object({ role: z.enum(['admin', 'member']) }).safeParse(request.body);
     if (!body.success) throw Errors.validationFailed(body.error.issues[0]?.message);
 
-    const member = await prisma.teamMember.findFirst({ where: { id: memberId, workspaceKeyId: apiKeyId } });
+    const member = await withTenant(apiKeyId, (tx) => tx.teamMember.findFirst({ where: { id: memberId, workspaceKeyId: apiKeyId } }));
     if (!member) throw Errors.notFound('Team member');
 
-    const updated = await prisma.teamMember.update({ where: { id: memberId }, data: { role: body.data.role } });
+    const updated = await withTenant(apiKeyId, (tx) => tx.teamMember.update({ where: { id: memberId }, data: { role: body.data.role } }));
     return reply.status(200).send(updated);
   });
 
@@ -119,10 +119,10 @@ export async function teamRoutes(fastify: FastifyInstance): Promise<void> {
     const { memberId } = request.params as { memberId: string };
     const apiKeyId = request.apiKey.id;
 
-    const member = await prisma.teamMember.findFirst({ where: { id: memberId, workspaceKeyId: apiKeyId } });
+    const member = await withTenant(apiKeyId, (tx) => tx.teamMember.findFirst({ where: { id: memberId, workspaceKeyId: apiKeyId } }));
     if (!member) throw Errors.notFound('Team member');
 
-    await prisma.teamMember.delete({ where: { id: memberId } });
+    await withTenant(apiKeyId, (tx) => tx.teamMember.delete({ where: { id: memberId } }));
     return reply.status(200).send({ deleted: true, id: memberId });
   });
 
@@ -131,10 +131,10 @@ export async function teamRoutes(fastify: FastifyInstance): Promise<void> {
     const { inviteId } = request.params as { inviteId: string };
     const apiKeyId = request.apiKey.id;
 
-    const invite = await prisma.teamInvite.findFirst({ where: { id: inviteId, workspaceKeyId: apiKeyId } });
+    const invite = await withTenant(apiKeyId, (tx) => tx.teamInvite.findFirst({ where: { id: inviteId, workspaceKeyId: apiKeyId } }));
     if (!invite) throw Errors.notFound('Invite');
 
-    await prisma.teamInvite.update({ where: { id: inviteId }, data: { status: 'revoked' } });
+    await withTenant(apiKeyId, (tx) => tx.teamInvite.update({ where: { id: inviteId }, data: { status: 'revoked' } }));
     return reply.status(200).send({ revoked: true });
   });
 }
