@@ -269,11 +269,11 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const sequence = await withTenant(apiKeyId, (tx) => tx.sequence.findFirst({ where: { id, apiKeyId }, select: { id: true } }));
       if (!sequence) throw Errors.notFound('Sequence not found.');
 
-      const steps = await prisma.sequenceStep.findMany({
+      const steps = await withTenant(apiKeyId, (tx) => tx.sequenceStep.findMany({
         where: { sequenceId: id },
         orderBy: { stepOrder: 'asc' },
         select: { id: true, stepOrder: true, subject: true, variants: true },
-      });
+      }));
 
       // For each step with variants, count sends per variant tracked via TrackingEvent
       const result = await Promise.all(steps.map(async (step) => {
@@ -522,7 +522,7 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
         });
         if (!sequence) throw Errors.notFound('Sequence not found.');
 
-        const steps = await prisma.sequenceStep.findMany({
+        const steps = await tx.sequenceStep.findMany({
           where: { sequenceId: id },
           orderBy: { stepOrder: 'asc' },
           select: { id: true, stepOrder: true, subject: true, delayDays: true },

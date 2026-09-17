@@ -175,10 +175,10 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       if (!seq) throw Errors.notFound('Sequence not found.');
     });
 
-    const lastStep = await prisma.sequenceStep.findFirst({ where: { sequenceId: id }, orderBy: { stepOrder: 'desc' } });
+    const lastStep = await withTenant(apiKeyId, (tx) => tx.sequenceStep.findFirst({ where: { sequenceId: id }, orderBy: { stepOrder: 'desc' } }));
     const stepOrder = (lastStep?.stepOrder ?? 0) + 1;
 
-    const step = await prisma.sequenceStep.create({
+    const step = await withTenant(apiKeyId, (tx) => tx.sequenceStep.create({
       data: {
         sequenceId: id, stepOrder,
         type: parsed.data.type,
@@ -189,7 +189,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
         taskNote: parsed.data.task_note ?? null,
         condition: parsed.data.condition,
       },
-    });
+    }));
     return reply.status(201).send(step);
   });
 
@@ -201,7 +201,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
       if (!seq) throw Errors.notFound('Sequence not found.');
     });
-    const steps = await prisma.sequenceStep.findMany({ where: { sequenceId: id }, orderBy: { stepOrder: 'asc' } });
+    const steps = await withTenant(apiKeyId, (tx) => tx.sequenceStep.findMany({ where: { sequenceId: id }, orderBy: { stepOrder: 'asc' } }));
     return reply.status(200).send({ data: steps });
   });
 
@@ -213,7 +213,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
       if (!seq) throw Errors.notFound('Sequence not found.');
     });
-    const step = await prisma.sequenceStep.findFirst({ where: { id: stepId, sequenceId: id } });
+    const step = await withTenant(apiKeyId, (tx) => tx.sequenceStep.findFirst({ where: { id: stepId, sequenceId: id } }));
     if (!step) throw Errors.notFound('Step not found.');
 
     const patchSchema = stepBaseSchema.partial();
@@ -221,7 +221,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
 
     const { type, delay_days, delay_hours, subject, html_body, text_body, task_note, condition } = parsed.data;
-    const updated = await prisma.sequenceStep.update({
+    const updated = await withTenant(apiKeyId, (tx) => tx.sequenceStep.update({
       where: { id: stepId },
       data: {
         ...(type !== undefined && { type }),
@@ -233,7 +233,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
         ...(task_note !== undefined && { taskNote: task_note }),
         ...(condition !== undefined && { condition }),
       },
-    });
+    }));
     return reply.status(200).send(updated);
   });
 
@@ -245,7 +245,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       const seq = await tx.sequence.findFirst({ where: { id, apiKeyId } });
       if (!seq) throw Errors.notFound('Sequence not found.');
     });
-    await prisma.sequenceStep.delete({ where: { id: stepId } });
+    await withTenant(apiKeyId, (tx) => tx.sequenceStep.delete({ where: { id: stepId } }));
     return reply.status(200).send({ deleted: true, id: stepId });
   });
 
@@ -272,7 +272,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
         emails = [...new Set([...emails, ...members.map(m => m.contact.email)])];
       }
 
-      const firstStep = await prisma.sequenceStep.findFirst({ where: { sequenceId: id }, orderBy: { stepOrder: 'asc' } });
+      const firstStep = await tx.sequenceStep.findFirst({ where: { sequenceId: id }, orderBy: { stepOrder: 'asc' } });
       const nextSendAt = firstStep ? new Date() : null;
 
       let enrolled = 0;
@@ -448,7 +448,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       if (!seq) throw Errors.notFound('Sequence not found.');
     });
 
-    const step = await prisma.sequenceStep.findFirst({ where: { id: stepId, sequenceId: id } });
+    const step = await withTenant(apiKeyId, (tx) => tx.sequenceStep.findFirst({ where: { id: stepId, sequenceId: id } }));
     if (!step) throw Errors.notFound('Step not found.');
 
     const parsed = variantCreateSchema.safeParse(request.body);
@@ -456,10 +456,10 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
 
     const { variant_label, subject, html_body, text_body, weight } = parsed.data;
 
-    const variant = await prisma.sequenceVariant.create({
+    const variant = await withTenant(apiKeyId, (tx) => tx.sequenceVariant.create({
       data: { stepId, variantLabel: variant_label, subject, htmlBody: html_body, textBody: text_body ?? null, weight },
       select: { id: true, stepId: true, variantLabel: true, subject: true, weight: true },
-    });
+    }));
     return reply.status(201).send(variant);
   });
 
@@ -473,11 +473,11 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       if (!seq) throw Errors.notFound('Sequence not found.');
     });
 
-    const variants = await prisma.sequenceVariant.findMany({
+    const variants = await withTenant(apiKeyId, (tx) => tx.sequenceVariant.findMany({
       where: { stepId },
       orderBy: { variantLabel: 'asc' },
       select: { id: true, stepId: true, variantLabel: true, subject: true, htmlBody: true, textBody: true, weight: true },
-    });
+    }));
     return reply.status(200).send({ data: variants });
   });
 
@@ -491,10 +491,10 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
       if (!seq) throw Errors.notFound('Sequence not found.');
     });
 
-    const variant = await prisma.sequenceVariant.findFirst({ where: { id: variantId, stepId } });
+    const variant = await withTenant(apiKeyId, (tx) => tx.sequenceVariant.findFirst({ where: { id: variantId, stepId } }));
     if (!variant) throw Errors.notFound('Variant not found.');
 
-    await prisma.sequenceVariant.delete({ where: { id: variantId } });
+    await withTenant(apiKeyId, (tx) => tx.sequenceVariant.delete({ where: { id: variantId } }));
     return reply.status(200).send({ deleted: true, id: variantId });
   });
 
@@ -612,7 +612,7 @@ export async function sequenceRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const apiKeyId = request.apiKey.id;
 
-    const steps = await prisma.sequenceStep.findMany({ where: { sequenceId: id }, select: { id: true } });
+    const steps = await withTenant(apiKeyId, (tx) => tx.sequenceStep.findMany({ where: { sequenceId: id }, select: { id: true } }));
     const stepIds = steps.map(s => s.id);
 
     const [enrollmentGroups, sentCount, openCount, clickCount, replyCount] = await withTenant(apiKeyId, async (tx) => {
