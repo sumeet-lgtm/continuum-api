@@ -47,15 +47,16 @@ interface OwnedIds {
 // `prisma` client — a plain-client call silently returns zero rows once
 // RLS is actually enforced (see tenantContext.ts's "deny by default" note).
 async function collectOwnedIds(tx: PrismaTx, apiKeyId: string): Promise<OwnedIds> {
-  const [mailboxes, monitors, webhooks, automations, campaigns, sequences, sendMessages] = await Promise.all([
-    tx.mailbox.findMany({ where: { apiKeyId }, select: { id: true } }),
-    tx.monitor.findMany({ where: { apiKeyId }, select: { id: true } }),
-    tx.webhook.findMany({ where: { apiKeyId }, select: { id: true } }),
-    tx.automation.findMany({ where: { apiKeyId }, select: { id: true } }),
-    tx.campaign.findMany({ where: { apiKeyId }, select: { id: true } }),
-    tx.sequence.findMany({ where: { apiKeyId }, select: { id: true } }),
-    tx.sendMessage.findMany({ where: { apiKeyId }, select: { id: true } }),
-  ]);
+  const [mailboxes, monitors, webhooks, automations, campaigns, sequences, sendMessages] =
+    await Promise.all([
+      tx.mailbox.findMany({ where: { apiKeyId }, select: { id: true } }),
+      tx.monitor.findMany({ where: { apiKeyId }, select: { id: true } }),
+      tx.webhook.findMany({ where: { apiKeyId }, select: { id: true } }),
+      tx.automation.findMany({ where: { apiKeyId }, select: { id: true } }),
+      tx.campaign.findMany({ where: { apiKeyId }, select: { id: true } }),
+      tx.sequence.findMany({ where: { apiKeyId }, select: { id: true } }),
+      tx.sendMessage.findMany({ where: { apiKeyId }, select: { id: true } }),
+    ]);
   return {
     mailboxIds: mailboxes.map((r) => r.id),
     monitorIds: monitors.map((r) => r.id),
@@ -67,57 +68,151 @@ async function collectOwnedIds(tx: PrismaTx, apiKeyId: string): Promise<OwnedIds
   };
 }
 
+// Export is read-only and doesn't need the cross-table atomicity
+// deleteAccountData genuinely requires (a GDPR export tolerates a snapshot
+// taken across a few hundred ms, not a single instant) — so unlike
+// deleteAccountData, this does NOT share one withTenant transaction across
+// every query. Discovered live: with ~28 queries, one shared transaction
+// puts them all on a single pooled connection (Promise.all inside one tx
+// does not run them concurrently at the DB level — Prisma pipelines them
+// on that one connection), and against Supabase's pooler that serialized
+// round-trip time exceeded Prisma's 5s interactive-transaction timeout,
+// so exportAccountData 500'd for every real customer once RLS made the
+// query correctly hit real data instead of returning early. Each query
+// below gets its own withTenant call (its own connection), so they run
+// genuinely in parallel and each gets its own timeout budget.
+async function collectOwnedIdsParallel(apiKeyId: string): Promise<OwnedIds> {
+  const [mailboxes, monitors, webhooks, automations, campaigns, sequences, sendMessages] =
+    await Promise.all([
+      withTenant(apiKeyId, (tx) =>
+        tx.mailbox.findMany({ where: { apiKeyId }, select: { id: true } }),
+      ),
+      withTenant(apiKeyId, (tx) =>
+        tx.monitor.findMany({ where: { apiKeyId }, select: { id: true } }),
+      ),
+      withTenant(apiKeyId, (tx) =>
+        tx.webhook.findMany({ where: { apiKeyId }, select: { id: true } }),
+      ),
+      withTenant(apiKeyId, (tx) =>
+        tx.automation.findMany({ where: { apiKeyId }, select: { id: true } }),
+      ),
+      withTenant(apiKeyId, (tx) =>
+        tx.campaign.findMany({ where: { apiKeyId }, select: { id: true } }),
+      ),
+      withTenant(apiKeyId, (tx) =>
+        tx.sequence.findMany({ where: { apiKeyId }, select: { id: true } }),
+      ),
+      withTenant(apiKeyId, (tx) =>
+        tx.sendMessage.findMany({ where: { apiKeyId }, select: { id: true } }),
+      ),
+    ]);
+  return {
+    mailboxIds: mailboxes.map((r) => r.id),
+    monitorIds: monitors.map((r) => r.id),
+    webhookIds: webhooks.map((r) => r.id),
+    automationIds: automations.map((r) => r.id),
+    campaignIds: campaigns.map((r) => r.id),
+    sequenceIds: sequences.map((r) => r.id),
+    sendMessageIds: sendMessages.map((r) => r.id),
+  };
+}
 
 export async function exportAccountData(apiKeyId: string): Promise<Record<string, unknown>> {
-  return withTenant(apiKeyId, async (tx) => {
-    const ids = await collectOwnedIds(tx, apiKeyId);
+  const ids = await collectOwnedIdsParallel(apiKeyId);
 
-    const [
-      mailboxes, monitors, webhooks, automations, campaigns, sequences,
-      sendMessages, verifications, bulkJobs, contacts, mailingLists,
-      segments, sendingDomains, emailTemplates, leads, inboxTests,
-      replyEvents, trackingEvents, monitorChecks, webhookDeliveries,
-      automationEnrollments,
-    ] = await Promise.all([
-      tx.mailbox.findMany({ where: { apiKeyId } }),
-      tx.monitor.findMany({ where: { apiKeyId } }),
-      tx.webhook.findMany({ where: { apiKeyId } }),
-      tx.automation.findMany({ where: { apiKeyId } }),
-      tx.campaign.findMany({ where: { apiKeyId } }),
-      tx.sequence.findMany({ where: { apiKeyId } }),
-      tx.sendMessage.findMany({ where: { apiKeyId } }),
-      tx.verification.findMany({ where: { apiKeyId } }),
-      tx.bulkJob.findMany({ where: { apiKeyId } }),
-      tx.contact.findMany({ where: { apiKeyId } }),
-      tx.mailingList.findMany({ where: { apiKeyId } }),
-      tx.segment.findMany({ where: { apiKeyId } }),
-      tx.sendingDomain.findMany({ where: { apiKeyId } }),
-      tx.emailTemplate.findMany({ where: { apiKeyId } }),
-      tx.lead.findMany({ where: { apiKeyId } }),
-      tx.inboxTest.findMany({ where: { apiKeyId } }),
+  const [
+    mailboxes,
+    monitors,
+    webhooks,
+    automations,
+    campaigns,
+    sequences,
+    sendMessages,
+    verifications,
+    bulkJobs,
+    contacts,
+    mailingLists,
+    segments,
+    sendingDomains,
+    emailTemplates,
+    leads,
+    inboxTests,
+    replyEvents,
+    trackingEvents,
+    monitorChecks,
+    webhookDeliveries,
+    automationEnrollments,
+  ] = await Promise.all([
+    withTenant(apiKeyId, (tx) => tx.mailbox.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.monitor.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.webhook.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.automation.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.campaign.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.sequence.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.sendMessage.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.verification.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.bulkJob.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.contact.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.mailingList.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.segment.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.sendingDomain.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.emailTemplate.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.lead.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) => tx.inboxTest.findMany({ where: { apiKeyId } })),
+    withTenant(apiKeyId, (tx) =>
       tx.replyEvent.findMany({ where: { mailboxId: { in: ids.mailboxIds } } }),
+    ),
+    withTenant(apiKeyId, (tx) =>
       tx.trackingEvent.findMany({
-        where: { OR: [{ sendMessageId: { in: ids.sendMessageIds } }, { campaignId: { in: ids.campaignIds } }, { sequenceId: { in: ids.sequenceIds } }] },
+        where: {
+          OR: [
+            { sendMessageId: { in: ids.sendMessageIds } },
+            { campaignId: { in: ids.campaignIds } },
+            { sequenceId: { in: ids.sequenceIds } },
+          ],
+        },
       }),
+    ),
+    withTenant(apiKeyId, (tx) =>
       tx.monitorCheck.findMany({ where: { monitorId: { in: ids.monitorIds } } }),
+    ),
+    withTenant(apiKeyId, (tx) =>
       tx.webhookDelivery.findMany({ where: { webhookId: { in: ids.webhookIds } } }),
-      // tenant-sweep: automationIds itself came from an apiKeyId-scoped query
-      // above (collectOwnedIds) — this is a two-hop scope, not unscoped.
+    ),
+    // tenant-sweep: automationIds itself came from an apiKeyId-scoped query
+    // above (collectOwnedIdsParallel) — this is a two-hop scope, not unscoped.
+    withTenant(apiKeyId, (tx) =>
       tx.automationEnrollment.findMany({ where: { automationId: { in: ids.automationIds } } }),
-    ]);
+    ),
+  ]);
 
-    return {
-      exportedAt: new Date().toISOString(),
-      apiKeyId,
-      data: {
-        mailboxes, monitors, webhooks, automations, campaigns, sequences,
-        sendMessages, verifications, bulkJobs, contacts, mailingLists,
-        segments, sendingDomains, emailTemplates, leads, inboxTests,
-        replyEvents, trackingEvents, monitorChecks, webhookDeliveries,
-        automationEnrollments,
-      },
-    };
-  });
+  return {
+    exportedAt: new Date().toISOString(),
+    apiKeyId,
+    data: {
+      mailboxes,
+      monitors,
+      webhooks,
+      automations,
+      campaigns,
+      sequences,
+      sendMessages,
+      verifications,
+      bulkJobs,
+      contacts,
+      mailingLists,
+      segments,
+      sendingDomains,
+      emailTemplates,
+      leads,
+      inboxTests,
+      replyEvents,
+      trackingEvents,
+      monitorChecks,
+      webhookDeliveries,
+      automationEnrollments,
+    },
+  };
 }
 
 export async function deleteAccountData(apiKeyId: string): Promise<Record<string, number>> {
@@ -132,19 +227,44 @@ export async function deleteAccountData(apiKeyId: string): Promise<Record<string
     // doesn't support nesting a second transaction inside this one, and
     // sequential awaits on one tx give the identical atomicity and
     // ordering guarantee the original array form did. Labels stay paired
-        // with their call here so the result counts can never be zipped back
+    // with their call here so the result counts can never be zipped back
     // to the wrong table by an out-of-sync separate list.
     const steps: [string, () => ReturnType<PrismaTx['replyEvent']['deleteMany']>][] = [
-      ['replyEvents', () => tx.replyEvent.deleteMany({ where: { mailboxId: { in: ids.mailboxIds } } })],
-      ['trackingEvents', () => tx.trackingEvent.deleteMany({
-        where: { OR: [{ sendMessageId: { in: ids.sendMessageIds } }, { campaignId: { in: ids.campaignIds } }, { sequenceId: { in: ids.sequenceIds } }] },
-      })],
-      ['monitorChecks', () => tx.monitorCheck.deleteMany({ where: { monitorId: { in: ids.monitorIds } } })],
-      ['webhookDeliveries', () => tx.webhookDelivery.deleteMany({ where: { webhookId: { in: ids.webhookIds } } })],
+      [
+        'replyEvents',
+        () => tx.replyEvent.deleteMany({ where: { mailboxId: { in: ids.mailboxIds } } }),
+      ],
+      [
+        'trackingEvents',
+        () =>
+          tx.trackingEvent.deleteMany({
+            where: {
+              OR: [
+                { sendMessageId: { in: ids.sendMessageIds } },
+                { campaignId: { in: ids.campaignIds } },
+                { sequenceId: { in: ids.sequenceIds } },
+              ],
+            },
+          }),
+      ],
+      [
+        'monitorChecks',
+        () => tx.monitorCheck.deleteMany({ where: { monitorId: { in: ids.monitorIds } } }),
+      ],
+      [
+        'webhookDeliveries',
+        () => tx.webhookDelivery.deleteMany({ where: { webhookId: { in: ids.webhookIds } } }),
+      ],
       ['sendMessages', () => tx.sendMessage.deleteMany({ where: { apiKeyId } })],
       ['verifications', () => tx.verification.deleteMany({ where: { apiKeyId } })],
       ['bulkJobs', () => tx.bulkJob.deleteMany({ where: { apiKeyId } })],
-      ['automationEnrollments', () => tx.automationEnrollment.deleteMany({ where: { automationId: { in: ids.automationIds } } })],
+      [
+        'automationEnrollments',
+        () =>
+          tx.automationEnrollment.deleteMany({
+            where: { automationId: { in: ids.automationIds } },
+          }),
+      ],
       ['automations', () => tx.automation.deleteMany({ where: { apiKeyId } })],
       ['campaigns', () => tx.campaign.deleteMany({ where: { apiKeyId } })],
       ['sequences', () => tx.sequence.deleteMany({ where: { apiKeyId } })],

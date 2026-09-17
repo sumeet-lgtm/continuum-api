@@ -14,10 +14,27 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // not the old array-of-PrismaPromises form).
 const { transactionMock, findManyMocks, deleteManyMocks, mockPrisma } = vi.hoisted(() => {
   const models = [
-    'mailbox', 'monitor', 'webhook', 'automation', 'campaign', 'sequence', 'sendMessage',
-    'verification', 'bulkJob', 'contact', 'mailingList', 'segment', 'sendingDomain',
-    'emailTemplate', 'lead', 'inboxTest', 'replyEvent', 'trackingEvent', 'monitorCheck',
-    'webhookDelivery', 'automationEnrollment',
+    'mailbox',
+    'monitor',
+    'webhook',
+    'automation',
+    'campaign',
+    'sequence',
+    'sendMessage',
+    'verification',
+    'bulkJob',
+    'contact',
+    'mailingList',
+    'segment',
+    'sendingDomain',
+    'emailTemplate',
+    'lead',
+    'inboxTest',
+    'replyEvent',
+    'trackingEvent',
+    'monitorCheck',
+    'webhookDelivery',
+    'automationEnrollment',
   ] as const;
   const findManyMocks: Record<string, ReturnType<typeof vi.fn>> = {};
   const deleteManyMocks: Record<string, ReturnType<typeof vi.fn>> = {};
@@ -48,7 +65,9 @@ beforeEach(() => {
   // interactive callback and hands it `tx` — here the same mockPrisma
   // object, so `tx.X` calls resolve to the mocks above exactly like
   // `prisma.X` calls do.
-  transactionMock.mockImplementation((fn: (tx: typeof mockPrisma) => Promise<unknown>) => fn(mockPrisma));
+  transactionMock.mockImplementation((fn: (tx: typeof mockPrisma) => Promise<unknown>) =>
+    fn(mockPrisma),
+  );
 });
 
 describe('deleteAccountData', () => {
@@ -107,10 +126,30 @@ describe('exportAccountData', () => {
   it('returns a bundle keyed by table name with an export timestamp', async () => {
     findManyMocks['contact']!.mockResolvedValue([{ id: 'c1', email: 'a@example.com' }]);
 
-    const bundle = await exportAccountData('key-1') as { apiKeyId: string; exportedAt: string; data: Record<string, unknown[]> };
+    const bundle = (await exportAccountData('key-1')) as {
+      apiKeyId: string;
+      exportedAt: string;
+      data: Record<string, unknown[]>;
+    };
 
     expect(bundle.apiKeyId).toBe('key-1');
     expect(typeof bundle.exportedAt).toBe('string');
     expect(bundle.data['contacts']).toEqual([{ id: 'c1', email: 'a@example.com' }]);
+  });
+
+  // Regression test for a real live bug found in production: the original
+  // implementation ran all ~28 queries inside one shared withTenant()
+  // transaction. A single interactive transaction pins every query to one
+  // DB connection, so Promise.all inside it does not run them concurrently
+  // at the database level — against Supabase's pooler, that serialized
+  // round-trip time exceeded Prisma's 5s interactive-transaction timeout
+  // and /v1/account/export 500'd for every real request. Each query now
+  // opens its own withTenant() call (its own connection, its own timeout
+  // budget) — pinned here as "many separate transactions", not the
+  // single shared one deleteAccountData still correctly uses.
+  it('opens a separate transaction per query instead of one shared transaction (each query gets its own connection and timeout budget)', async () => {
+    await exportAccountData('key-1');
+    // 7 in collectOwnedIdsParallel + 21 in the main Promise.all = 28.
+    expect(transactionMock).toHaveBeenCalledTimes(28);
   });
 });
