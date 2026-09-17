@@ -293,11 +293,11 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
 
     const { target_per_day, ramp_up_days, pool_tier } = parsed.data;
 
-    const warmup = await prisma.warmupConfig.upsert({
+    const warmup = await withTenant(apiKeyId, (tx) => tx.warmupConfig.upsert({
       where: { mailboxId: id },
       create: { mailboxId: id, enabled: true, targetPerDay: target_per_day, rampUpDays: ramp_up_days, poolTier: pool_tier },
       update: { enabled: true, targetPerDay: target_per_day, rampUpDays: ramp_up_days, poolTier: pool_tier },
-    });
+    }));
     return reply.status(200).send(warmup);
   });
 
@@ -307,7 +307,7 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
     const apiKeyId = request.apiKey.id;
     const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({ where: { id, apiKeyId } }));
     if (!mailbox) throw Errors.notFound('Mailbox not found.');
-    await prisma.warmupConfig.update({ where: { mailboxId: id }, data: { enabled: false } });
+    await withTenant(apiKeyId, (tx) => tx.warmupConfig.update({ where: { mailboxId: id }, data: { enabled: false } }));
     return reply.status(200).send({ disabled: true });
   });
 

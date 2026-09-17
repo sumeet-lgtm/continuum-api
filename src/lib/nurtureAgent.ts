@@ -8,7 +8,6 @@
  * suppression checks, monthly send quota, bounce auto-pause) applies here
  * exactly as it does to a campaign a human created by hand.
  */
-import { prisma } from './prisma.js';
 import { withTenant } from './tenantContext.js';
 import { campaignQueue } from './queue.js';
 import type { NurtureAgentConfig } from '../types/agentRun.js';
@@ -42,13 +41,13 @@ export async function createAndSendCampaignFromDraft(
   return campaignId;
 }
 
-export async function markAgentRunSent(agentRunId: string, config: NurtureAgentConfig, campaignId: string): Promise<void> {
-  await prisma.agentRun.update({
+export async function markAgentRunSent(apiKeyId: string, agentRunId: string, config: NurtureAgentConfig, campaignId: string): Promise<void> {
+  await withTenant(apiKeyId, (tx) => tx.agentRun.update({
     where: { id: agentRunId },
     data: {
       status: 'completed',
       completedAt: new Date(),
       config: { ...config, campaignId } as object,
     },
-  });
+  }));
 }

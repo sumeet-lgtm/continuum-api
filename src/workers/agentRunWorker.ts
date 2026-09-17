@@ -129,10 +129,11 @@ async function runAgentTick(_job: Job<AgentRunTickPayload>): Promise<void> {
 async function runKick(job: Job<AgentRunKickPayload>): Promise<void> {
   const { agentRunId } = job.data;
 
-  const run = await prisma.agentRun.findUnique({
+  // No apiKeyId known yet — discovering which tenant this run belongs to.
+  const run = await withRlsBypass((tx) => tx.agentRun.findUnique({
     where: { id: agentRunId },
     select: { id: true, apiKeyId: true, pillar: true, config: true, intervalHours: true, consecutiveFailures: true, status: true, pausedAt: true },
-  });
+  }));
 
   if (!run) {
     logger.warn({ agentRunId }, 'Kick: agent run not found');
@@ -189,10 +190,10 @@ async function processAgentRun(run: AgentRunRecord): Promise<void> {
       await processOutboundTick(run, log);
     } else {
       log.error({ pillar: run.pillar }, 'Agent run has an unsupported pillar — no worker implements it yet');
-      await prisma.agentRun.update({
+      await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
         where: { id: run.id },
         data: { status: 'failed', errorMessage: `Pillar "${run.pillar}" is not implemented yet.` },
-      });
+      }));
     }
   } finally {
     const current = await redis.get(lockKey);
@@ -213,18 +214,18 @@ async function processVerificationTick(
 
   if (!cfg) {
     log.error({ config: run.config }, 'Agent run has invalid config — pausing');
-    await prisma.agentRun.update({
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
       where: { id: run.id },
       data: { status: 'failed', errorMessage: 'Invalid or missing verification config (listId required)', pausedAt: new Date() },
-    });
+    }));
     return;
   }
 
   try {
-    const key = await prisma.apiKey.findUnique({
+    const key = await withTenant(run.apiKeyId, (tx) => tx.apiKey.findUnique({
       where: { id: run.apiKeyId },
       select: { plan: true, monthlyLimit: true, currentMonthUsage: true, extraVerificationCredits: true },
-    });
+    }));
 
     const quotaLimit = key ? getPlanLimit(key.plan, key.monthlyLimit) + (key.extraVerificationCredits ?? 0) : 0;
     const quotaRemaining = key ? Math.max(0, quotaLimit - key.currentMonthUsage) : 0;
@@ -232,8 +233,8 @@ async function processVerificationTick(
     if (quotaRemaining <= 0) {
       log.info({ apiKeyId: run.apiKeyId }, 'Monthly quota exhausted — rescheduling verification agent run');
       const nextCheckAt = calcNextCheckAt(intervalHours);
-      await prisma.agentRun.update({ where: { id: run.id }, data: { nextCheckAt } });
-      await emitEvent(run.id, 'quota_exhausted', 'Monthly verification quota exhausted — will retry next tick.');
+      await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({ where: { id: run.id }, data: { nextCheckAt } }));
+      await emitEvent(run, 'quota_exhausted', 'Monthly verification quota exhausted — will retry next tick.');
       return;
     }
 
@@ -269,11 +270,11 @@ async function processVerificationTick(
 
     if (due.length === 0) {
       const nextCheckAt = calcNextCheckAt(intervalHours);
-      await prisma.agentRun.update({
+      await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
         where: { id: run.id },
         data: { lastCheckedAt: new Date(), nextCheckAt, consecutiveFailures: 0 },
-      });
-      await emitEvent(run.id, 'tick_complete', 'Watched list checked — no contacts due for (re)verification.');
+      }));
+      await emitEvent(run, 'tick_complete', 'Watched list checked — no contacts due for (re)verification.');
       return;
     }
 
@@ -325,10 +326,10 @@ async function processVerificationTick(
     }
 
     const nextCheckAt = calcNextCheckAt(intervalHours);
-    await prisma.agentRun.update({
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
       where: { id: run.id },
       data: { lastCheckedAt: new Date(), nextCheckAt, consecutiveFailures: 0 },
-    });
+    }));
 
     const parts = [`Verified ${verifiedCount}`, `${counts.valid} valid`];
     if (counts.risky) parts.push(`${counts.risky} risky`);
@@ -337,7 +338,7 @@ async function processVerificationTick(
     if (counts.quarantined) parts.push(`quarantined ${counts.quarantined}`);
     if (counts.errored) parts.push(`${counts.errored} errored`);
 
-    await emitEvent(run.id, 'verified', parts.join(', '), counts);
+    await emitEvent(run, 'verified', parts.join(', '), counts);
 
     log.info({ ...counts, listId: cfg.listId }, 'Verification agent tick complete');
   } catch (err) {
@@ -354,17 +355,17 @@ async function handleTickFailure(
   const errorMsg = err instanceof Error ? err.message : 'Unknown error';
   log.error({ err }, 'Agent run tick failed');
 
-  const fresh = await prisma.agentRun.findUnique({
+  const fresh = await withTenant(run.apiKeyId, (tx) => tx.agentRun.findUnique({
     where: { id: run.id },
     select: { consecutiveFailures: true },
-  });
+  }));
   const newFailures = (fresh?.consecutiveFailures ?? 0) + 1;
   const shouldPause = newFailures >= MAX_CONSECUTIVE_FAILURES;
 
   const backoffHours = Math.min(intervalHours * Math.pow(2, newFailures), 24);
   const nextCheckAt = new Date(Date.now() + backoffHours * 3600 * 1000);
 
-  await prisma.agentRun.update({
+  await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
     where: { id: run.id },
     data: {
       nextCheckAt,
@@ -372,13 +373,13 @@ async function handleTickFailure(
       errorMessage: errorMsg.slice(0, 500),
       ...(shouldPause && { pausedAt: new Date(), status: 'paused' }),
     },
-  });
+  }));
 
-  await emitEvent(run.id, 'error', `Tick failed: ${errorMsg.slice(0, 200)}`);
+  await emitEvent(run, 'error', `Tick failed: ${errorMsg.slice(0, 200)}`);
 
   if (shouldPause) {
     log.warn({ consecutiveFailures: newFailures }, 'Agent run auto-paused after too many consecutive failures');
-    await emitEvent(run.id, 'auto_paused', `Auto-paused after ${newFailures} consecutive failures. Fix the issue and resume.`);
+    await emitEvent(run, 'auto_paused', `Auto-paused after ${newFailures} consecutive failures. Fix the issue and resume.`);
   }
 }
 
@@ -392,10 +393,10 @@ async function processNurtureTick(run: AgentRunRecord, log: Logger): Promise<voi
   const cfg = parseNurtureAgentConfig(run.config);
   if (!cfg) {
     log.error({ config: run.config }, 'Agent run has invalid config — failing');
-    await prisma.agentRun.update({
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
       where: { id: run.id },
       data: { status: 'failed', errorMessage: 'Invalid or missing nurture config (listId, about, fromName, fromEmail required)' },
-    });
+    }));
     return;
   }
 
@@ -403,14 +404,14 @@ async function processNurtureTick(run: AgentRunRecord, log: Logger): Promise<voi
   // should never re-generate or re-send.
   if (cfg.campaignId) return;
   if (cfg.draft) {
-    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'pending_approval' } });
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({ where: { id: run.id }, data: { status: 'pending_approval' } }));
     return;
   }
 
   try {
-    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'running', startedAt: new Date() } });
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({ where: { id: run.id }, data: { status: 'running', startedAt: new Date() } }));
 
-    const key = await prisma.apiKey.findUnique({ where: { id: run.apiKeyId }, select: { plan: true } });
+    const key = await withTenant(run.apiKeyId, (tx) => tx.apiKey.findUnique({ where: { id: run.apiKeyId }, select: { plan: true } }));
     if (!GROWTH_PLANS.has(key?.plan ?? 'free')) {
       throw new Error('The Nurture Agent requires a Growth or Scale plan (same gate as AI campaign copy generation).');
     }
@@ -443,19 +444,19 @@ async function processNurtureTick(run: AgentRunRecord, log: Logger): Promise<voi
 
     if (cfg.autoSend) {
       const campaignId = await createAndSendCampaignFromDraft(run.apiKeyId, { ...cfg, draft });
-      await prisma.agentRun.update({
+      await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
         where: { id: run.id },
         data: { status: 'completed', completedAt: new Date(), config: { ...newConfig, campaignId } },
-      });
-      await emitEvent(run.id, 'sent', `Drafted and sent to ${draft.matchCount.toLocaleString()} contacts (auto-send enabled).`, { campaignId, subject: draft.subject });
+      }));
+      await emitEvent(run, 'sent', `Drafted and sent to ${draft.matchCount.toLocaleString()} contacts (auto-send enabled).`, { campaignId, subject: draft.subject });
       log.info({ listId: cfg.listId, campaignId }, 'Nurture agent auto-sent');
     } else {
-      await prisma.agentRun.update({
+      await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
         where: { id: run.id },
         data: { status: 'pending_approval', config: newConfig },
-      });
+      }));
       await emitEvent(
-        run.id,
+        run,
         'drafted',
         `Draft ready for ${draft.matchCount.toLocaleString()} contacts — review and approve to send.`,
         { subject: draft.subject, preview: draft.textBody.slice(0, 280) },
@@ -470,11 +471,11 @@ async function processNurtureTick(run: AgentRunRecord, log: Logger): Promise<voi
 async function handleNurtureFailure(run: AgentRunRecord, err: unknown, log: Logger): Promise<void> {
   const errorMsg = err instanceof Error ? err.message : 'Unknown error';
   log.error({ err }, 'Nurture agent run failed');
-  await prisma.agentRun.update({
+  await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
     where: { id: run.id },
     data: { status: 'failed', errorMessage: errorMsg.slice(0, 500) },
-  });
-  await emitEvent(run.id, 'error', `Draft failed: ${errorMsg.slice(0, 200)}`);
+  }));
+  await emitEvent(run, 'error', `Draft failed: ${errorMsg.slice(0, 200)}`);
 }
 
 // ─── Outbound Email pillar (one-shot, no autoSend — always ends at
@@ -484,10 +485,10 @@ async function processOutboundTick(run: AgentRunRecord, log: Logger): Promise<vo
   const cfg = parseOutboundAgentConfig(run.config);
   if (!cfg) {
     log.error({ config: run.config }, 'Agent run has invalid config — failing');
-    await prisma.agentRun.update({
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
       where: { id: run.id },
       data: { status: 'failed', errorMessage: 'Invalid or missing outbound config (leadIds, about, fromName, fromEmail required)' },
-    });
+    }));
     return;
   }
 
@@ -495,14 +496,14 @@ async function processOutboundTick(run: AgentRunRecord, log: Logger): Promise<vo
   // approved should never re-generate or re-enroll.
   if (cfg.sequenceId) return;
   if (cfg.draft) {
-    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'pending_approval' } });
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({ where: { id: run.id }, data: { status: 'pending_approval' } }));
     return;
   }
 
   try {
-    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'running', startedAt: new Date() } });
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({ where: { id: run.id }, data: { status: 'running', startedAt: new Date() } }));
 
-    const key = await prisma.apiKey.findUnique({ where: { id: run.apiKeyId }, select: { plan: true } });
+    const key = await withTenant(run.apiKeyId, (tx) => tx.apiKey.findUnique({ where: { id: run.apiKeyId }, select: { plan: true } }));
     if (!GROWTH_PLANS.has(key?.plan ?? 'free')) {
       throw new Error('The Outbound Agent requires a Growth or Scale plan (same gate as AI campaign copy generation).');
     }
@@ -548,12 +549,12 @@ async function processOutboundTick(run: AgentRunRecord, log: Logger): Promise<vo
     };
     const newConfig = { ...(run.config as object), draft };
 
-    await prisma.agentRun.update({
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
       where: { id: run.id },
       data: { status: 'pending_approval', config: newConfig },
-    });
+    }));
     await emitEvent(
-      run.id,
+      run,
       'drafted',
       `${stepCount}-step sequence drafted for ${draft.matchCount.toLocaleString()} leads — review and approve to enroll and start sending.`,
       { stepCount, matchCount: draft.matchCount, firstSubject: steps[0]?.subject },
@@ -567,11 +568,11 @@ async function processOutboundTick(run: AgentRunRecord, log: Logger): Promise<vo
 async function handleOutboundFailure(run: AgentRunRecord, err: unknown, log: Logger): Promise<void> {
   const errorMsg = err instanceof Error ? err.message : 'Unknown error';
   log.error({ err }, 'Outbound agent run failed');
-  await prisma.agentRun.update({
+  await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
     where: { id: run.id },
     data: { status: 'failed', errorMessage: errorMsg.slice(0, 500) },
-  });
-  await emitEvent(run.id, 'error', `Draft failed: ${errorMsg.slice(0, 200)}`);
+  }));
+  await emitEvent(run, 'error', `Draft failed: ${errorMsg.slice(0, 200)}`);
 }
 
 // ─── Lead Finding pillar (recurring, async search across ticks) ───────────────
@@ -582,10 +583,10 @@ async function processLeadFindingTick(run: AgentRunRecord, log: Logger): Promise
 
   if (!cfg) {
     log.error({ config: run.config }, 'Agent run has invalid config — pausing');
-    await prisma.agentRun.update({
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
       where: { id: run.id },
       data: { status: 'failed', errorMessage: 'Invalid or missing lead-finding config (searchFilters required)', pausedAt: new Date() },
-    });
+    }));
     return;
   }
 
@@ -594,15 +595,15 @@ async function processLeadFindingTick(run: AgentRunRecord, log: Logger): Promise
       // Phase 1: no search in flight — start one, capped by what this key
       // can currently afford (same check + cap the manual POST
       // /v1/finder/search route applies).
-      const key = await prisma.apiKey.findUnique({
+      const key = await withTenant(run.apiKeyId, (tx) => tx.apiKey.findUnique({
         where: { id: run.apiKeyId },
         select: { plan: true, monthlyLimit: true, currentMonthUsage: true, extraVerificationCredits: true, currentMonthFinderUsage: true },
-      });
+      }));
       const { maxAffordable } = getFinderAffordability(key ?? { plan: null });
       if (maxAffordable === 0) {
         const nextCheckAt = calcNextCheckAt(intervalHours);
-        await prisma.agentRun.update({ where: { id: run.id }, data: { nextCheckAt } });
-        await emitEvent(run.id, 'quota_exhausted', 'Monthly lead-finding quota exhausted — will retry next cycle.');
+        await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({ where: { id: run.id }, data: { nextCheckAt } }));
+        await emitEvent(run, 'quota_exhausted', 'Monthly lead-finding quota exhausted — will retry next cycle.');
         return;
       }
 
@@ -613,11 +614,11 @@ async function processLeadFindingTick(run: AgentRunRecord, log: Logger): Promise
       }
 
       const apifyRunId = await startFinderRun(actorInput);
-      await prisma.agentRun.update({
+      await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
         where: { id: run.id },
         data: { config: { ...(run.config as object), pendingRunId: apifyRunId } },
-      });
-      await emitEvent(run.id, 'search_started', 'Search started — checking back shortly.');
+      }));
+      await emitEvent(run, 'search_started', 'Search started — checking back shortly.');
       await agentRunQueue.add(
         'agent-run-kick',
         { agentRunId: run.id } as AgentRunKickPayload,
@@ -651,15 +652,15 @@ async function processLeadFindingTick(run: AgentRunRecord, log: Logger): Promise
     const clearPendingAndReschedule = async (extraConfig: Record<string, unknown> = {}) => {
       const { pendingRunId: _drop, ...rest } = run.config as Record<string, unknown>;
       const nextCheckAt = calcNextCheckAt(intervalHours);
-      await prisma.agentRun.update({
+      await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
         where: { id: run.id },
         data: { lastCheckedAt: new Date(), nextCheckAt, consecutiveFailures: 0, config: { ...rest, ...extraConfig } as Prisma.InputJsonValue },
-      });
+      }));
     };
 
     if (candidateEmails.length === 0) {
       await clearPendingAndReschedule();
-      await emitEvent(run.id, 'tick_complete', 'Search complete — no matching leads found this cycle.');
+      await emitEvent(run, 'tick_complete', 'Search complete — no matching leads found this cycle.');
       return;
     }
 
@@ -673,7 +674,7 @@ async function processLeadFindingTick(run: AgentRunRecord, log: Logger): Promise
 
     if (newEmails.length === 0) {
       await clearPendingAndReschedule();
-      await emitEvent(run.id, 'tick_complete', `Search complete — ${candidateEmails.length} found, all already known.`);
+      await emitEvent(run, 'tick_complete', `Search complete — ${candidateEmails.length} found, all already known.`);
       return;
     }
 
@@ -681,10 +682,10 @@ async function processLeadFindingTick(run: AgentRunRecord, log: Logger): Promise
     // more, and other Finder/verification activity on this key may have
     // spent what was available at start time) — same re-check the manual
     // status-poll route does before spending real verification credits.
-    const key2 = await prisma.apiKey.findUnique({
+    const key2 = await withTenant(run.apiKeyId, (tx) => tx.apiKey.findUnique({
       where: { id: run.apiKeyId },
       select: { plan: true, monthlyLimit: true, currentMonthUsage: true, extraVerificationCredits: true, currentMonthFinderUsage: true },
-    });
+    }));
     const { maxAffordable: affordNow } = getFinderAffordability(key2 ?? { plan: null });
     const batchCap = Math.min(FINDER_BATCH_SIZE, affordNow, newEmails.length);
     const toProcess = newEmails.slice(0, batchCap);
@@ -763,13 +764,13 @@ async function processLeadFindingTick(run: AgentRunRecord, log: Logger): Promise
     if (cfg.sequenceId) parts.push(`${enrolled} enrolled`);
     if (newEmails.length > toProcess.length) parts.push(`${newEmails.length - toProcess.length} deferred to next cycle (quota)`);
 
-    await emitEvent(run.id, 'imported', parts.join(', '), { found: candidateEmails.length, new: newEmails.length, imported, enrolled, invalidCount });
+    await emitEvent(run, 'imported', parts.join(', '), { found: candidateEmails.length, new: newEmails.length, imported, enrolled, invalidCount });
     log.info({ found: candidateEmails.length, newLeads: newEmails.length, imported, enrolled }, 'Lead finding agent tick complete');
   } catch (err) {
     // Clear pendingRunId on failure too — a permanently-stuck/failed Apify
     // run must not wedge the watch into polling forever.
     const { pendingRunId: _drop, ...rest } = (run.config as Record<string, unknown>) ?? {};
-    await prisma.agentRun.update({ where: { id: run.id }, data: { config: rest as Prisma.InputJsonValue } }).catch(() => {});
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({ where: { id: run.id }, data: { config: rest as Prisma.InputJsonValue } })).catch(() => {});
     await handleTickFailure(run, intervalHours, err, log);
   }
 }
@@ -782,10 +783,10 @@ async function processWarmupTick(run: AgentRunRecord, log: Logger): Promise<void
 
   if (!cfg) {
     log.error({ config: run.config }, 'Agent run has invalid config — pausing');
-    await prisma.agentRun.update({
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({
       where: { id: run.id },
       data: { status: 'failed', errorMessage: 'Invalid or missing warmup config (mailboxId, baselineDailyRampUp required)', pausedAt: new Date() },
-    });
+    }));
     return;
   }
 
@@ -803,6 +804,7 @@ async function processWarmupTick(run: AgentRunRecord, log: Logger): Promise<void
     if (!mailbox.warmupConfig) {
       throw new Error('Mailbox no longer has warmup enabled (WarmupConfig missing).');
     }
+    const warmupConfigId = mailbox.warmupConfig.id;
 
     const nextCheckAt = calcNextCheckAt(intervalHours);
     let newDailyRampUp: number;
@@ -829,9 +831,9 @@ async function processWarmupTick(run: AgentRunRecord, log: Logger): Promise<void
       message = `Healthy — ramp restored to ${cfg.baselineDailyRampUp}/day.`;
     }
 
-    await prisma.warmupConfig.update({ where: { id: mailbox.warmupConfig.id }, data: { dailyRampUp: newDailyRampUp } });
-    await prisma.agentRun.update({ where: { id: run.id }, data: { lastCheckedAt: new Date(), nextCheckAt, consecutiveFailures: 0 } });
-    await emitEvent(run.id, eventType, message, {
+    await withTenant(run.apiKeyId, (tx) => tx.warmupConfig.update({ where: { id: warmupConfigId }, data: { dailyRampUp: newDailyRampUp } }));
+    await withTenant(run.apiKeyId, (tx) => tx.agentRun.update({ where: { id: run.id }, data: { lastCheckedAt: new Date(), nextCheckAt, consecutiveFailures: 0 } }));
+    await emitEvent(run, eventType, message, {
       dailyRampUp: newDailyRampUp,
       currentPerDay: mailbox.warmupConfig.currentPerDay,
       targetPerDay: mailbox.warmupConfig.targetPerDay,
@@ -844,17 +846,17 @@ async function processWarmupTick(run: AgentRunRecord, log: Logger): Promise<void
 }
 
 async function emitEvent(
-  agentRunId: string,
+  run: AgentRunRecord,
   eventType: string,
   message: string,
   data?: Record<string, unknown>,
 ): Promise<void> {
   try {
-    await prisma.agentRunEvent.create({
-      data: { agentRunId, eventType, message, data: data ? (data as any) : undefined },
-    });
+    await withTenant(run.apiKeyId, (tx) => tx.agentRunEvent.create({
+      data: { agentRunId: run.id, eventType, message, data: data ? (data as any) : undefined },
+    }));
   } catch (err) {
-    logger.warn({ err, agentRunId }, 'Failed to write agent run event');
+    logger.warn({ err, agentRunId: run.id }, 'Failed to write agent run event');
   }
 }
 

@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { getAgentRunLimit } from '../../plugins/usageMeter.js';
-import { prisma } from '../../lib/prisma.js';
 import { withTenant } from '../../lib/tenantContext.js';
 import { agentRunQueue } from '../../lib/queue.js';
 import { Errors } from '../../plugins/errorHandler.js';
@@ -208,9 +207,9 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
     const { pillar, name } = parsed.data;
 
     const runLimit = getAgentRunLimit(request.apiKey.plan);
-    const existingCount = await prisma.agentRun.count({
+    const existingCount = await withTenant(apiKeyId, (tx) => tx.agentRun.count({
       where: { apiKeyId, status: { notIn: ['cancelled', 'failed'] } },
-    });
+    }));
     if (existingCount >= runLimit) {
       throw Errors.validationFailed({
         limit: `Your ${request.apiKey.plan ?? 'free'} plan allows ${runLimit} active agent runs. Cancel one or upgrade to add more.`,
@@ -320,13 +319,13 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
         throw Errors.validationFailed({ mailboxId: 'This mailbox does not have warmup enabled yet — enable it under Mailboxes first.' });
       }
 
-      const existing = await prisma.agentRun.findFirst({
+      const existing = await withTenant(apiKeyId, (tx) => tx.agentRun.findFirst({
         where: {
           apiKeyId, pillar: 'warmup', status: { notIn: ['cancelled', 'failed'] },
           config: { path: ['mailboxId'], equals: mailboxId },
         },
         select: { id: true },
-      });
+      }));
       if (existing) {
         throw Errors.validationFailed({ mailboxId: `This mailbox already has an active warmup agent (id: ${existing.id}).` });
       }
@@ -449,16 +448,16 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
     if (!run) throw Errors.notFound('Agent run');
 
     const skip = (page - 1) * limit;
-    const [events, total] = await Promise.all([
-      prisma.agentRunEvent.findMany({
+    const [events, total] = await withTenant(apiKeyId, (tx) => Promise.all([
+      tx.agentRunEvent.findMany({
         where: { agentRunId: run.id },
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
         select: { id: true, eventType: true, message: true, data: true, createdAt: true },
       }),
-      prisma.agentRunEvent.count({ where: { agentRunId: run.id } }),
-    ]);
+      tx.agentRunEvent.count({ where: { agentRunId: run.id } }),
+    ]));
 
     return reply.status(200).send({
       agentRunId: run.id,
@@ -568,6 +567,7 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
     if (run.pillar === 'nurture') {
       const cfg = parseNurtureAgentConfig(run.config);
       if (!cfg || !cfg.draft) throw Errors.validationFailed({ config: 'This run has no draft to approve.' });
+      const draft = cfg.draft;
 
       const campaignId = await createAndSendCampaignFromDraft(apiKeyId, cfg);
       const updated = await withTenant(apiKeyId, (tx) =>
@@ -577,13 +577,13 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
           select: AGENT_RUN_SELECT,
         }),
       );
-      await prisma.agentRunEvent.create({
+      await withTenant(apiKeyId, (tx) => tx.agentRunEvent.create({
         data: {
           agentRunId: run.id, eventType: 'sent',
-          message: `Approved and sent to ${cfg.draft.matchCount.toLocaleString()} contacts.`,
-          data: { campaignId, subject: cfg.draft.subject },
+          message: `Approved and sent to ${draft.matchCount.toLocaleString()} contacts.`,
+          data: { campaignId, subject: draft.subject },
         },
-      });
+      }));
       logger.info({ agentRunId: run.id, apiKeyId, campaignId }, 'Nurture agent run approved and sent');
       return reply.status(200).send({ ...formatAgentRun(updated as AgentRunSelectResult), campaignId });
     }
@@ -600,13 +600,13 @@ export async function agentRunRoutes(fastify: FastifyInstance): Promise<void> {
         select: AGENT_RUN_SELECT,
       }),
     );
-    await prisma.agentRunEvent.create({
+    await withTenant(apiKeyId, (tx) => tx.agentRunEvent.create({
       data: {
         agentRunId: run.id, eventType: 'enrolled',
         message: `Approved — ${enrolled} lead(s) enrolled and sending on schedule.${skipped ? ` ${skipped} already enrolled.` : ''}${conflicts ? ` ${conflicts} skipped (already active in another sequence).` : ''}`,
         data: { sequenceId, enrolled, skipped, conflicts },
       },
-    });
+    }));
     logger.info({ agentRunId: run.id, apiKeyId, sequenceId, enrolled }, 'Outbound agent run approved and enrolled');
     return reply.status(200).send({ ...formatAgentRun(updated as AgentRunSelectResult), sequenceId, enrolled, skipped, conflicts });
   });

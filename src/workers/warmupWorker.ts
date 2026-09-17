@@ -1,12 +1,11 @@
 import { Worker, type Job } from 'bullmq';
 import { QUEUE_WARMUP, redisConnection } from '../lib/queue.js';
-import { prisma } from '../lib/prisma.js';
 import { sendViaSmtp } from '../lib/smtp.js';
 import { decryptValue } from '../lib/crypto.js';
 import { logger } from '../lib/logger.js';
 import { config } from '../config.js';
 import { deriveImapHost, IMAP_PORT } from '../lib/imapHost.js';
-import { withTenant } from '../lib/tenantContext.js';
+import { withTenant, withRlsBypass } from '../lib/tenantContext.js';
 
 interface WarmupTickPayload {
   tick: true;
@@ -182,11 +181,14 @@ export async function processWarmupTick(): Promise<void> {
   // mechanical pattern real correspondence doesn't have.
   await new Promise(r => setTimeout(r, Math.random() * 10 * 60 * 1000));
 
-  // Get all enabled warmup configs with their mailboxes
-  const warmupConfigs = await prisma.warmupConfig.findMany({
+  // Get all enabled warmup configs with their mailboxes — deliberately
+  // cross-tenant: the warmup pool pairs mailboxes across DIFFERENT
+  // customers with each other by design (see the comment below), so this
+  // scan can never be scoped to one tenant.
+  const warmupConfigs = await withRlsBypass((tx) => tx.warmupConfig.findMany({
     where: { enabled: true },
     include: { mailbox: true },
-  });
+  }));
 
   if (warmupConfigs.length < 2) {
     // This is the exact condition that silently blocked every tick for
@@ -299,10 +301,10 @@ export async function processWarmupTick(): Promise<void> {
     const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     const wcAny = wc as { lastRampDate?: string | null };
     if (wcAny.lastRampDate !== todayStr) {
-      await prisma.warmupConfig.update({
+      await withTenant(mailbox.apiKeyId, (tx) => tx.warmupConfig.update({
         where: { id: wc.id },
         data: { currentPerDay: todayTarget, lastRampDate: todayStr } as never,
-      });
+      }));
     }
   }
 

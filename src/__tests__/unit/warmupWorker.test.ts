@@ -1,11 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: {
+    warmupConfig: { findMany: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> };
+    mailbox: { update: ReturnType<typeof vi.fn> };
+    $transaction?: ReturnType<typeof vi.fn>;
+    $executeRawUnsafe?: ReturnType<typeof vi.fn>;
+  } = {
     warmupConfig: { findMany: vi.fn(), update: vi.fn().mockResolvedValue({}) },
     mailbox: { update: vi.fn().mockResolvedValue({}) },
-  },
-}));
+  };
+  // withTenant()/withRlsBypass() call prisma.$transaction(fn) and hand fn
+  // the tx — here the same mock object, so tx.X resolves to the mocks above.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  prisma.$executeRawUnsafe = vi.fn().mockResolvedValue(undefined);
+  return { prisma };
+});
 vi.mock('../../config.js', () => ({
   config: { WARMUP_POOL_ENABLED: true, MAILBOX_CREDS_SECRET: 'test-secret' },
 }));

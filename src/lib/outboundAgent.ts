@@ -9,7 +9,6 @@
  * cross-sequence exclusivity) applies here exactly as it does to a sequence
  * a human built by hand.
  */
-import { prisma } from './prisma.js';
 import { withTenant } from './tenantContext.js';
 import type { OutboundAgentConfig } from '../types/agentRun.js';
 
@@ -95,13 +94,13 @@ export async function createSequenceAndEnrollFromDraft(
   });
 }
 
-export async function markAgentRunOutboundComplete(agentRunId: string, config: OutboundAgentConfig, sequenceId: string): Promise<void> {
-  await prisma.agentRun.update({
+export async function markAgentRunOutboundComplete(apiKeyId: string, agentRunId: string, config: OutboundAgentConfig, sequenceId: string): Promise<void> {
+  await withTenant(apiKeyId, (tx) => tx.agentRun.update({
     where: { id: agentRunId },
     data: {
       status: 'completed',
       completedAt: new Date(),
       config: { ...config, sequenceId } as object,
     },
-  });
+  }));
 }
