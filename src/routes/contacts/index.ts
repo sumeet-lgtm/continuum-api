@@ -156,8 +156,8 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
 
     const date = new Date().toISOString().slice(0, 10);
     const safeName = (list.name ?? 'contacts').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
-    reply.header('Content-Type', 'text/csv; charset=utf-8');
-    reply.header('Content-Disposition', `attachment; filename="${safeName}-${date}.csv"`);
+    void reply.header('Content-Type', 'text/csv; charset=utf-8');
+    void reply.header('Content-Disposition', `attachment; filename="${safeName}-${date}.csv"`);
 
     let offset = 0;
     const batchSize = 1000;

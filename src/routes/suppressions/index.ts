@@ -100,8 +100,8 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const where = { OR: [{ apiKeyId }, { apiKeyId: null }] };
 
       const date = new Date().toISOString().slice(0, 10);
-      reply.header('Content-Type', 'text/csv; charset=utf-8');
-      reply.header('Content-Disposition', `attachment; filename="suppressions-${date}.csv"`);
+      void reply.header('Content-Type', 'text/csv; charset=utf-8');
+      void reply.header('Content-Disposition', `attachment; filename="suppressions-${date}.csv"`);
 
       let offset = 0;
       const batchSize = 1000;

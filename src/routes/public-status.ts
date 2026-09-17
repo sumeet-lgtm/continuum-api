@@ -119,8 +119,8 @@ export async function publicStatusRoutes(fastify: FastifyInstance): Promise<void
       ? 100
       : dailyUptime.reduce((s, d) => s + d.uptime, 0) / dailyUptime.length;
 
-    reply.header('Cache-Control', 'public, max-age=30');
-    reply.header('Access-Control-Allow-Origin', '*');
+    void reply.header('Cache-Control', 'public, max-age=30');
+    void reply.header('Access-Control-Allow-Origin', '*');
 
     return reply.send({
       status: overall,
