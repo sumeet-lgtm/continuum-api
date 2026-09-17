@@ -15,7 +15,7 @@
  * notification, no retry, nothing.
  */
 import { SESv2Client, GetEmailIdentityCommand } from '@aws-sdk/client-sesv2';
-import { prisma } from './prisma.js';
+import { withTenant } from './tenantContext.js';
 import { config } from '../config.js';
 import { getDomainHealth } from './deliverability.js';
 import { logAudit } from './audit.js';
@@ -66,7 +66,7 @@ export async function verifyDomain(domain: DomainToVerify) {
 
   const allVerified = health.spf.valid && (health.dkim.valid || sesDkimVerified) && health.dmarc.valid;
 
-  const updated = await prisma.sendingDomain.update({
+  const updated = await withTenant(domain.apiKeyId, (tx) => tx.sendingDomain.update({
     where: { id: domain.id },
     data: {
       spfStatus: health.spf.valid ? 'verified' : 'pending',
@@ -75,7 +75,7 @@ export async function verifyDomain(domain: DomainToVerify) {
       ...(allVerified ? { verifiedAt: new Date() } : {}),
     },
     select: { id: true, name: true, status: true, spfStatus: true, dkimStatus: true, returnPathStatus: true, verifiedAt: true },
-  });
+  }));
 
   const justVerified = allVerified && !domain.verifiedAt;
   if (justVerified) {

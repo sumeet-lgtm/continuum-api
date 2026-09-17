@@ -5,9 +5,16 @@ vi.mock('bullmq', () => ({
   Worker: vi.fn().mockImplementation(() => ({ on: vi.fn(), close: vi.fn() })),
   Queue: vi.fn().mockImplementation(() => ({ add: vi.fn(), close: vi.fn() })),
 }));
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: { sendingDomain: { findMany: vi.fn() } },
-}));
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: { sendingDomain: { findMany: ReturnType<typeof vi.fn> }; $transaction?: ReturnType<typeof vi.fn>; $executeRawUnsafe?: ReturnType<typeof vi.fn> } = {
+    sendingDomain: { findMany: vi.fn() },
+  };
+  // withRlsBypass() calls prisma.$transaction(fn) and hands fn the tx —
+  // here the same mock object, so tx.sendingDomain resolves to the mock above.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  prisma.$executeRawUnsafe = vi.fn().mockResolvedValue(undefined);
+  return { prisma };
+});
 vi.mock('../../lib/domainVerify.js', () => ({ verifyDomain: vi.fn() }));
 
 import { processDomainVerifyTick } from '../../workers/domainVerifyWorker.js';

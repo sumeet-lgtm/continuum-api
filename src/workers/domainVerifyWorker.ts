@@ -1,6 +1,6 @@
 import { Worker, type Job } from 'bullmq';
 import { QUEUE_DOMAIN_VERIFY, redisConnection } from '../lib/queue.js';
-import { prisma } from '../lib/prisma.js';
+import { withRlsBypass } from '../lib/tenantContext.js';
 import { verifyDomain } from '../lib/domainVerify.js';
 import { logger } from '../lib/logger.js';
 
@@ -16,10 +16,13 @@ interface DomainVerifyTickPayload {
 // so "verification happens automatically" in the dashboard's own copy was
 // not true. This tick makes that claim actually true.
 export async function processDomainVerifyTick(): Promise<void> {
-  const pending = await prisma.sendingDomain.findMany({
+  // Every tenant's pending domain in one scan — the one legitimate
+  // cross-tenant read here. verifyDomain() below re-scopes each row's own
+  // write to that row's own apiKeyId via withTenant.
+  const pending = await withRlsBypass((tx) => tx.sendingDomain.findMany({
     where: { status: 'pending' },
     select: { id: true, apiKeyId: true, name: true, region: true, dkimStatus: true, verifiedAt: true },
-  });
+  }));
 
   if (pending.length === 0) return;
 

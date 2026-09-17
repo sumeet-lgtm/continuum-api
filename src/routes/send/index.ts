@@ -161,10 +161,10 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       // ── Resolve sending domain ────────────────────────────────────────────────
       let sendingDomain: { id: string; name: string; trackOpens: boolean; trackClicks: boolean; trackingDomain: string | null } | null = null;
       if (domain_id) {
-        sendingDomain = await prisma.sendingDomain.findFirst({
+        sendingDomain = await withTenant(apiKeyId, (tx) => tx.sendingDomain.findFirst({
           where: { id: domain_id, apiKeyId, status: 'verified' },
           select: { id: true, name: true, trackOpens: true, trackClicks: true, trackingDomain: true },
-        });
+        }));
         if (!sendingDomain) throw Errors.validationFailed([{ field: 'domain_id', message: 'Domain not found or not verified.' }]);
       }
 

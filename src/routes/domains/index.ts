@@ -4,7 +4,7 @@ import { SESv2Client, CreateEmailIdentityCommand, DeleteEmailIdentityCommand } f
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { logAudit } from '../../lib/audit.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { generateDkimKeyPair, dnsPublicKeyValue, pemToRawBase64 } from '../../lib/dkim.js';
 import { getDomainHealth } from '../../lib/deliverability.js';
@@ -52,13 +52,13 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const { name, region, track_opens, track_clicks, tracking_domain } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
-      const existing = await prisma.sendingDomain.findUnique({ where: { apiKeyId_name: { apiKeyId, name } } });
+      const existing = await withTenant(apiKeyId, (tx) => tx.sendingDomain.findUnique({ where: { apiKeyId_name: { apiKeyId, name } } }));
       if (existing) throw Errors.validationFailed([{ field: 'name', message: 'Domain already registered.' }]);
 
       const kp = generateDkimKeyPair(getDkimSecret());
       const dnsValue = dnsPublicKeyValue(kp.publicKey);
 
-      const domain = await prisma.sendingDomain.create({
+      const domain = await withTenant(apiKeyId, (tx) => tx.sendingDomain.create({
         data: {
           apiKeyId, name, region, trackOpens: track_opens, trackClicks: track_clicks,
           trackingDomain: tracking_domain ?? null,
@@ -67,7 +67,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
           dkimPrivateKeyEnc: kp.privateKeyEnc,
         },
         select: { id: true, name: true, status: true, region: true, dkimSelector: true, createdAt: true },
-      });
+      }));
 
       // Register domain in AWS SES so it can send emails through our infrastructure
       if (config.AWS_ACCESS_KEY_ID && config.AWS_SECRET_ACCESS_KEY) {
@@ -88,7 +88,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
           // The user can retry verification which will re-check SES status
           const errMsg = sesErr instanceof Error ? sesErr.message : 'Unknown SES error';
           logger.error({ err: sesErr, domainId: domain.id, domain: name }, 'SES CreateEmailIdentity failed at domain-add time');
-          await prisma.sendingDomain.update({ where: { id: domain.id }, data: { status: 'pending' } }).catch(() => {});
+          await withTenant(apiKeyId, (tx) => tx.sendingDomain.update({ where: { id: domain.id }, data: { status: 'pending' } })).catch(() => {});
           void errMsg; // logged via healthcheck
         }
       }
@@ -158,7 +158,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [requireAuth, requireRateLimit] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const apiKeyId = request.apiKey.id;
-      const domains = await prisma.sendingDomain.findMany({
+      const domains = await withTenant(apiKeyId, (tx) => tx.sendingDomain.findMany({
         where: { apiKeyId },
         orderBy: { createdAt: 'desc' },
         select: {
@@ -166,7 +166,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
           spfStatus: true, dkimStatus: true, returnPathStatus: true,
           trackOpens: true, trackClicks: true, createdAt: true, verifiedAt: true,
         },
-      });
+      }));
       return reply.status(200).send({ data: domains });
     },
   );
@@ -179,14 +179,14 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const domain = await prisma.sendingDomain.findFirst({
+      const domain = await withTenant(apiKeyId, (tx) => tx.sendingDomain.findFirst({
         where: { id, apiKeyId },
         select: {
           id: true, name: true, status: true, region: true, dkimSelector: true,
           dkimPublicKey: true, spfStatus: true, dkimStatus: true, returnPathStatus: true,
           trackOpens: true, trackClicks: true, createdAt: true, verifiedAt: true,
         },
-      });
+      }));
       if (!domain) throw Errors.notFound('Domain not found.');
 
       return reply.status(200).send(domain);
@@ -201,7 +201,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const domain = await prisma.sendingDomain.findFirst({ where: { id, apiKeyId } });
+      const domain = await withTenant(apiKeyId, (tx) => tx.sendingDomain.findFirst({ where: { id, apiKeyId } }));
       if (!domain) throw Errors.notFound('Domain not found.');
 
       const { updated, health } = await verifyDomain(domain);
@@ -218,7 +218,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const domain = await prisma.sendingDomain.findFirst({ where: { id, apiKeyId } });
+      const domain = await withTenant(apiKeyId, (tx) => tx.sendingDomain.findFirst({ where: { id, apiKeyId } }));
       if (!domain) throw Errors.notFound('Domain not found.');
 
       const health = await getDomainHealth(domain.name, domain.dkimStatus === 'verified');
@@ -234,7 +234,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const domain = await prisma.sendingDomain.findFirst({ where: { id, apiKeyId } });
+      const domain = await withTenant(apiKeyId, (tx) => tx.sendingDomain.findFirst({ where: { id, apiKeyId } }));
       if (!domain) throw Errors.notFound('Domain not found.');
 
       // Remove from SES first (non-fatal if it fails — may already be removed)
@@ -245,7 +245,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
         } catch { /* ignore — domain may not be registered in SES */ }
       }
 
-      await prisma.sendingDomain.delete({ where: { id } });
+      await withTenant(apiKeyId, (tx) => tx.sendingDomain.delete({ where: { id } }));
       return reply.status(200).send({ deleted: true, id });
     },
   );
@@ -258,7 +258,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const domain = await prisma.sendingDomain.findFirst({ where: { id, apiKeyId } });
+      const domain = await withTenant(apiKeyId, (tx) => tx.sendingDomain.findFirst({ where: { id, apiKeyId } }));
       if (!domain) throw Errors.notFound('Domain not found.');
 
       const result = await checkDomainBlacklists(domain.name);
@@ -289,7 +289,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const domain = await prisma.sendingDomain.findFirst({ where: { id, apiKeyId } });
+      const domain = await withTenant(apiKeyId, (tx) => tx.sendingDomain.findFirst({ where: { id, apiKeyId } }));
       if (!domain) throw Errors.notFound('Domain not found.');
 
       // Generate fresh key pair with a new time-stamped selector.
@@ -301,7 +301,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
       const kp = generateDkimKeyPair(getDkimSecret());
 
       // Update domain record — status resets to pending until DNS re-verifies
-      const updated = await prisma.sendingDomain.update({
+      const updated = await withTenant(apiKeyId, (tx) => tx.sendingDomain.update({
         where: { id },
         data: {
           dkimSelector:       kp.selector,
@@ -310,7 +310,7 @@ export async function domainRoutes(fastify: FastifyInstance): Promise<void> {
           dkimStatus:         'pending',
         },
         select: { id: true, name: true, dkimSelector: true, dkimPublicKey: true, dkimStatus: true },
-      });
+      }));
 
       // Re-register in SES with the new BYODKIM private key
       if (config.AWS_ACCESS_KEY_ID && config.AWS_SECRET_ACCESS_KEY) {

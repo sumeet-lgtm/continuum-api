@@ -397,10 +397,10 @@ export async function analyticsRoutes(fastify: FastifyInstance): Promise<void> {
       const domainIds = Array.from(byDomain.keys());
       // tenant-sweep: domainIds are derived from this account's own already-
       // scoped send messages above — only hydrating name/status for display.
-      const domains = await prisma.sendingDomain.findMany({
+      const domains = await withTenant(apiKeyId, (tx) => tx.sendingDomain.findMany({
         where: { id: { in: domainIds } },
         select: { id: true, name: true, status: true },
-      });
+      }));
       const domainMap = new Map(domains.map((d) => [d.id, d]));
 
       const data = Array.from(byDomain.entries())

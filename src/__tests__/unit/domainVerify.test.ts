@@ -7,9 +7,16 @@ vi.mock('@aws-sdk/client-sesv2', () => {
   return { SESv2Client: FakeSESv2Client, GetEmailIdentityCommand: FakeGetEmailIdentityCommand };
 });
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: { sendingDomain: { update: vi.fn() } },
-}));
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: { sendingDomain: { update: ReturnType<typeof vi.fn> }; $transaction?: ReturnType<typeof vi.fn>; $executeRawUnsafe?: ReturnType<typeof vi.fn> } = {
+    sendingDomain: { update: vi.fn() },
+  };
+  // withTenant() calls prisma.$transaction(fn) and hands fn the tx — here
+  // the same mock object, so tx.sendingDomain resolves to the mock above.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  prisma.$executeRawUnsafe = vi.fn().mockResolvedValue(undefined);
+  return { prisma };
+});
 vi.mock('../../lib/deliverability.js', () => ({ getDomainHealth: vi.fn() }));
 vi.mock('../../lib/audit.js', () => ({ logAudit: vi.fn() }));
 vi.mock('../../lib/webhooks.js', () => ({ dispatchWebhook: vi.fn().mockResolvedValue(undefined), buildEventId: (event: string, id: string) => `${event}:${id}` }));
