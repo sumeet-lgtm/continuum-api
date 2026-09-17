@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { withRlsBypass } from '../lib/tenantContext.js';
 import { logger } from '../lib/logger.js';
 import {
   sendEmail,
@@ -23,12 +24,16 @@ import { config } from '../config.js';
 
 // Fixed lifecycle milestones (hours since key creation, ±4h send window —
 // same tolerance as the original day1/3/7/14 windows).
-const MILESTONES: { day: number; id: string; build: (firstName?: string | null) => { subject: string; html: string } }[] = [
-  { day: 21, id: 'day21domain',  build: day21Email },
-  { day: 30, id: 'day30plans',   build: day30Email },
+const MILESTONES: {
+  day: number;
+  id: string;
+  build: (firstName?: string | null) => { subject: string; html: string };
+}[] = [
+  { day: 21, id: 'day21domain', build: day21Email },
+  { day: 30, id: 'day30plans', build: day30Email },
   { day: 45, id: 'day45nurture', build: day45Email },
-  { day: 60, id: 'day60finder',  build: day60Email },
-  { day: 75, id: 'day75warmup',  build: day75Email },
+  { day: 60, id: 'day60finder', build: day60Email },
+  { day: 75, id: 'day75warmup', build: day75Email },
   { day: 90, id: 'day90checkin', build: day90Email },
 ];
 
@@ -71,8 +76,9 @@ async function claim(id: string): Promise<boolean> {
 
 /** Release a claimed slot so a failed send retries next sweep. */
 async function release(id: string): Promise<void> {
-  await prisma.$executeRaw`delete from sent_emails where id = ${id}`
-    .catch(() => { /* best effort */ });
+  await prisma.$executeRaw`delete from sent_emails where id = ${id}`.catch(() => {
+    /* best effort */
+  });
 }
 
 function recipientOf(key: KeyRow): string | null {
@@ -94,12 +100,20 @@ export async function runEmailSweep(): Promise<void> {
   if (!config.AWS_ACCESS_KEY_ID) return; // SES not configured — skip
 
   try {
-    const keys = await prisma.$queryRaw<KeyRow[]>`
+    // Cross-tenant sweep by design (must see every active key) —
+    // withRlsBypass, same as every other worker-level sweep. This was a
+    // real gap: raw $queryRaw calls don't match the "prisma.<model>."
+    // grep the rest of the RLS pass used, so this one slipped through
+    // the pre-cutover audit and silently returned zero rows (every
+    // lifecycle email stopped sending) once the role cutover landed.
+    const keys = await withRlsBypass(
+      (tx) => tx.$queryRaw<KeyRow[]>`
       select k.id, k."keyPrefix", k.plan, k."monthlyLimit", k."currentMonthUsage",
-             k."usageResetAt", k."ownerId", k."userId", k."createdAt", u.email, u."firstName"
+             k."usageResetAt", k."ownerId", k."userId", k."createdAt", u.email, u.first_name as "firstName"
       from api_keys k
       left join users u on u.id = k."ownerId"
-      where k."isActive" = true`;
+      where k."isActive" = true`,
+    );
 
     const month = new Date().toISOString().slice(0, 7); // YYYY-MM
 
@@ -108,8 +122,8 @@ export async function runEmailSweep(): Promise<void> {
       if (!to) continue;
 
       // Welcome + lifecycle — keys created in the last 14 days
-      const ageMs  = Date.now() - new Date(key.createdAt).getTime();
-      const ageH   = ageMs / 3600_000; // hours since creation
+      const ageMs = Date.now() - new Date(key.createdAt).getTime();
+      const ageH = ageMs / 3600_000; // hours since creation
 
       if (ageH < 7 * 24) {
         // Send welcome once during the first week window
@@ -118,7 +132,11 @@ export async function runEmailSweep(): Promise<void> {
 
       // Day 1 activation nudge — if they signed up 20-28h ago and haven't made a call
       if (ageH >= 20 && ageH < 28 && key.currentMonthUsage === 0) {
-        await sendOnce(`day1activation:${key.id}`, to, day1ActivationEmail(key.keyPrefix, key.firstName));
+        await sendOnce(
+          `day1activation:${key.id}`,
+          to,
+          day1ActivationEmail(key.keyPrefix, key.firstName),
+        );
       }
 
       // Day 3 feature discovery
@@ -148,22 +166,34 @@ export async function runEmailSweep(): Promise<void> {
       for (const { day, spotlight } of SPOTLIGHT_SCHEDULE) {
         const windowH = day * 24;
         if (ageH >= windowH - 4 && ageH < windowH + 4) {
-          await sendOnce(`spotlight:${spotlight.tag}:${key.id}`, to, featureSpotlightEmail(spotlight, key.firstName));
+          await sendOnce(
+            `spotlight:${spotlight.tag}:${key.id}`,
+            to,
+            featureSpotlightEmail(spotlight, key.firstName),
+          );
         }
       }
 
       // Quota emails
       const limit = getPlanLimit(key.plan, key.monthlyLimit);
-      const used  = key.currentMonthUsage;
-      const plan  = key.plan ?? 'free';
+      const used = key.currentMonthUsage;
+      const plan = key.plan ?? 'free';
 
       if (used >= limit) {
         const resetsOn = key.usageResetAt
           ? new Date(key.usageResetAt).toISOString().split('T')[0]!
           : 'the 1st of next month';
-        await sendOnce(`quota100:${key.id}:${month}`, to, quotaExceededEmail(limit, plan, resetsOn, key.firstName));
+        await sendOnce(
+          `quota100:${key.id}:${month}`,
+          to,
+          quotaExceededEmail(limit, plan, resetsOn, key.firstName),
+        );
       } else if (used >= limit * 0.8) {
-        await sendOnce(`quota80:${key.id}:${month}`, to, quotaWarningEmail(used, limit, plan, key.firstName));
+        await sendOnce(
+          `quota80:${key.id}:${month}`,
+          to,
+          quotaWarningEmail(used, limit, plan, key.firstName),
+        );
       }
     }
   } catch (err) {

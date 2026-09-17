@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/prisma.js';
+import { withRlsBypass } from '../lib/tenantContext.js';
 import { pingRedis } from '../lib/redis.js';
 import { getSesHealth } from '../lib/ses.js';
 import { config } from '../config.js';
@@ -49,7 +50,10 @@ async function dashboardCheck(): Promise<{ status: 'ok' | 'error'; latencyMs: nu
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(config.DASHBOARD_URL, { method: 'HEAD', signal: controller.signal }).finally(() => clearTimeout(timeout));
+    const res = await fetch(config.DASHBOARD_URL, {
+      method: 'HEAD',
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
     return { status: res.ok ? 'ok' : 'error', latencyMs: Date.now() - t };
   } catch {
     return { status: 'error', latencyMs: Date.now() - t };
@@ -63,9 +67,15 @@ async function computeDailyUptime(days: number): Promise<Array<{ date: string; u
     const since = new Date();
     since.setDate(since.getDate() - days);
 
-    const rows = await prisma.$queryRaw<
-      Array<{ day: string; total: bigint; errors: bigint }>
-    >`
+    // Cross-tenant aggregate by design (platform-wide uptime, not any one
+    // tenant's) — withRlsBypass. A real gap until fixed: this raw
+    // $queryRaw call doesn't match the "prisma.<model>." grep the rest of
+    // the RLS pass used to find unwrapped calls, so it slipped through
+    // and silently returned zero rows (reported as a false 100% uptime,
+    // since a day with no matched rows maps to "no traffic") once the
+    // role cutover landed.
+    const rows = await withRlsBypass(
+      (tx) => tx.$queryRaw<Array<{ day: string; total: bigint; errors: bigint }>>`
       SELECT
         DATE(created_at AT TIME ZONE 'UTC') AS day,
         COUNT(*)                             AS total,
@@ -74,7 +84,8 @@ async function computeDailyUptime(days: number): Promise<Array<{ date: string; u
       WHERE created_at >= ${since}
       GROUP BY day
       ORDER BY day ASC
-    `;
+    `,
+    );
 
     // Build a full 90-day map (missing days = 100% uptime, no traffic)
     const map = new Map<string, number>();
@@ -88,7 +99,7 @@ async function computeDailyUptime(days: number): Promise<Array<{ date: string; u
     for (let i = days - 1; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      const key = d.toISOString().slice(0, 10)!;
+      const key = d.toISOString().slice(0, 10);
       result.push({ date: key, uptime: map.get(key) ?? 100 });
     }
     return result;
@@ -115,9 +126,10 @@ export async function publicStatusRoutes(fastify: FastifyInstance): Promise<void
     const overall = allOk ? 'operational' : anyOk ? 'degraded' : 'outage';
 
     // Rolling 90-day uptime average
-    const avg90 = dailyUptime.length === 0
-      ? 100
-      : dailyUptime.reduce((s, d) => s + d.uptime, 0) / dailyUptime.length;
+    const avg90 =
+      dailyUptime.length === 0
+        ? 100
+        : dailyUptime.reduce((s, d) => s + d.uptime, 0) / dailyUptime.length;
 
     void reply.header('Cache-Control', 'public, max-age=30');
     void reply.header('Access-Control-Allow-Origin', '*');
@@ -126,11 +138,31 @@ export async function publicStatusRoutes(fastify: FastifyInstance): Promise<void
       status: overall,
       timestamp: new Date().toISOString(),
       components: [
-        { id: 'api',      name: 'API',            status: overall,                                          latencyMs: db.latencyMs },
-        { id: 'database', name: 'Database',        status: db.status === 'ok' ? 'operational' : 'outage',    latencyMs: db.latencyMs },
-        { id: 'queue',    name: 'Queue / Cache',   status: redis.status === 'ok' ? 'operational' : 'outage', latencyMs: redis.latencyMs },
-        { id: 'email',    name: 'Email Delivery',  status: email.status === 'ok' ? 'operational' : 'outage', latencyMs: email.latencyMs },
-        { id: 'dashboard',name: 'Dashboard',       status: dashboard.status === 'ok' ? 'operational' : 'outage', latencyMs: dashboard.latencyMs },
+        { id: 'api', name: 'API', status: overall, latencyMs: db.latencyMs },
+        {
+          id: 'database',
+          name: 'Database',
+          status: db.status === 'ok' ? 'operational' : 'outage',
+          latencyMs: db.latencyMs,
+        },
+        {
+          id: 'queue',
+          name: 'Queue / Cache',
+          status: redis.status === 'ok' ? 'operational' : 'outage',
+          latencyMs: redis.latencyMs,
+        },
+        {
+          id: 'email',
+          name: 'Email Delivery',
+          status: email.status === 'ok' ? 'operational' : 'outage',
+          latencyMs: email.latencyMs,
+        },
+        {
+          id: 'dashboard',
+          name: 'Dashboard',
+          status: dashboard.status === 'ok' ? 'operational' : 'outage',
+          latencyMs: dashboard.latencyMs,
+        },
       ],
       uptime90: Math.round(avg90 * 100) / 100,
       days: dailyUptime.map((d) => ({
@@ -142,35 +174,50 @@ export async function publicStatusRoutes(fastify: FastifyInstance): Promise<void
   });
 
   // POST /v1/status/subscribe — store email for status notifications
-  fastify.post('/v1/status/subscribe', {
-    schema: {
-      body: { type: 'object', required: ['email'], properties: { email: { type: 'string', format: 'email' } } },
+  fastify.post(
+    '/v1/status/subscribe',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['email'],
+          properties: { email: { type: 'string', format: 'email' } },
+        },
+      },
     },
-  }, async (request, reply) => {
-    const { email } = request.body as { email: string };
-    try {
-      await prisma.$executeRaw`
+    async (request, reply) => {
+      const { email } = request.body as { email: string };
+      try {
+        await prisma.$executeRaw`
         INSERT INTO status_subscribers (email, created_at)
         VALUES (${email}, NOW())
         ON CONFLICT (email) DO NOTHING
       `;
-    } catch (err) {
-      // Only the migration-not-applied-yet case is safe to swallow —
-      // anything else (bad connection, constraint violation, etc.) must
-      // surface as a real error, or subscribers silently vanish with no
-      // way for us to ever notice. Postgres reports a missing relation as
-      // error code 42P01.
-      const code = (err as { code?: string; meta?: { code?: string } } | null)?.code
-        ?? (err as { meta?: { code?: string } } | null)?.meta?.code;
-      const message = err instanceof Error ? err.message : '';
-      const tableMissing = code === '42P01' || message.includes('does not exist');
-      if (!tableMissing) {
-        logger.error({ err }, 'status_subscribers insert failed');
-        return reply.status(500).send({ ok: false, error: 'Could not save subscription — try again shortly.' });
+      } catch (err) {
+        // Only the migration-not-applied-yet case is safe to swallow —
+        // anything else (bad connection, constraint violation, etc.) must
+        // surface as a real error, or subscribers silently vanish with no
+        // way for us to ever notice. Postgres reports a missing relation as
+        // error code 42P01.
+        const code =
+          (err as { code?: string; meta?: { code?: string } } | null)?.code ??
+          (err as { meta?: { code?: string } } | null)?.meta?.code;
+        const message = err instanceof Error ? err.message : '';
+        const tableMissing = code === '42P01' || message.includes('does not exist');
+        if (!tableMissing) {
+          logger.error({ err }, 'status_subscribers insert failed');
+          return reply
+            .status(500)
+            .send({ ok: false, error: 'Could not save subscription — try again shortly.' });
+        }
+        logger.warn(
+          'status_subscribers table missing — migration not yet applied, subscription not saved',
+        );
+        return reply
+          .status(503)
+          .send({ ok: false, error: 'Subscriptions are not enabled yet — try again later.' });
       }
-      logger.warn('status_subscribers table missing — migration not yet applied, subscription not saved');
-      return reply.status(503).send({ ok: false, error: 'Subscriptions are not enabled yet — try again later.' });
-    }
-    return reply.send({ ok: true });
-  });
+      return reply.send({ ok: true });
+    },
+  );
 }
