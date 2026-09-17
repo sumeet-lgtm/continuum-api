@@ -4,9 +4,8 @@ import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { requireMonthlySendQuota, incrementSendUsageBy } from '../../plugins/usageMeter.js';
 import { sendViaSes, isSesConfigured, SesNotConfiguredError } from '../../lib/ses.js';
-import { prisma } from '../../lib/prisma.js';
 import { config } from '../../config.js';
-import { withTenant } from '../../lib/tenantContext.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { dispatchWebhook, buildEventId } from '../../lib/webhooks.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
@@ -15,7 +14,10 @@ import { generateOpenToken, generateClickToken, injectTracking } from '../../lib
 import type { EmailSentPayload } from '../../types/webhook.js';
 
 const messageSchema = z.object({
-  to: z.string().email().transform(s => s.trim().toLowerCase()),
+  to: z
+    .string()
+    .email()
+    .transform((s) => s.trim().toLowerCase()),
   subject: z.string().min(1).max(500),
   html_body: z.string().optional(),
   text_body: z.string().optional(),
@@ -42,7 +44,9 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const parsed = batchSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+        throw Errors.validationFailed(
+          parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        );
       }
 
       const { messages, from_name, from_email } = parsed.data;
@@ -54,8 +58,12 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
       await (requireMonthlySendQuota as Function)(request, reply);
 
       const from = from_email
-        ? (from_name ? `${from_name} <${from_email}>` : from_email)
-        : (config.SES_FROM_DOMAIN.includes('@') ? config.SES_FROM_DOMAIN : `no-reply@${config.SES_FROM_DOMAIN}`);
+        ? from_name
+          ? `${from_name} <${from_email}>`
+          : from_email
+        : config.SES_FROM_DOMAIN.includes('@')
+          ? config.SES_FROM_DOMAIN
+          : `no-reply@${config.SES_FROM_DOMAIN}`;
 
       const results: Array<{ id: string; status: string; error?: string }> = [];
       let successCount = 0;
@@ -64,20 +72,29 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
         const { to, subject, html_body, text_body, reply_to, tags } = msg;
 
         try {
-          // Suppression check
-          const suppressed = await withTenant(apiKeyId, (tx) => tx.suppression.findUnique({ where: { email: to } }));
+          // Suppression check — withRlsBypass, not withTenant: a suppression
+          // caused by any tenant's send applies globally (see send/index.ts).
+          const suppressed = await withRlsBypass((tx) =>
+            tx.suppression.findUnique({ where: { email: to } }),
+          );
           if (suppressed) {
-            results.push({ id: '', status: 'suppressed', error: `${to} is suppressed (${suppressed.reason})` });
+            results.push({
+              id: '',
+              status: 'suppressed',
+              error: `${to} is suppressed (${suppressed.reason})`,
+            });
             continue;
           }
 
           // Idempotency
           if (msg.idempotency_key) {
             const idempotencyKey = msg.idempotency_key;
-            const existing = await withTenant(apiKeyId, (tx) => tx.sendMessage.findUnique({
-              where: { idempotencyKey },
-              select: { id: true, status: true },
-            }));
+            const existing = await withTenant(apiKeyId, (tx) =>
+              tx.sendMessage.findUnique({
+                where: { idempotencyKey },
+                select: { id: true, status: true },
+              }),
+            );
             if (existing) {
               results.push({ id: existing.id, status: existing.status });
               continue;
@@ -88,46 +105,75 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
           const listUnsubscribeHeader = `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`;
 
           // Pre-create DB record to get real ID for tracking tokens
-          const record = await withTenant(apiKeyId, (tx) => tx.sendMessage.create({
-            data: {
-              apiKeyId, to, from, subject,
-              replyTo: reply_to ?? null, sesMessageId: null, status: 'queued',
-              tags: tags ?? {}, idempotencyKey: msg.idempotency_key ?? null,
-              trackingToken: 'pending',
-            },
-            select: { id: true },
-          }));
+          const record = await withTenant(apiKeyId, (tx) =>
+            tx.sendMessage.create({
+              data: {
+                apiKeyId,
+                to,
+                from,
+                subject,
+                replyTo: reply_to ?? null,
+                sesMessageId: null,
+                status: 'queued',
+                tags: tags ?? {},
+                idempotencyKey: msg.idempotency_key ?? null,
+                trackingToken: 'pending',
+              },
+              select: { id: true },
+            }),
+          );
 
           let htmlBody = html_body;
           if (htmlBody) {
             htmlBody = htmlBody.replace(/<\/body>/i, `${generateUnsubHtml(unsubToken)}</body>`);
-            htmlBody = injectTracking(htmlBody, generateOpenToken(record.id), (url) => generateClickToken(record.id, url));
+            htmlBody = injectTracking(htmlBody, generateOpenToken(record.id), (url) =>
+              generateClickToken(record.id, url),
+            );
           }
 
           const { sesMessageId } = await sendViaSes({
-            to, from, subject,
+            to,
+            from,
+            subject,
             ...(reply_to ? { replyTo: reply_to } : {}),
             ...(htmlBody !== undefined ? { htmlBody } : {}),
             ...(text_body ? { textBody: text_body } : {}),
             listUnsubscribeHeader,
           });
 
-          await withTenant(apiKeyId, (tx) => tx.sendMessage.update({
-            where: { id: record.id },
-            data: { sesMessageId, status: 'sent', sentAt: new Date(), trackingToken: record.id },
-          }));
+          await withTenant(apiKeyId, (tx) =>
+            tx.sendMessage.update({
+              where: { id: record.id },
+              data: { sesMessageId, status: 'sent', sentAt: new Date(), trackingToken: record.id },
+            }),
+          );
 
           successCount++;
           results.push({ id: record.id, status: 'sent' });
 
           const payload: EmailSentPayload = {
-            event: 'email.sent', id: record.id, to, subject, sesMessageId, apiKeyId,
-            sentAt: new Date().toISOString(), apiVersion: '2',
+            event: 'email.sent',
+            id: record.id,
+            to,
+            subject,
+            sesMessageId,
+            apiKeyId,
+            sentAt: new Date().toISOString(),
+            apiVersion: '2',
           };
-          void dispatchWebhook({ apiKeyId, event: 'email.sent', eventId: buildEventId('email.sent', record.id), payload });
-
+          void dispatchWebhook({
+            apiKeyId,
+            event: 'email.sent',
+            eventId: buildEventId('email.sent', record.id),
+            payload,
+          });
         } catch (err) {
-          const message = err instanceof SesNotConfiguredError ? err.message : (err instanceof Error ? err.message : 'Unknown error');
+          const message =
+            err instanceof SesNotConfiguredError
+              ? err.message
+              : err instanceof Error
+                ? err.message
+                : 'Unknown error';
           logger.error({ err, to, apiKeyId }, 'Batch send item failed');
           // Attempt to mark pre-created record as failed (best-effort)
           results.push({ id: '', status: 'failed', error: message });

@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
-import { withTenant } from '../../lib/tenantContext.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { verifyUnsubToken } from '../../lib/unsubscribe.js';
 
 const CONFIRMATION_HTML = `<!DOCTYPE html>
@@ -55,9 +55,12 @@ export async function unsubscribeRoutes(fastify: FastifyInstance): Promise<void>
 
       const { email } = payload;
 
-      // The verified token already carries apiKeyId, so the tenant is known
-      // before any DB access — no separate bootstrap lookup is needed here.
-      const alreadyUnsubscribed = await withTenant(payload.apiKeyId, async (tx) => {
+      // Suppression is deliberately global — withRlsBypass, not withTenant:
+      // if this address was already suppressed by a DIFFERENT tenant, a
+      // withTenant-scoped read would miss that row (RLS would hide it) and
+      // the create() below would crash on the unique email constraint
+      // instead of correctly no-op'ing.
+      const alreadyUnsubscribed = await withRlsBypass(async (tx) => {
         const existing = await tx.suppression.findUnique({ where: { email } });
         if (existing) return true;
 
@@ -65,18 +68,24 @@ export async function unsubscribeRoutes(fastify: FastifyInstance): Promise<void>
           data: { email, reason: 'unsubscribed', apiKeyId: payload.apiKeyId },
         });
 
-        // Also update any contact memberships for this email
-        await tx.contactListMembership.updateMany({
-          where: { contact: { email } },
-          data: { status: 'unsubscribed', unsubscribedAt: new Date() },
-        }).catch(() => { /* ignore if table doesn't have records */ });
-
         return false;
       });
 
       if (alreadyUnsubscribed) {
         return reply.status(200).header('Content-Type', 'text/html').send(ALREADY_HTML);
       }
+
+      // Contact list membership IS a per-tenant relationship (unlike the
+      // shared suppression flag above) — the verified token already carries
+      // apiKeyId, so the tenant is known before any DB access here.
+      await withTenant(payload.apiKeyId, (tx) =>
+        tx.contactListMembership.updateMany({
+          where: { contact: { email } },
+          data: { status: 'unsubscribed', unsubscribedAt: new Date() },
+        }),
+      ).catch(() => {
+        /* ignore if table doesn't have records */
+      });
 
       return reply.status(200).header('Content-Type', 'text/html').send(CONFIRMATION_HTML);
     },
@@ -88,7 +97,7 @@ export async function unsubscribeRoutes(fastify: FastifyInstance): Promise<void>
     { preHandler: [requireIpRateLimit('unsubscribe', 60)] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const body = request.body as Record<string, string> | undefined;
-      const token = (body?.['token'] as string | undefined) ?? (request.query as Record<string, string>)['token'];
+      const token = body?.['token'] ?? (request.query as Record<string, string>)['token'];
 
       // RFC 8058 also accepts form-encoded body with List-Unsubscribe=One-Click
       const isRfc8058 = body?.['List-Unsubscribe'] === 'One-Click';
@@ -101,11 +110,17 @@ export async function unsubscribeRoutes(fastify: FastifyInstance): Promise<void>
         const payload = verifyUnsubToken(token);
         if (!payload) return reply.status(400).send({ error: 'Invalid or expired token' });
 
-        await withTenant(payload.apiKeyId, (tx) => tx.suppression.upsert({
-          where: { email: payload.email },
-          create: { email: payload.email, reason: 'unsubscribed', apiKeyId: payload.apiKeyId },
-          update: {},
-        }));
+        // withRlsBypass, not withTenant — same reasoning as the GET handler
+        // above: this upsert must see and no-op on another tenant's
+        // existing row for this address, not crash on the unique
+        // constraint trying to INSERT past an RLS-hidden one.
+        await withRlsBypass((tx) =>
+          tx.suppression.upsert({
+            where: { email: payload.email },
+            create: { email: payload.email, reason: 'unsubscribed', apiKeyId: payload.apiKeyId },
+            update: {},
+          }),
+        );
       }
 
       return reply.status(200).send({ unsubscribed: true });

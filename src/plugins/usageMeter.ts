@@ -1,10 +1,10 @@
 /**
  * Monthly usage metering middleware
- * 
+ *
  * Checks if user has exceeded their monthly verification limit.
  * Updates usage count after each verification.
  * Resets usage at the start of each month.
- * 
+ *
  * Plan limits:
  *   free:    1,000/month
  *   starter: 5,000/month
@@ -14,15 +14,16 @@
 
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { prisma } from '../lib/prisma.js';
+import { withTenant } from '../lib/tenantContext.js';
 import { Errors } from './errorHandler.js';
 import { logger } from '../lib/logger.js';
 import { sendEmail } from '../lib/email.js';
 
 const PLAN_LIMITS: Record<string, number> = {
-  free:    1_000,
+  free: 1_000,
   starter: 5_000,
-  growth:  15_000,
-  scale:   100_000,
+  growth: 15_000,
+  scale: 100_000,
 };
 
 export function getPlanLimit(plan: string | null, monthlyLimit?: number | null): number {
@@ -32,10 +33,10 @@ export function getPlanLimit(plan: string | null, monthlyLimit?: number | null):
 // Active-monitor ceiling per plan. Each monitor check consumes a verification
 // (and a provider credit), so caps scale with the plan's monthly quota.
 const PLAN_MONITOR_LIMITS: Record<string, number> = {
-  free:    5,
+  free: 5,
   starter: 50,
-  growth:  200,
-  scale:   500,
+  growth: 200,
+  scale: 500,
 };
 
 export function getMonitorLimit(plan: string | null): number {
@@ -46,10 +47,10 @@ export function getMonitorLimit(plan: string | null): number {
 // above: an unbounded number of recurring watches is an abuse/cost vector
 // independent of the per-tick verification quota they also respect.
 const PLAN_AGENT_RUN_LIMITS: Record<string, number> = {
-  free:    2,
+  free: 2,
   starter: 10,
-  growth:  50,
-  scale:   200,
+  growth: 50,
+  scale: 200,
 };
 
 export function getAgentRunLimit(plan: string | null): number {
@@ -60,10 +61,10 @@ export function getAgentRunLimit(plan: string | null): number {
 // page. Previously unenforced: any plan could create unlimited mailboxes,
 // unlike every other quota in this file.
 const PLAN_MAILBOX_LIMITS: Record<string, number> = {
-  free:    1,
+  free: 1,
   starter: 5,
-  growth:  25,
-  scale:   100,
+  growth: 25,
+  scale: 100,
 };
 
 export function getMailboxLimit(plan: string | null): number {
@@ -83,10 +84,12 @@ export async function requireMonthlyQuota(
     // Keys created without a reset date would otherwise never reset their usage
     if (!key.usageResetAt) {
       const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-      await prisma.apiKey.update({
-        where: { id: key.id },
-        data:  { usageResetAt: nextReset },
-      });
+      await withTenant(key.id, (tx) =>
+        tx.apiKey.update({
+          where: { id: key.id },
+          data: { usageResetAt: nextReset },
+        }),
+      );
       key.usageResetAt = nextReset;
     }
 
@@ -95,14 +98,16 @@ export async function requireMonthlyQuota(
     if (resetAt && now >= resetAt) {
       // Reset usage for new month
       const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-      await prisma.apiKey.update({
-        where: { id: key.id },
-        data: {
-          currentMonthUsage: 0,
-          currentMonthFinderUsage: 0,
-          usageResetAt: nextReset,
-        },
-      });
+      await withTenant(key.id, (tx) =>
+        tx.apiKey.update({
+          where: { id: key.id },
+          data: {
+            currentMonthUsage: 0,
+            currentMonthFinderUsage: 0,
+            usageResetAt: nextReset,
+          },
+        }),
+      );
       key.currentMonthUsage = 0;
       (key as { currentMonthFinderUsage?: number }).currentMonthFinderUsage = 0;
       key.usageResetAt = nextReset;
@@ -110,7 +115,8 @@ export async function requireMonthlyQuota(
 
     // Get plan limit + any purchased top-up credits (non-expiring)
     const baseLimit = getPlanLimit(key.plan, key.monthlyLimit);
-    const extraCredits = (key as { extraVerificationCredits?: number }).extraVerificationCredits ?? 0;
+    const extraCredits =
+      (key as { extraVerificationCredits?: number }).extraVerificationCredits ?? 0;
     const limit = baseLimit + extraCredits;
 
     // Check if over limit
@@ -129,16 +135,14 @@ export async function requireMonthlyQuota(
     // Set usage headers
     void reply.header('X-Usage-Limit', String(limit));
     void reply.header('X-Usage-Remaining', String(Math.max(0, limit - key.currentMonthUsage)));
-    void reply.header('X-Usage-Reset', key.usageResetAt
-      ? new Date(key.usageResetAt).toISOString().split('T')[0]
-      : 'next month');
+    void reply.header(
+      'X-Usage-Reset',
+      key.usageResetAt ? new Date(key.usageResetAt).toISOString().split('T')[0] : 'next month',
+    );
 
     // 80% usage alert — fire-and-forget, one per billing month
     const usageAlert = key as { usageAlertEnabled?: boolean; usageAlertSentAt?: Date | null };
-    if (
-      usageAlert.usageAlertEnabled !== false &&
-      key.currentMonthUsage / limit >= 0.8
-    ) {
+    if (usageAlert.usageAlertEnabled !== false && key.currentMonthUsage / limit >= 0.8) {
       const sentAt = usageAlert.usageAlertSentAt ? new Date(usageAlert.usageAlertSentAt) : null;
       const alreadySentThisMonth =
         sentAt &&
@@ -149,7 +153,6 @@ export async function requireMonthlyQuota(
         void sendUsageAlert(key.id, key.ownerId ?? key.userId, key.currentMonthUsage, limit);
       }
     }
-
   } catch (err) {
     if (err instanceof Error && 'statusCode' in err) throw err;
     // Fail open — don't block requests if metering fails
@@ -183,10 +186,12 @@ async function sendUsageAlert(
 <p>— Continuum</p>`,
     );
 
-    await prisma.apiKey.update({
-      where: { id: keyId },
-      data: { usageAlertSentAt: new Date() },
-    });
+    await withTenant(keyId, (tx) =>
+      tx.apiKey.update({
+        where: { id: keyId },
+        data: { usageAlertSentAt: new Date() },
+      }),
+    );
   } catch (err) {
     logger.warn({ err, keyId }, 'Failed to send usage alert email');
   }
@@ -199,10 +204,12 @@ export async function incrementUsage(apiKeyId: string): Promise<void> {
 export async function incrementUsageBy(apiKeyId: string, count: number): Promise<void> {
   if (count <= 0) return;
   try {
-    await prisma.apiKey.update({
-      where: { id: apiKeyId },
-      data: { currentMonthUsage: { increment: count } },
-    });
+    await withTenant(apiKeyId, (tx) =>
+      tx.apiKey.update({
+        where: { id: apiKeyId },
+        data: { currentMonthUsage: { increment: count } },
+      }),
+    );
   } catch (err) {
     logger.warn({ err, apiKeyId, count }, 'Failed to increment usage counter');
   }
@@ -217,10 +224,10 @@ export async function incrementUsageBy(apiKeyId: string, count: number): Promise
 // verify): well under 4% of plan revenue at every tier, with value-per-
 // dollar increasing at higher tiers as a real upgrade incentive.
 const PLAN_FINDER_LIMITS: Record<string, number> = {
-  free:    25,
+  free: 25,
   starter: 250,
-  growth:  750,
-  scale:   2_500,
+  growth: 750,
+  scale: 2_500,
 };
 
 export function getFinderLimit(plan: string | null): number {
@@ -245,12 +252,19 @@ export function getFinderAffordability(key: {
   const finderUsed = key.currentMonthFinderUsage ?? 0;
   const finderRemaining = Math.max(0, finderLimit - finderUsed);
 
-  const verificationLimit = getPlanLimit(key.plan, key.monthlyLimit) + (key.extraVerificationCredits ?? 0);
+  const verificationLimit =
+    getPlanLimit(key.plan, key.monthlyLimit) + (key.extraVerificationCredits ?? 0);
   const verificationUsed = key.currentMonthUsage ?? 0;
   const verificationRemaining = Math.max(0, verificationLimit - verificationUsed);
-  const verificationAsFinderRemaining = Math.floor(verificationRemaining / FINDER_OVERFLOW_VERIFICATION_COST);
+  const verificationAsFinderRemaining = Math.floor(
+    verificationRemaining / FINDER_OVERFLOW_VERIFICATION_COST,
+  );
 
-  return { finderRemaining, verificationAsFinderRemaining, maxAffordable: finderRemaining + verificationAsFinderRemaining };
+  return {
+    finderRemaining,
+    verificationAsFinderRemaining,
+    maxAffordable: finderRemaining + verificationAsFinderRemaining,
+  };
 }
 
 /**
@@ -263,23 +277,37 @@ export function getFinderAffordability(key: {
 export async function incrementFinderUsage(apiKeyId: string, count: number): Promise<void> {
   if (count <= 0) return;
   try {
-    const key = await prisma.apiKey.findUnique({
-      where: { id: apiKeyId },
-      select: { plan: true, monthlyLimit: true, currentMonthUsage: true, extraVerificationCredits: true, currentMonthFinderUsage: true },
-    });
+    const key = await withTenant(apiKeyId, (tx) =>
+      tx.apiKey.findUnique({
+        where: { id: apiKeyId },
+        select: {
+          plan: true,
+          monthlyLimit: true,
+          currentMonthUsage: true,
+          extraVerificationCredits: true,
+          currentMonthFinderUsage: true,
+        },
+      }),
+    );
     if (!key) return;
 
     const { finderRemaining } = getFinderAffordability(key);
     const fromFinderAllowance = Math.min(count, finderRemaining);
     const overflow = count - fromFinderAllowance;
 
-    await prisma.apiKey.update({
-      where: { id: apiKeyId },
-      data: {
-        ...(fromFinderAllowance > 0 && { currentMonthFinderUsage: { increment: fromFinderAllowance } }),
-        ...(overflow > 0 && { currentMonthUsage: { increment: overflow * FINDER_OVERFLOW_VERIFICATION_COST } }),
-      },
-    });
+    await withTenant(apiKeyId, (tx) =>
+      tx.apiKey.update({
+        where: { id: apiKeyId },
+        data: {
+          ...(fromFinderAllowance > 0 && {
+            currentMonthFinderUsage: { increment: fromFinderAllowance },
+          }),
+          ...(overflow > 0 && {
+            currentMonthUsage: { increment: overflow * FINDER_OVERFLOW_VERIFICATION_COST },
+          }),
+        },
+      }),
+    );
   } catch (err) {
     logger.warn({ err, apiKeyId, count }, 'Failed to increment Finder usage counter');
   }
@@ -291,10 +319,10 @@ export async function incrementFinderUsage(apiKeyId: string, count: number): Pro
 // verification PLAN_LIMITS until real send volume suggests different numbers.
 
 const PLAN_SEND_LIMITS: Record<string, number> = {
-  free:    1_000,
+  free: 1_000,
   starter: 5_000,
-  growth:  15_000,
-  scale:   100_000,
+  growth: 15_000,
+  scale: 100_000,
 };
 
 export function getSendLimit(plan: string | null, monthlySendLimit?: number | null): number {
@@ -318,23 +346,27 @@ export async function requireMonthlySendQuota(
     // reset for the rest of that month).
     if (!key.sendUsageResetAt) {
       const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-      await prisma.apiKey.update({
-        where: { id: key.id },
-        data:  { sendUsageResetAt: nextReset },
-      });
+      await withTenant(key.id, (tx) =>
+        tx.apiKey.update({
+          where: { id: key.id },
+          data: { sendUsageResetAt: nextReset },
+        }),
+      );
       key.sendUsageResetAt = nextReset;
     }
 
     const resetAt = key.sendUsageResetAt ? new Date(key.sendUsageResetAt) : null;
     if (resetAt && now >= resetAt) {
       const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-      await prisma.apiKey.update({
-        where: { id: key.id },
-        data: {
-          currentMonthSendUsage: 0,
-          sendUsageResetAt: nextReset,
-        },
-      });
+      await withTenant(key.id, (tx) =>
+        tx.apiKey.update({
+          where: { id: key.id },
+          data: {
+            currentMonthSendUsage: 0,
+            sendUsageResetAt: nextReset,
+          },
+        }),
+      );
       key.currentMonthSendUsage = 0;
       key.sendUsageResetAt = nextReset;
     }
@@ -354,11 +386,16 @@ export async function requireMonthlySendQuota(
     }
 
     void reply.header('X-Send-Usage-Limit', String(limit));
-    void reply.header('X-Send-Usage-Remaining', String(Math.max(0, limit - key.currentMonthSendUsage)));
-    void reply.header('X-Send-Usage-Reset', key.sendUsageResetAt
-      ? new Date(key.sendUsageResetAt).toISOString().split('T')[0]
-      : 'next month');
-
+    void reply.header(
+      'X-Send-Usage-Remaining',
+      String(Math.max(0, limit - key.currentMonthSendUsage)),
+    );
+    void reply.header(
+      'X-Send-Usage-Reset',
+      key.sendUsageResetAt
+        ? new Date(key.sendUsageResetAt).toISOString().split('T')[0]
+        : 'next month',
+    );
   } catch (err) {
     if (err instanceof Error && 'statusCode' in err) throw err;
     logger.warn({ err, apiKeyId: key.id }, 'Send usage meter check failed — failing open');
@@ -368,10 +405,12 @@ export async function requireMonthlySendQuota(
 export async function incrementSendUsageBy(apiKeyId: string, count: number): Promise<void> {
   if (count <= 0) return;
   try {
-    await prisma.apiKey.update({
-      where: { id: apiKeyId },
-      data: { currentMonthSendUsage: { increment: count } },
-    });
+    await withTenant(apiKeyId, (tx) =>
+      tx.apiKey.update({
+        where: { id: apiKeyId },
+        data: { currentMonthSendUsage: { increment: count } },
+      }),
+    );
   } catch (err) {
     logger.warn({ err, apiKeyId, count }, 'Failed to increment send usage counter');
   }

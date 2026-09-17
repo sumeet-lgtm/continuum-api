@@ -90,13 +90,17 @@ export async function correctOnGroundTruth(email: string, apiKeyId: string): Pro
   await invalidateSmtpCache(lower);
 
   try {
-    const monitor = await prisma.monitor.findFirst({
-      where: { email: lower, apiKeyId, isActive: true, pausedAt: null },
-      select: { id: true },
-    });
+    const monitor = await withTenant(apiKeyId, (tx) =>
+      tx.monitor.findFirst({
+        where: { email: lower, apiKeyId, isActive: true, pausedAt: null },
+        select: { id: true },
+      }),
+    );
     if (!monitor) return;
 
-    await prisma.monitor.update({ where: { id: monitor.id }, data: { nextCheckAt: new Date() } });
+    await withTenant(apiKeyId, (tx) =>
+      tx.monitor.update({ where: { id: monitor.id }, data: { nextCheckAt: new Date() } }),
+    );
     await monitorQueue.add(
       'recheck-single',
       { monitorId: monitor.id, source: 'bounce_ground_truth' } satisfies MonitorRecheckPayload,
@@ -143,10 +147,12 @@ export async function checkBounceRate(apiKeyId: string): Promise<void> {
     );
     if (recentAlert) return;
 
-    const apiKey = await prisma.apiKey.findUnique({
-      where: { id: apiKeyId },
-      select: { ownerId: true, userId: true, label: true, name: true },
-    });
+    const apiKey = await withTenant(apiKeyId, (tx) =>
+      tx.apiKey.findUnique({
+        where: { id: apiKeyId },
+        select: { ownerId: true, userId: true, label: true, name: true },
+      }),
+    );
     if (!apiKey) return;
 
     const userId = apiKey.ownerId ?? apiKey.userId;
@@ -237,10 +243,12 @@ export async function checkComplaintRate(apiKeyId: string): Promise<void> {
     );
     if (recentAlert) return;
 
-    const apiKey = await prisma.apiKey.findUnique({
-      where: { id: apiKeyId },
-      select: { ownerId: true, userId: true, label: true, name: true },
-    });
+    const apiKey = await withTenant(apiKeyId, (tx) =>
+      tx.apiKey.findUnique({
+        where: { id: apiKeyId },
+        select: { ownerId: true, userId: true, label: true, name: true },
+      }),
+    );
     if (!apiKey) return;
 
     const userId = apiKey.ownerId ?? apiKey.userId;

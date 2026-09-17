@@ -5,10 +5,18 @@ import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { getPlanLimit, getSendLimit } from '../../plugins/usageMeter.js';
 import { prisma } from '../../lib/prisma.js';
+import { withRlsBypass } from '../../lib/tenantContext.js';
 import { config, isProd } from '../../config.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { logger } from '../../lib/logger.js';
-import { sendEmail, upgradeConfirmEmail, planDowngradedEmail, paymentFailedEmail, subscriptionCancelledEmail, paymentReceiptEmail } from '../../lib/email.js';
+import {
+  sendEmail,
+  upgradeConfirmEmail,
+  planDowngradedEmail,
+  paymentFailedEmail,
+  subscriptionCancelledEmail,
+  paymentReceiptEmail,
+} from '../../lib/email.js';
 
 // ─── Plan → Dodo product mapping ─────────────────────────────────────────────
 
@@ -17,9 +25,12 @@ type PaidPlan = (typeof PAID_PLANS)[number];
 
 function productIdFor(plan: PaidPlan): string | undefined {
   switch (plan) {
-    case 'starter': return config.DODO_PRODUCT_STARTER;
-    case 'growth':  return config.DODO_PRODUCT_GROWTH;
-    case 'scale':   return config.DODO_PRODUCT_SCALE;
+    case 'starter':
+      return config.DODO_PRODUCT_STARTER;
+    case 'growth':
+      return config.DODO_PRODUCT_GROWTH;
+    case 'scale':
+      return config.DODO_PRODUCT_SCALE;
   }
 }
 
@@ -87,10 +98,7 @@ const UPGRADE_EVENTS = new Set([
   'subscription.renewed',
 ]);
 
-const DOWNGRADE_EVENTS = new Set([
-  'subscription.cancelled',
-  'subscription.expired',
-]);
+const DOWNGRADE_EVENTS = new Set(['subscription.cancelled', 'subscription.expired']);
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -98,10 +106,8 @@ export async function billingRoutes(fastify: FastifyInstance): Promise<void> {
   // The webhook must verify the signature against the EXACT raw bytes Dodo
   // signed. This parser applies only inside this plugin's encapsulated scope;
   // both handlers parse JSON manually.
-  fastify.addContentTypeParser(
-    'application/json',
-    { parseAs: 'string' },
-    (_req, body, done) => done(null, body),
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) =>
+    done(null, body),
   );
 
   // ── POST /v1/billing/checkout ───────────────────────────────────────────────
@@ -138,7 +144,10 @@ export async function billingRoutes(fastify: FastifyInstance): Promise<void> {
       // customer identity attached at all. Look the email up from the user
       // record the key actually belongs to.
       const owner = request.apiKey.ownerId
-        ? await prisma.user.findUnique({ where: { id: request.apiKey.ownerId }, select: { email: true } })
+        ? await prisma.user.findUnique({
+            where: { id: request.apiKey.ownerId },
+            select: { email: true },
+          })
         : null;
       const customerEmail = owner?.email ?? undefined;
       const res = await fetch('https://live.dodopayments.com/checkouts', {
@@ -155,14 +164,18 @@ export async function billingRoutes(fastify: FastifyInstance): Promise<void> {
           return_url: `${config.DASHBOARD_URL}/dashboard?upgraded=1&plan=${plan}`,
           metadata: {
             api_key_id: request.apiKey.id,
-            user_id:    request.apiKey.userId ?? '',
+            user_id: request.apiKey.userId ?? '',
             plan,
           },
         }),
         signal: AbortSignal.timeout(15_000),
       });
 
-      const data = await res.json() as { checkout_url?: string; url?: string; payment_link?: string };
+      const data = (await res.json()) as {
+        checkout_url?: string;
+        url?: string;
+        payment_link?: string;
+      };
       if (!res.ok) {
         logger.error({ status: res.status, data }, 'Dodo checkout creation failed');
         throw Errors.serviceUnavailable('Billing');
@@ -197,18 +210,25 @@ export async function billingRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const CREDIT_PACK_PRODUCTS: Record<string, string | undefined> = {
-        '5k':   config.DODO_PRODUCT_CREDITS_5K,
-        '25k':  config.DODO_PRODUCT_CREDITS_25K,
+        '5k': config.DODO_PRODUCT_CREDITS_5K,
+        '25k': config.DODO_PRODUCT_CREDITS_25K,
         '100k': config.DODO_PRODUCT_CREDITS_100K,
       };
-      const CREDIT_PACK_SIZE: Record<string, number> = { '5k': 5_000, '25k': 25_000, '100k': 100_000 };
+      const CREDIT_PACK_SIZE: Record<string, number> = {
+        '5k': 5_000,
+        '25k': 25_000,
+        '100k': 100_000,
+      };
 
       if (!config.DODO_PAYMENTS_API_KEY) throw Errors.serviceUnavailable('Billing');
       const productId = CREDIT_PACK_PRODUCTS[parsed.data.pack];
       if (!productId) throw Errors.serviceUnavailable(`Credit pack ${parsed.data.pack}`);
 
       const owner = request.apiKey.ownerId
-        ? await prisma.user.findUnique({ where: { id: request.apiKey.ownerId }, select: { email: true } })
+        ? await prisma.user.findUnique({
+            where: { id: request.apiKey.ownerId },
+            select: { email: true },
+          })
         : null;
       const customerEmail = owner?.email ?? undefined;
 
@@ -226,7 +246,7 @@ export async function billingRoutes(fastify: FastifyInstance): Promise<void> {
           return_url: `${config.DASHBOARD_URL}/dashboard/billing?credits_added=${parsed.data.pack}`,
           metadata: {
             api_key_id: request.apiKey.id,
-            user_id:    request.apiKey.userId ?? '',
+            user_id: request.apiKey.userId ?? '',
             credit_pack: parsed.data.pack,
             credit_amount: String(CREDIT_PACK_SIZE[parsed.data.pack]),
           },
@@ -234,7 +254,11 @@ export async function billingRoutes(fastify: FastifyInstance): Promise<void> {
         signal: AbortSignal.timeout(15_000),
       });
 
-      const data = await res.json() as { checkout_url?: string; url?: string; payment_link?: string };
+      const data = (await res.json()) as {
+        checkout_url?: string;
+        url?: string;
+        payment_link?: string;
+      };
       if (!res.ok) {
         logger.error({ status: res.status, data }, 'Dodo credit pack checkout failed');
         throw Errors.serviceUnavailable('Billing');
@@ -247,92 +271,104 @@ export async function billingRoutes(fastify: FastifyInstance): Promise<void> {
 
   // ── POST /v1/billing/webhook ────────────────────────────────────────────────
   // Signature IS the auth — no API key preHandler. Fails closed in production.
-  fastify.post(
-    '/billing/webhook',
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      const rawBody = (request.body as string) ?? '';
+  fastify.post('/billing/webhook', async (request: FastifyRequest, reply: FastifyReply) => {
+    const rawBody = (request.body as string) ?? '';
 
-      const headerId  = (request.headers['webhook-id'] ?? request.headers['svix-id'] ?? '') as string;
-      const headerTs  = (request.headers['webhook-timestamp'] ?? request.headers['svix-timestamp'] ?? '') as string;
-      const headerSig = (request.headers['webhook-signature'] ?? request.headers['svix-signature'] ?? '') as string;
+    const headerId = (request.headers['webhook-id'] ?? request.headers['svix-id'] ?? '') as string;
+    const headerTs = (request.headers['webhook-timestamp'] ??
+      request.headers['svix-timestamp'] ??
+      '') as string;
+    const headerSig = (request.headers['webhook-signature'] ??
+      request.headers['svix-signature'] ??
+      '') as string;
 
-      const secret = config.DODO_WEBHOOK_SECRET;
-      if (secret && secret.length > 10) {
-        if (!headerId || !headerTs || !headerSig
-            || !verifyWebhookSignature(secret, headerId, headerTs, rawBody, headerSig)) {
-          logger.warn({ headerId }, 'Dodo webhook rejected: bad or missing signature');
-          return reply.status(401).send({ error: 'Invalid signature' });
-        }
-      } else if (isProd) {
-        // This endpoint changes plans — never process unauthenticated in prod
-        logger.error('Dodo webhook rejected: DODO_WEBHOOK_SECRET not configured');
-        return reply.status(500).send({ error: 'Webhook not configured' });
+    const secret = config.DODO_WEBHOOK_SECRET;
+    if (secret && secret.length > 10) {
+      if (
+        !headerId ||
+        !headerTs ||
+        !headerSig ||
+        !verifyWebhookSignature(secret, headerId, headerTs, rawBody, headerSig)
+      ) {
+        logger.warn({ headerId }, 'Dodo webhook rejected: bad or missing signature');
+        return reply.status(401).send({ error: 'Invalid signature' });
       }
+    } else if (isProd) {
+      // This endpoint changes plans — never process unauthenticated in prod
+      logger.error('Dodo webhook rejected: DODO_WEBHOOK_SECRET not configured');
+      return reply.status(500).send({ error: 'Webhook not configured' });
+    }
 
-      let event: DodoEvent;
+    let event: DodoEvent;
+    try {
+      event = JSON.parse(rawBody) as DodoEvent;
+    } catch {
+      return reply.status(400).send({ error: 'Invalid JSON' });
+    }
+
+    const eventType = event.type ?? '';
+    const dedupeId = headerId || event.data?.payment_id || event.data?.subscription_id || '';
+    logger.info({ eventType, dedupeId }, 'Dodo billing event');
+
+    // Idempotency — Dodo retries deliveries; never apply the same event twice
+    if (dedupeId) {
       try {
-        event = JSON.parse(rawBody) as DodoEvent;
-      } catch {
-        return reply.status(400).send({ error: 'Invalid JSON' });
-      }
-
-      const eventType = event.type ?? '';
-      const dedupeId  = headerId || event.data?.payment_id || event.data?.subscription_id || '';
-      logger.info({ eventType, dedupeId }, 'Dodo billing event');
-
-      // Idempotency — Dodo retries deliveries; never apply the same event twice
-      if (dedupeId) {
-        try {
-          const inserted = await prisma.$executeRaw`
+        const inserted = await prisma.$executeRaw`
             insert into processed_webhooks (id, source) values (${dedupeId}, 'dodo')
             on conflict (id) do nothing`;
-          if (inserted === 0) {
-            logger.info({ dedupeId }, 'Dodo webhook duplicate ignored');
-            return reply.send({ received: true, duplicate: true });
-          }
-        } catch (err) {
-          // Dedupe table problems must not drop a real payment — process anyway
-          logger.warn({ err }, 'Webhook dedupe insert failed — processing anyway');
-        }
-      }
-
-      try {
-        const metadata = event.data?.metadata ?? event.metadata ?? {};
-        const isCreditPack = UPGRADE_EVENTS.has(eventType) && metadata['credit_pack'] && metadata['credit_amount'];
-        if (isCreditPack) {
-          await applyCreditPack(event);
-        } else if (UPGRADE_EVENTS.has(eventType)) {
-          await applyPlanChange(event, eventType);
-        } else if (DOWNGRADE_EVENTS.has(eventType)) {
-          await applyDowngrade(event, eventType);
-        } else if (eventType === 'payment.failed') {
-          await notifyPaymentFailed(event);
+        if (inserted === 0) {
+          logger.info({ dedupeId }, 'Dodo webhook duplicate ignored');
+          return reply.send({ received: true, duplicate: true });
         }
       } catch (err) {
-        // Release the idempotency claim so Dodo's retry re-runs the grant
-        if (dedupeId) {
-          await prisma.$executeRaw`delete from processed_webhooks where id = ${dedupeId}`
-            .catch(() => { /* best effort */ });
-        }
-        logger.error({ err, eventType, dedupeId }, 'Dodo webhook processing failed');
-        return reply.status(500).send({ error: 'Processing failed' });
+        // Dedupe table problems must not drop a real payment — process anyway
+        logger.warn({ err }, 'Webhook dedupe insert failed — processing anyway');
       }
+    }
 
-      return reply.send({ received: true });
-    },
-  );
+    try {
+      const metadata = event.data?.metadata ?? event.metadata ?? {};
+      const isCreditPack =
+        UPGRADE_EVENTS.has(eventType) && metadata['credit_pack'] && metadata['credit_amount'];
+      if (isCreditPack) {
+        await applyCreditPack(event);
+      } else if (UPGRADE_EVENTS.has(eventType)) {
+        await applyPlanChange(event, eventType);
+      } else if (DOWNGRADE_EVENTS.has(eventType)) {
+        await applyDowngrade(event, eventType);
+      } else if (eventType === 'payment.failed') {
+        await notifyPaymentFailed(event);
+      }
+    } catch (err) {
+      // Release the idempotency claim so Dodo's retry re-runs the grant
+      if (dedupeId) {
+        await prisma.$executeRaw`delete from processed_webhooks where id = ${dedupeId}`.catch(
+          () => {
+            /* best effort */
+          },
+        );
+      }
+      logger.error({ err, eventType, dedupeId }, 'Dodo webhook processing failed');
+      return reply.status(500).send({ error: 'Processing failed' });
+    }
+
+    return reply.send({ received: true });
+  });
 }
 
 // ─── Plan change application ──────────────────────────────────────────────────
 
 function eventIdentity(event: DodoEvent): {
-  apiKeyId: string | null; userId: string | null; email: string | null; productId: string;
+  apiKeyId: string | null;
+  userId: string | null;
+  email: string | null;
+  productId: string;
 } {
   const metadata = event.data?.metadata ?? event.metadata ?? {};
   return {
-    apiKeyId:  metadata['api_key_id'] || null,
-    userId:    metadata['user_id'] || null,
-    email:     event.data?.customer?.email ?? null,
+    apiKeyId: metadata['api_key_id'] || null,
+    userId: metadata['user_id'] || null,
+    email: event.data?.customer?.email ?? null,
     productId: event.data?.product_cart?.[0]?.product_id ?? event.data?.product_id ?? '',
   };
 }
@@ -343,19 +379,31 @@ async function applyPlanChange(event: DodoEvent, eventType: string): Promise<voi
 
   // Product ID is authoritative (it's what was paid for); metadata plan is the
   // fallback for events that omit the cart.
-  const plan = (productId ? planForProductId(productId) : null)
-    ?? (PAID_PLANS.includes(metadataPlan as PaidPlan) ? metadataPlan as PaidPlan : null);
+  const plan =
+    (productId ? planForProductId(productId) : null) ??
+    (PAID_PLANS.includes(metadataPlan as PaidPlan) ? (metadataPlan as PaidPlan) : null);
 
   if (!plan) {
-    logger.error({ eventType, productId, metadataPlan }, 'PAID EVENT WITH UNMAPPED PRODUCT — reconcile manually');
+    logger.error(
+      { eventType, productId, metadataPlan },
+      'PAID EVENT WITH UNMAPPED PRODUCT — reconcile manually',
+    );
     return; // ack — retries cannot fix an unmapped product
   }
 
   const monthlyLimit = getPlanLimit(plan);
   const monthlySendLimit = getSendLimit(plan);
-  const updated = await updateKeys({ apiKeyId, userId, email }, plan, monthlyLimit, monthlySendLimit);
+  const updated = await updateKeys(
+    { apiKeyId, userId, email },
+    plan,
+    monthlyLimit,
+    monthlySendLimit,
+  );
   if (updated === 0) {
-    logger.error({ eventType, apiKeyId, userId, email, plan }, 'PAID EVENT MATCHED NO API KEY — reconcile manually');
+    logger.error(
+      { eventType, apiKeyId, userId, email, plan },
+      'PAID EVENT MATCHED NO API KEY — reconcile manually',
+    );
     return;
   }
   logger.info({ plan, monthlyLimit, updated, apiKeyId, userId }, 'Plan upgraded via Dodo');
@@ -369,7 +417,10 @@ async function applyPlanChange(event: DodoEvent, eventType: string): Promise<voi
 async function applyDowngrade(event: DodoEvent, eventType: string): Promise<void> {
   const { apiKeyId, userId, email } = eventIdentity(event);
   const updated = await updateKeys(
-    { apiKeyId, userId, email }, 'free', getPlanLimit('free'), getSendLimit('free'),
+    { apiKeyId, userId, email },
+    'free',
+    getPlanLimit('free'),
+    getSendLimit('free'),
   );
   logger.info({ eventType, updated, apiKeyId, userId }, 'Plan downgraded to free via Dodo');
 
@@ -390,14 +441,21 @@ async function notifyPaymentFailed(event: DodoEvent): Promise<void> {
   // Dodo amounts are in the currency's minor unit (cents/paise); the
   // template's own $-prefix assumes USD — a known gap for non-USD accounts,
   // not fixed here.
-  const amount = typeof amountMinor === 'number'
-    ? `${(amountMinor / 100).toFixed(2)}${currency ? ` ${currency}` : ''}`
-    : 'your subscription';
+  const amount =
+    typeof amountMinor === 'number'
+      ? `${(amountMinor / 100).toFixed(2)}${currency ? ` ${currency}` : ''}`
+      : 'your subscription';
   const msg = paymentFailedEmail({ amount, retryDate: 'within 3 days' });
   void sendEmail(email, msg.subject, msg.html);
 }
 
-/** Update the target api_keys row(s); most-specific identity wins. */
+/**
+ * Update the target api_keys row(s); most-specific identity wins.
+ * withRlsBypass throughout: this is identity discovery from a webhook (the
+ * caller doesn't know in advance which of apiKeyId/userId/email will match,
+ * same reasoning as auth.ts's login-flow lookups), not an operation already
+ * scoped to a known tenant.
+ */
 async function updateKeys(
   target: { apiKeyId: string | null; userId: string | null; email: string | null },
   plan: string,
@@ -405,17 +463,23 @@ async function updateKeys(
   monthlySendLimit: number,
 ): Promise<number> {
   if (target.apiKeyId) {
-    const r = await prisma.apiKey.updateMany({
-      where: { id: target.apiKeyId },
-      data:  { plan, monthlyLimit, monthlySendLimit },
-    });
+    const apiKeyId = target.apiKeyId;
+    const r = await withRlsBypass((tx) =>
+      tx.apiKey.updateMany({
+        where: { id: apiKeyId },
+        data: { plan, monthlyLimit, monthlySendLimit },
+      }),
+    );
     if (r.count > 0) return r.count;
   }
   if (target.userId) {
-    const r = await prisma.apiKey.updateMany({
-      where: { userId: target.userId },
-      data:  { plan, monthlyLimit, monthlySendLimit },
-    });
+    const userId = target.userId;
+    const r = await withRlsBypass((tx) =>
+      tx.apiKey.updateMany({
+        where: { userId },
+        data: { plan, monthlyLimit, monthlySendLimit },
+      }),
+    );
     if (r.count > 0) return r.count;
   }
   if (target.email) {
@@ -423,12 +487,17 @@ async function updateKeys(
     // cuid column against an email string and could never match anything.
     // Resolve the user by email first, same as the other two paths resolve
     // by an actual identifier.
-    const user = await prisma.user.findUnique({ where: { email: target.email }, select: { id: true } });
+    const user = await prisma.user.findUnique({
+      where: { email: target.email },
+      select: { id: true },
+    });
     if (user) {
-      const r = await prisma.apiKey.updateMany({
-        where: { ownerId: user.id },
-        data:  { plan, monthlyLimit, monthlySendLimit },
-      });
+      const r = await withRlsBypass((tx) =>
+        tx.apiKey.updateMany({
+          where: { ownerId: user.id },
+          data: { plan, monthlyLimit, monthlySendLimit },
+        }),
+      );
       return r.count;
     }
   }
@@ -441,41 +510,52 @@ async function applyCreditPack(event: DodoEvent): Promise<void> {
   const metadata = event.data?.metadata ?? event.metadata ?? {};
   const { apiKeyId, userId, email } = eventIdentity(event);
   const amount = parseInt(metadata['credit_amount'] ?? '0', 10);
-  const pack   = metadata['credit_pack'] ?? 'unknown';
+  const pack = metadata['credit_pack'] ?? 'unknown';
 
   if (!amount || amount <= 0) {
     logger.error({ metadata }, 'Credit pack webhook: invalid credit_amount');
     return;
   }
 
+  // withRlsBypass throughout — same identity-discovery reasoning as
+  // updateKeys() above.
   let updated = 0;
   if (apiKeyId) {
-    const r = await prisma.apiKey.updateMany({
-      where: { id: apiKeyId },
-      data:  { extraVerificationCredits: { increment: amount } },
-    });
+    const r = await withRlsBypass((tx) =>
+      tx.apiKey.updateMany({
+        where: { id: apiKeyId },
+        data: { extraVerificationCredits: { increment: amount } },
+      }),
+    );
     updated = r.count;
   }
   if (updated === 0 && userId) {
-    const r = await prisma.apiKey.updateMany({
-      where: { userId },
-      data:  { extraVerificationCredits: { increment: amount } },
-    });
+    const r = await withRlsBypass((tx) =>
+      tx.apiKey.updateMany({
+        where: { userId },
+        data: { extraVerificationCredits: { increment: amount } },
+      }),
+    );
     updated = r.count;
   }
   if (updated === 0 && email) {
     const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
     if (user) {
-      const r = await prisma.apiKey.updateMany({
-        where: { ownerId: user.id },
-        data:  { extraVerificationCredits: { increment: amount } },
-      });
+      const r = await withRlsBypass((tx) =>
+        tx.apiKey.updateMany({
+          where: { ownerId: user.id },
+          data: { extraVerificationCredits: { increment: amount } },
+        }),
+      );
       updated = r.count;
     }
   }
 
   if (updated === 0) {
-    logger.error({ apiKeyId, userId, email, amount }, 'Credit pack MATCHED NO API KEY — reconcile manually');
+    logger.error(
+      { apiKeyId, userId, email, amount },
+      'Credit pack MATCHED NO API KEY — reconcile manually',
+    );
     return;
   }
 

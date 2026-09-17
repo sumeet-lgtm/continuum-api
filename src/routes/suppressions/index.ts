@@ -2,12 +2,14 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
 import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 import { Errors } from '../../plugins/errorHandler.js';
 
 const addSchema = z.object({
-  email: z.string().email().transform(s => s.trim().toLowerCase()),
+  email: z
+    .string()
+    .email()
+    .transform((s) => s.trim().toLowerCase()),
   reason: z.enum(['manual']).default('manual'),
 });
 
@@ -40,25 +42,23 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
         OR: [{ apiKeyId }, { apiKeyId: null }],
       };
 
-      // TODO(RLS): this deliberately shows the caller's own entries PLUS
-      // unattributed (apiKeyId: null) ones, but never another named
-      // tenant's — using withTenant here is the conservative choice (it
-      // can never leak another tenant's rows), but if the Suppression RLS
-      // policy scopes SELECT to `apiKeyId = current tenant` only (and not
-      // `OR apiKeyId IS NULL`), the unattributed rows this endpoint used to
-      // return will silently disappear from the result. Verify the actual
-      // policy text once the migration lands, and widen Suppression's
-      // policy (or add a narrower bypass+filter) if so.
-      const [items, total] = await withTenant(apiKeyId, (tx) => Promise.all([
-        tx.suppression.findMany({
-          where,
-          orderBy: { createdAt: 'desc' },
-          skip: (page - 1) * limit,
-          take: limit,
-          select: { id: true, email: true, reason: true, createdAt: true },
-        }),
-        tx.suppression.count({ where }),
-      ]));
+      // Verified: the live Suppression policy is
+      // `apiKeyId = current OR apiKeyId IS NULL OR bypass`, so withTenant
+      // here correctly still surfaces the unattributed rows this endpoint
+      // deliberately includes alongside the caller's own — it never widens
+      // to another named tenant's entries.
+      const [items, total] = await withTenant(apiKeyId, (tx) =>
+        Promise.all([
+          tx.suppression.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            skip: (page - 1) * limit,
+            take: limit,
+            select: { id: true, email: true, reason: true, createdAt: true },
+          }),
+          tx.suppression.count({ where }),
+        ]),
+      );
 
       return reply.status(200).send({ data: items, total, page, limit });
     },
@@ -72,16 +72,18 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const apiKeyId = request.apiKey.id;
       const where = { OR: [{ apiKeyId }, { apiKeyId: null }] };
 
-      // TODO(RLS): see the note on GET /suppressions above — same
-      // own-plus-unattributed scope, same caveat about the real policy.
-      const [groups, total] = await withTenant(apiKeyId, (tx) => Promise.all([
-        tx.suppression.groupBy({
-          by: ['reason'],
-          where,
-          _count: { reason: true },
-        }),
-        tx.suppression.count({ where }),
-      ]));
+      // Same own-plus-unattributed scope as GET /suppressions above,
+      // verified safe against the live policy — see that comment.
+      const [groups, total] = await withTenant(apiKeyId, (tx) =>
+        Promise.all([
+          tx.suppression.groupBy({
+            by: ['reason'],
+            where,
+            _count: { reason: true },
+          }),
+          tx.suppression.count({ where }),
+        ]),
+      );
       const byReason: Record<string, number> = {};
       for (const g of groups) {
         byReason[g.reason] = g._count.reason;
@@ -111,13 +113,15 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       // doesn't hold a single transaction open for its entire duration —
       // same query-per-iteration shape the original code had.
       while (true) {
-        const batch = await withTenant(apiKeyId, (tx) => tx.suppression.findMany({
-          where,
-          orderBy: { createdAt: 'desc' },
-          skip: offset,
-          take: batchSize,
-          select: { email: true, reason: true, createdAt: true },
-        }));
+        const batch = await withTenant(apiKeyId, (tx) =>
+          tx.suppression.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            skip: offset,
+            take: batchSize,
+            select: { email: true, reason: true, createdAt: true },
+          }),
+        );
         if (batch.length === 0) break;
         for (const row of batch) {
           const email = row.email.includes(',') ? `"${row.email}"` : row.email;
@@ -137,30 +141,43 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
     { preHandler: [requireAuth, requireRateLimit] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const parsed = bulkSchema.safeParse(request.body);
-      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+      if (!parsed.success)
+        throw Errors.validationFailed(
+          parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        );
 
       const { emails } = parsed.data;
       const apiKeyId = request.apiKey.id;
-      const normalized = [...new Set(emails.map(e => e.trim().toLowerCase()).filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)))];
+      const normalized = [
+        ...new Set(
+          emails
+            .map((e) => e.trim().toLowerCase())
+            .filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)),
+        ),
+      ];
       const invalid = emails.length - normalized.length;
 
       // tenant-sweep: Suppression is deliberately global (see schema.prisma) — not scoped by apiKeyId.
       // withRlsBypass: must see whether ANY tenant already suppressed these
       // addresses, not just this caller's own rows.
-      const existing = await withRlsBypass((tx) => tx.suppression.findMany({
-        where: { email: { in: normalized } },
-        select: { email: true },
-      }));
-      const existingSet = new Set(existing.map(e => e.email));
-      const newEmails = normalized.filter(e => !existingSet.has(e));
+      const existing = await withRlsBypass((tx) =>
+        tx.suppression.findMany({
+          where: { email: { in: normalized } },
+          select: { email: true },
+        }),
+      );
+      const existingSet = new Set(existing.map((e) => e.email));
+      const newEmails = normalized.filter((e) => !existingSet.has(e));
 
       if (newEmails.length > 0) {
         // New rows are explicitly attributed to this tenant — a normal
         // tenant-scoped write, unlike the global read above.
-        await withTenant(apiKeyId, (tx) => tx.suppression.createMany({
-          data: newEmails.map(email => ({ email, reason: 'manual', apiKeyId })),
-          skipDuplicates: true,
-        }));
+        await withTenant(apiKeyId, (tx) =>
+          tx.suppression.createMany({
+            data: newEmails.map((email) => ({ email, reason: 'manual', apiKeyId })),
+            skipDuplicates: true,
+          }),
+        );
       }
 
       return reply.status(200).send({
@@ -188,7 +205,10 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
     { preHandler: [requireAuth, requireRateLimit] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const parsed = addSchema.safeParse(request.body);
-      if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+      if (!parsed.success)
+        throw Errors.validationFailed(
+          parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        );
 
       const { email } = parsed.data;
       const apiKeyId = request.apiKey.id;
@@ -199,14 +219,19 @@ export async function suppressionRoutes(fastify: FastifyInstance): Promise<void>
       const existing = await withRlsBypass((tx) => tx.suppression.findUnique({ where: { email } }));
       if (existing) {
         return reply.status(200).send({
-          id: existing.id, email: existing.email, reason: existing.reason, createdAt: existing.createdAt,
+          id: existing.id,
+          email: existing.email,
+          reason: existing.reason,
+          createdAt: existing.createdAt,
         });
       }
 
-      const record = await withTenant(apiKeyId, (tx) => tx.suppression.create({
-        data: { email, reason: 'manual', apiKeyId },
-        select: { id: true, email: true, reason: true, createdAt: true },
-      }));
+      const record = await withTenant(apiKeyId, (tx) =>
+        tx.suppression.create({
+          data: { email, reason: 'manual', apiKeyId },
+          select: { id: true, email: true, reason: true, createdAt: true },
+        }),
+      );
 
       return reply.status(201).send(record);
     },

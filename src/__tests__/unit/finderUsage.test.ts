@@ -12,11 +12,20 @@ const { findUniqueMock, updateMock } = vi.hoisted(() => ({
   updateMock: vi.fn(),
 }));
 
-vi.mock('../../lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../lib/prisma.js', () => {
+  const prisma: {
+    apiKey: { findUnique: typeof findUniqueMock; update: typeof updateMock };
+    $transaction?: ReturnType<typeof vi.fn>;
+    $executeRawUnsafe?: ReturnType<typeof vi.fn>;
+  } = {
     apiKey: { findUnique: findUniqueMock, update: updateMock },
-  },
-}));
+  };
+  // withTenant() calls prisma.$transaction(fn) and hands fn the tx — here
+  // the same mock object, so tx.apiKey resolves to the mocks above.
+  prisma.$transaction = vi.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma));
+  prisma.$executeRawUnsafe = vi.fn().mockResolvedValue(undefined);
+  return { prisma };
+});
 
 vi.mock('../../lib/logger.js', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
@@ -72,7 +81,9 @@ describe('getFinderAffordability', () => {
       extraVerificationCredits: 0,
     });
     expect(result.finderRemaining).toBe(0);
-    expect(result.verificationAsFinderRemaining).toBe(Math.floor(1_000 / FINDER_OVERFLOW_VERIFICATION_COST));
+    expect(result.verificationAsFinderRemaining).toBe(
+      Math.floor(1_000 / FINDER_OVERFLOW_VERIFICATION_COST),
+    );
     expect(result.maxAffordable).toBe(result.verificationAsFinderRemaining);
   });
 
@@ -91,7 +102,9 @@ describe('getFinderAffordability', () => {
       currentMonthUsage: 1_000,
       extraVerificationCredits: 5_000, // e.g. a purchased credit pack
     });
-    expect(withTopup.verificationAsFinderRemaining).toBe(Math.floor(5_000 / FINDER_OVERFLOW_VERIFICATION_COST));
+    expect(withTopup.verificationAsFinderRemaining).toBe(
+      Math.floor(5_000 / FINDER_OVERFLOW_VERIFICATION_COST),
+    );
     expect(withTopup.maxAffordable).toBe(withTopup.verificationAsFinderRemaining);
   });
 

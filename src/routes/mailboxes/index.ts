@@ -2,7 +2,6 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
-import { prisma } from '../../lib/prisma.js';
 import { Errors } from '../../plugins/errorHandler.js';
 import { encryptValue } from '../../lib/crypto.js';
 import { testSmtpConnection } from '../../lib/smtp.js';
@@ -11,8 +10,16 @@ import { config } from '../../config.js';
 import { getMailboxLimit } from '../../plugins/usageMeter.js';
 import { encryptOAuthToken } from '../../lib/oauth/tokens.js';
 import { signOAuthState, verifyOAuthState } from '../../lib/oauth/state.js';
-import { isGoogleOAuthConfigured, getGoogleAuthUrl, exchangeGoogleCode } from '../../lib/oauth/google.js';
-import { isMicrosoftOAuthConfigured, getMicrosoftAuthUrl, exchangeMicrosoftCode } from '../../lib/oauth/microsoft.js';
+import {
+  isGoogleOAuthConfigured,
+  getGoogleAuthUrl,
+  exchangeGoogleCode,
+} from '../../lib/oauth/google.js';
+import {
+  isMicrosoftOAuthConfigured,
+  getMicrosoftAuthUrl,
+  exchangeMicrosoftCode,
+} from '../../lib/oauth/microsoft.js';
 import { logger } from '../../lib/logger.js';
 import { withTenant } from '../../lib/tenantContext.js';
 
@@ -66,11 +73,17 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
       const state = signOAuthState(request.apiKey.id);
 
       if (provider === 'google') {
-        if (!isGoogleOAuthConfigured()) throw Errors.validationFailed({ provider: 'Google mailbox connect is not configured on this deployment yet.' });
+        if (!isGoogleOAuthConfigured())
+          throw Errors.validationFailed({
+            provider: 'Google mailbox connect is not configured on this deployment yet.',
+          });
         return reply.status(200).send({ url: getGoogleAuthUrl(state) });
       }
       if (provider === 'microsoft') {
-        if (!isMicrosoftOAuthConfigured()) throw Errors.validationFailed({ provider: 'Microsoft mailbox connect is not configured on this deployment yet.' });
+        if (!isMicrosoftOAuthConfigured())
+          throw Errors.validationFailed({
+            provider: 'Microsoft mailbox connect is not configured on this deployment yet.',
+          });
         return reply.status(200).send({ url: getMicrosoftAuthUrl(state) });
       }
       throw Errors.validationFailed({ provider: 'provider must be "google" or "microsoft"' });
@@ -80,24 +93,35 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /v1/mailboxes/oauth/:provider/callback — public; hit directly by
   // Google/Microsoft with only ?code&state, no auth header. Identity comes
   // from the signed state (see verifyOAuthState above), not requireAuth.
-  fastify.get<{ Params: { provider: string }; Querystring: { code?: string; state?: string; error?: string } }>(
+  fastify.get<{
+    Params: { provider: string };
+    Querystring: { code?: string; state?: string; error?: string };
+  }>(
     '/mailboxes/oauth/:provider/callback',
-    async (request: FastifyRequest<{ Params: { provider: string }; Querystring: { code?: string; state?: string; error?: string } }>, reply: FastifyReply) => {
+    async (
+      request: FastifyRequest<{
+        Params: { provider: string };
+        Querystring: { code?: string; state?: string; error?: string };
+      }>,
+      reply: FastifyReply,
+    ) => {
       const { provider } = request.params;
       const { code, state, error } = request.query;
       const dashboardUrl = `${config.DASHBOARD_URL}/dashboard/mailboxes`;
 
       if (error) return reply.redirect(`${dashboardUrl}?oauth_error=${encodeURIComponent(error)}`);
       if (!code || !state) return reply.redirect(`${dashboardUrl}?oauth_error=missing_code`);
-      if (provider !== 'google' && provider !== 'microsoft') return reply.redirect(`${dashboardUrl}?oauth_error=unknown_provider`);
+      if (provider !== 'google' && provider !== 'microsoft')
+        return reply.redirect(`${dashboardUrl}?oauth_error=unknown_provider`);
 
       const verified = verifyOAuthState(state);
       if (!verified) return reply.redirect(`${dashboardUrl}?oauth_error=invalid_or_expired_state`);
 
       try {
-        const { refreshToken, email } = provider === 'google'
-          ? await exchangeGoogleCode(code)
-          : await exchangeMicrosoftCode(code);
+        const { refreshToken, email } =
+          provider === 'google'
+            ? await exchangeGoogleCode(code)
+            : await exchangeMicrosoftCode(code);
 
         const oauthTokenEnc = encryptOAuthToken({ provider, refreshToken });
         const { host, port } = OAUTH_PROVIDER_DEFAULTS[provider];
@@ -113,14 +137,24 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
           if (existing) {
             await tx.mailbox.update({
               where: { id: existing.id },
-              data: { oauthTokenEnc, passwordEnc: null, status: 'active', lastErrorMsg: null, host, port },
+              data: {
+                oauthTokenEnc,
+                passwordEnc: null,
+                status: 'active',
+                lastErrorMsg: null,
+                host,
+                port,
+              },
             });
             return { ok: true as const };
           }
 
           // No requireAuth on this route (see comment above) — request.apiKey
           // isn't populated, so the plan has to be looked up directly.
-          const apiKeyRecord = await prisma.apiKey.findUnique({ where: { id: verified.apiKeyId }, select: { plan: true } });
+          const apiKeyRecord = await tx.apiKey.findUnique({
+            where: { id: verified.apiKeyId },
+            select: { plan: true },
+          });
           const mailboxLimit = getMailboxLimit(apiKeyRecord?.plan ?? null);
           const existingCount = await tx.mailbox.count({ where: { apiKeyId: verified.apiKeyId } });
           if (existingCount >= mailboxLimit) {
@@ -128,8 +162,13 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
           }
           await tx.mailbox.create({
             data: {
-              apiKeyId: verified.apiKeyId, type: mailboxType, username: email,
-              oauthTokenEnc, host, port, status: 'active',
+              apiKeyId: verified.apiKeyId,
+              type: mailboxType,
+              username: email,
+              oauthTokenEnc,
+              host,
+              port,
+              status: 'active',
             },
           });
           return { ok: true as const };
@@ -148,182 +187,333 @@ export async function mailboxRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   // POST /v1/mailboxes
-  fastify.post('/mailboxes', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const parsed = createSchema.safeParse(request.body);
-    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+  fastify.post(
+    '/mailboxes',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const parsed = createSchema.safeParse(request.body);
+      if (!parsed.success)
+        throw Errors.validationFailed(
+          parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        );
 
-    const apiKeyId = request.apiKey.id;
-    const { type, host, port, username, password, daily_limit, send_delay_min_ms, send_delay_max_ms } = parsed.data;
+      const apiKeyId = request.apiKey.id;
+      const {
+        type,
+        host,
+        port,
+        username,
+        password,
+        daily_limit,
+        send_delay_min_ms,
+        send_delay_max_ms,
+      } = parsed.data;
 
-    // Enforce per-plan mailbox cap — advertised on the pricing page but
-    // previously never checked here, unlike every other plan-gated resource.
-    const mailboxLimit = getMailboxLimit(request.apiKey.plan);
-    const existingCount = await withTenant(apiKeyId, (tx) => tx.mailbox.count({ where: { apiKeyId } }));
-    if (existingCount >= mailboxLimit) {
-      throw Errors.validationFailed({
-        limit: `Your ${request.apiKey.plan ?? 'free'} plan allows ${mailboxLimit} mailboxes. Delete some or upgrade to add more.`,
-      });
-    }
+      // Enforce per-plan mailbox cap — advertised on the pricing page but
+      // previously never checked here, unlike every other plan-gated resource.
+      const mailboxLimit = getMailboxLimit(request.apiKey.plan);
+      const existingCount = await withTenant(apiKeyId, (tx) =>
+        tx.mailbox.count({ where: { apiKeyId } }),
+      );
+      if (existingCount >= mailboxLimit) {
+        throw Errors.validationFailed({
+          limit: `Your ${request.apiKey.plan ?? 'free'} plan allows ${mailboxLimit} mailboxes. Delete some or upgrade to add more.`,
+        });
+      }
 
-    const passwordEnc = password ? encryptValue(password, getMailboxSecret()) : null;
+      const passwordEnc = password ? encryptValue(password, getMailboxSecret()) : null;
 
-    // Verify the credentials actually work before marking the mailbox
-    // 'active' — otherwise a typo'd app password sits silently active and
-    // gets fed straight into warmup/sending until someone happens to click
-    // "Test connection" later.
-    let status: 'active' | 'error' = 'active';
-    let lastErrorMsg: string | null = null;
-    if (host && passwordEnc) {
-      const smtpResult = await testSmtpConnection({ host, port: port ?? 587, username, passwordEnc, oauthTokenEnc: null });
-      status = smtpResult.ok ? 'active' : 'error';
-      lastErrorMsg = smtpResult.ok ? null : (smtpResult.error ?? 'SMTP test failed');
-    }
+      // Verify the credentials actually work before marking the mailbox
+      // 'active' — otherwise a typo'd app password sits silently active and
+      // gets fed straight into warmup/sending until someone happens to click
+      // "Test connection" later.
+      let status: 'active' | 'error' = 'active';
+      let lastErrorMsg: string | null = null;
+      if (host && passwordEnc) {
+        const smtpResult = await testSmtpConnection({
+          host,
+          port: port ?? 587,
+          username,
+          passwordEnc,
+          oauthTokenEnc: null,
+        });
+        status = smtpResult.ok ? 'active' : 'error';
+        lastErrorMsg = smtpResult.ok ? null : (smtpResult.error ?? 'SMTP test failed');
+      }
 
-    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.create({
-      data: {
-        apiKeyId, type, host: host ?? null, port: port ?? null, username,
-        passwordEnc, dailyLimit: daily_limit,
-        sendDelayMinMs: send_delay_min_ms, sendDelayMaxMs: send_delay_max_ms,
-        status, lastErrorMsg, lastCheckedAt: host && passwordEnc ? new Date() : null,
-      },
-      select: { id: true, type: true, host: true, port: true, username: true, dailyLimit: true, status: true, lastErrorMsg: true, createdAt: true },
-    }));
-    return reply.status(201).send(mailbox);
-  });
+      const mailbox = await withTenant(apiKeyId, (tx) =>
+        tx.mailbox.create({
+          data: {
+            apiKeyId,
+            type,
+            host: host ?? null,
+            port: port ?? null,
+            username,
+            passwordEnc,
+            dailyLimit: daily_limit,
+            sendDelayMinMs: send_delay_min_ms,
+            sendDelayMaxMs: send_delay_max_ms,
+            status,
+            lastErrorMsg,
+            lastCheckedAt: host && passwordEnc ? new Date() : null,
+          },
+          select: {
+            id: true,
+            type: true,
+            host: true,
+            port: true,
+            username: true,
+            dailyLimit: true,
+            status: true,
+            lastErrorMsg: true,
+            createdAt: true,
+          },
+        }),
+      );
+      return reply.status(201).send(mailbox);
+    },
+  );
 
   // GET /v1/mailboxes
-  fastify.get('/mailboxes', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const apiKeyId = request.apiKey.id;
-    const mailboxes = await withTenant(apiKeyId, (tx) => tx.mailbox.findMany({
-      where: { apiKeyId },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, type: true, host: true, username: true, dailyLimit: true, sentToday: true, status: true, lastErrorMsg: true, warmupConfig: true, createdAt: true, oauthTokenEnc: true },
-    }));
-    // oauthTokenEnc is an encrypted blob — never send it to the client, only
-    // whether one exists, so the dashboard knows to hide the password field.
-    const data = mailboxes.map(({ oauthTokenEnc, ...rest }) => ({ ...rest, connectedViaOAuth: oauthTokenEnc !== null }));
-    return reply.status(200).send({ data });
-  });
+  fastify.get(
+    '/mailboxes',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const apiKeyId = request.apiKey.id;
+      const mailboxes = await withTenant(apiKeyId, (tx) =>
+        tx.mailbox.findMany({
+          where: { apiKeyId },
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            type: true,
+            host: true,
+            username: true,
+            dailyLimit: true,
+            sentToday: true,
+            status: true,
+            lastErrorMsg: true,
+            warmupConfig: true,
+            createdAt: true,
+            oauthTokenEnc: true,
+          },
+        }),
+      );
+      // oauthTokenEnc is an encrypted blob — never send it to the client, only
+      // whether one exists, so the dashboard knows to hide the password field.
+      const data = mailboxes.map(({ oauthTokenEnc, ...rest }) => ({
+        ...rest,
+        connectedViaOAuth: oauthTokenEnc !== null,
+      }));
+      return reply.status(200).send({ data });
+    },
+  );
 
   // GET /v1/mailboxes/:id
-  fastify.get('/mailboxes/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { id } = request.params as { id: string };
-    const apiKeyId = request.apiKey.id;
-    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({
-      where: { id, apiKeyId },
-      select: { id: true, type: true, host: true, port: true, username: true, dailyLimit: true, sentToday: true, sendDelayMinMs: true, sendDelayMaxMs: true, status: true, lastErrorMsg: true, lastCheckedAt: true, warmupConfig: true, createdAt: true, oauthTokenEnc: true },
-    }));
-    if (!mailbox) throw Errors.notFound('Mailbox not found.');
-    const { oauthTokenEnc, ...rest } = mailbox;
-    return reply.status(200).send({ ...rest, connectedViaOAuth: oauthTokenEnc !== null });
-  });
+  fastify.get(
+    '/mailboxes/:id',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+      const mailbox = await withTenant(apiKeyId, (tx) =>
+        tx.mailbox.findFirst({
+          where: { id, apiKeyId },
+          select: {
+            id: true,
+            type: true,
+            host: true,
+            port: true,
+            username: true,
+            dailyLimit: true,
+            sentToday: true,
+            sendDelayMinMs: true,
+            sendDelayMaxMs: true,
+            status: true,
+            lastErrorMsg: true,
+            lastCheckedAt: true,
+            warmupConfig: true,
+            createdAt: true,
+            oauthTokenEnc: true,
+          },
+        }),
+      );
+      if (!mailbox) throw Errors.notFound('Mailbox not found.');
+      const { oauthTokenEnc, ...rest } = mailbox;
+      return reply.status(200).send({ ...rest, connectedViaOAuth: oauthTokenEnc !== null });
+    },
+  );
 
   // DELETE /v1/mailboxes/:id
-  fastify.delete('/mailboxes/:id', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { id } = request.params as { id: string };
-    const apiKeyId = request.apiKey.id;
-    await withTenant(apiKeyId, async (tx) => {
-      const mailbox = await tx.mailbox.findFirst({ where: { id, apiKeyId } });
-      if (!mailbox) throw Errors.notFound('Mailbox not found.');
-      await tx.mailbox.delete({ where: { id } });
-    });
-    return reply.status(200).send({ deleted: true, id });
-  });
+  fastify.delete(
+    '/mailboxes/:id',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+      await withTenant(apiKeyId, async (tx) => {
+        const mailbox = await tx.mailbox.findFirst({ where: { id, apiKeyId } });
+        if (!mailbox) throw Errors.notFound('Mailbox not found.');
+        await tx.mailbox.delete({ where: { id } });
+      });
+      return reply.status(200).send({ deleted: true, id });
+    },
+  );
 
   // POST /v1/mailboxes/:id/test
-  fastify.post('/mailboxes/:id/test', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { id } = request.params as { id: string };
-    const apiKeyId = request.apiKey.id;
-    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({ where: { id, apiKeyId } }));
-    if (!mailbox) throw Errors.notFound('Mailbox not found.');
+  fastify.post(
+    '/mailboxes/:id/test',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+      const mailbox = await withTenant(apiKeyId, (tx) =>
+        tx.mailbox.findFirst({ where: { id, apiKeyId } }),
+      );
+      if (!mailbox) throw Errors.notFound('Mailbox not found.');
 
-    if (!mailbox.host || !(mailbox.passwordEnc || mailbox.oauthTokenEnc)) {
-      await withTenant(apiKeyId, (tx) => tx.mailbox.update({ where: { id }, data: { status: 'error', lastErrorMsg: 'Missing host or credentials' } }));
-      return reply.status(200).send({ ok: false, error: 'Missing SMTP host or credentials' });
-    }
+      if (!mailbox.host || !(mailbox.passwordEnc || mailbox.oauthTokenEnc)) {
+        await withTenant(apiKeyId, (tx) =>
+          tx.mailbox.update({
+            where: { id },
+            data: { status: 'error', lastErrorMsg: 'Missing host or credentials' },
+          }),
+        );
+        return reply.status(200).send({ ok: false, error: 'Missing SMTP host or credentials' });
+      }
 
-    // Real SMTP connectivity test — required, this is what actually sends.
-    const smtpResult = await testSmtpConnection({
-      host: mailbox.host,
-      port: mailbox.port ?? 587,
-      username: mailbox.username,
-      passwordEnc: mailbox.passwordEnc,
-      oauthTokenEnc: mailbox.oauthTokenEnc,
-    });
+      // Real SMTP connectivity test — required, this is what actually sends.
+      const smtpResult = await testSmtpConnection({
+        host: mailbox.host,
+        port: mailbox.port ?? 587,
+        username: mailbox.username,
+        passwordEnc: mailbox.passwordEnc,
+        oauthTokenEnc: mailbox.oauthTokenEnc,
+      });
 
-    // IMAP is only needed for reply detection and warmup auto-open/reply —
-    // check it too, but don't let a bad IMAP config mark an otherwise-working
-    // sending mailbox as fully 'error'. Report both halves separately so the
-    // dashboard can say exactly what won't work, instead of a mailbox looking
-    // "active" while reply detection silently never fires.
-    const imapResult = await testImapConnection({
-      host: mailbox.host,
-      username: mailbox.username,
-      passwordEnc: mailbox.passwordEnc,
-      oauthTokenEnc: mailbox.oauthTokenEnc,
-    });
+      // IMAP is only needed for reply detection and warmup auto-open/reply —
+      // check it too, but don't let a bad IMAP config mark an otherwise-working
+      // sending mailbox as fully 'error'. Report both halves separately so the
+      // dashboard can say exactly what won't work, instead of a mailbox looking
+      // "active" while reply detection silently never fires.
+      const imapResult = await testImapConnection({
+        host: mailbox.host,
+        username: mailbox.username,
+        passwordEnc: mailbox.passwordEnc,
+        oauthTokenEnc: mailbox.oauthTokenEnc,
+      });
 
-    await withTenant(apiKeyId, (tx) => tx.mailbox.update({
-      where: { id },
-      data: {
-        status: smtpResult.ok ? 'active' : 'error',
-        lastErrorMsg: smtpResult.ok
-          ? (imapResult.ok ? null : `SMTP ok, but IMAP failed (reply detection/warmup won't work): ${imapResult.error ?? 'unknown error'}`)
-          : (smtpResult.error ?? 'SMTP test failed'),
-        lastCheckedAt: new Date(),
-      },
-    }));
-    return reply.status(200).send({
-      ok: smtpResult.ok,
-      error: smtpResult.error,
-      smtp: smtpResult,
-      imap: imapResult,
-    });
-  });
+      await withTenant(apiKeyId, (tx) =>
+        tx.mailbox.update({
+          where: { id },
+          data: {
+            status: smtpResult.ok ? 'active' : 'error',
+            lastErrorMsg: smtpResult.ok
+              ? imapResult.ok
+                ? null
+                : `SMTP ok, but IMAP failed (reply detection/warmup won't work): ${imapResult.error ?? 'unknown error'}`
+              : (smtpResult.error ?? 'SMTP test failed'),
+            lastCheckedAt: new Date(),
+          },
+        }),
+      );
+      return reply.status(200).send({
+        ok: smtpResult.ok,
+        error: smtpResult.error,
+        smtp: smtpResult,
+        imap: imapResult,
+      });
+    },
+  );
 
   // POST /v1/mailboxes/:id/warmup — enable warmup
-  fastify.post('/mailboxes/:id/warmup', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { id } = request.params as { id: string };
-    const apiKeyId = request.apiKey.id;
-    const parsed = warmupSchema.safeParse(request.body);
-    if (!parsed.success) throw Errors.validationFailed(parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message })));
+  fastify.post(
+    '/mailboxes/:id/warmup',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+      const parsed = warmupSchema.safeParse(request.body);
+      if (!parsed.success)
+        throw Errors.validationFailed(
+          parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        );
 
-    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({ where: { id, apiKeyId } }));
-    if (!mailbox) throw Errors.notFound('Mailbox not found.');
+      const mailbox = await withTenant(apiKeyId, (tx) =>
+        tx.mailbox.findFirst({ where: { id, apiKeyId } }),
+      );
+      if (!mailbox) throw Errors.notFound('Mailbox not found.');
 
-    const { target_per_day, ramp_up_days, pool_tier } = parsed.data;
+      const { target_per_day, ramp_up_days, pool_tier } = parsed.data;
 
-    const warmup = await withTenant(apiKeyId, (tx) => tx.warmupConfig.upsert({
-      where: { mailboxId: id },
-      create: { mailboxId: id, enabled: true, targetPerDay: target_per_day, rampUpDays: ramp_up_days, poolTier: pool_tier },
-      update: { enabled: true, targetPerDay: target_per_day, rampUpDays: ramp_up_days, poolTier: pool_tier },
-    }));
-    return reply.status(200).send(warmup);
-  });
+      const warmup = await withTenant(apiKeyId, (tx) =>
+        tx.warmupConfig.upsert({
+          where: { mailboxId: id },
+          create: {
+            mailboxId: id,
+            enabled: true,
+            targetPerDay: target_per_day,
+            rampUpDays: ramp_up_days,
+            poolTier: pool_tier,
+          },
+          update: {
+            enabled: true,
+            targetPerDay: target_per_day,
+            rampUpDays: ramp_up_days,
+            poolTier: pool_tier,
+          },
+        }),
+      );
+      return reply.status(200).send(warmup);
+    },
+  );
 
   // DELETE /v1/mailboxes/:id/warmup — disable warmup
-  fastify.delete('/mailboxes/:id/warmup', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { id } = request.params as { id: string };
-    const apiKeyId = request.apiKey.id;
-    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({ where: { id, apiKeyId } }));
-    if (!mailbox) throw Errors.notFound('Mailbox not found.');
-    await withTenant(apiKeyId, (tx) => tx.warmupConfig.update({ where: { mailboxId: id }, data: { enabled: false } }));
-    return reply.status(200).send({ disabled: true });
-  });
+  fastify.delete(
+    '/mailboxes/:id/warmup',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+      const mailbox = await withTenant(apiKeyId, (tx) =>
+        tx.mailbox.findFirst({ where: { id, apiKeyId } }),
+      );
+      if (!mailbox) throw Errors.notFound('Mailbox not found.');
+      await withTenant(apiKeyId, (tx) =>
+        tx.warmupConfig.update({ where: { mailboxId: id }, data: { enabled: false } }),
+      );
+      return reply.status(200).send({ disabled: true });
+    },
+  );
 
   // GET /v1/mailboxes/:id/warmup — warmup stats
-  fastify.get('/mailboxes/:id/warmup', { preHandler: [requireAuth, requireRateLimit] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { id } = request.params as { id: string };
-    const apiKeyId = request.apiKey.id;
-    const mailbox = await withTenant(apiKeyId, (tx) => tx.mailbox.findFirst({ where: { id, apiKeyId }, include: { warmupConfig: true } }));
-    if (!mailbox) throw Errors.notFound('Mailbox not found.');
-    if (!mailbox.warmupConfig) return reply.status(200).send({ enabled: false });
+  fastify.get(
+    '/mailboxes/:id/warmup',
+    { preHandler: [requireAuth, requireRateLimit] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const apiKeyId = request.apiKey.id;
+      const mailbox = await withTenant(apiKeyId, (tx) =>
+        tx.mailbox.findFirst({ where: { id, apiKeyId }, include: { warmupConfig: true } }),
+      );
+      if (!mailbox) throw Errors.notFound('Mailbox not found.');
+      if (!mailbox.warmupConfig) return reply.status(200).send({ enabled: false });
 
-    const wc = mailbox.warmupConfig;
-    const daysRunning = Math.floor((Date.now() - wc.startedAt.getTime()) / (1000 * 60 * 60 * 24));
-    const progress = Math.min(100, Math.round(daysRunning / wc.rampUpDays * 100));
-    const todayTarget = Math.min(wc.targetPerDay, Math.max(5, Math.round(5 + (wc.targetPerDay - 5) * daysRunning / wc.rampUpDays)));
+      const wc = mailbox.warmupConfig;
+      const daysRunning = Math.floor((Date.now() - wc.startedAt.getTime()) / (1000 * 60 * 60 * 24));
+      const progress = Math.min(100, Math.round((daysRunning / wc.rampUpDays) * 100));
+      const todayTarget = Math.min(
+        wc.targetPerDay,
+        Math.max(5, Math.round(5 + ((wc.targetPerDay - 5) * daysRunning) / wc.rampUpDays)),
+      );
 
-    return reply.status(200).send({ ...wc, days_running: daysRunning, progress_pct: progress, today_target: todayTarget, sent_today: mailbox.sentToday });
-  });
+      return reply.status(200).send({
+        ...wc,
+        days_running: daysRunning,
+        progress_pct: progress,
+        today_target: todayTarget,
+        sent_today: mailbox.sentToday,
+      });
+    },
+  );
 }

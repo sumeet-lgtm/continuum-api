@@ -2,7 +2,6 @@ import { Worker, type Job } from 'bullmq';
 import * as tls from 'node:tls';
 import { simpleParser } from 'mailparser';
 import { QUEUE_IMAP, redisConnection } from '../lib/queue.js';
-import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { config } from '../config.js';
 import { deriveImapHost, IMAP_PORT } from '../lib/imapHost.js';
@@ -17,8 +16,14 @@ import { withTenant, withRlsBypass, type PrismaTx } from '../lib/tenantContext.j
 // nothing and turns that into a one-line answer next time this fails.
 // checkServerIdentity's return value is unchanged (delegates to Node's own
 // default check) -- this only observes, it does not loosen validation.
-function loggingCheckServerIdentity(hostname: string, cert: import('node:tls').PeerCertificate): Error | undefined {
-  logger.info({ hostname, issuer: cert.issuer, subject: cert.subject }, 'IMAP TLS peer certificate');
+function loggingCheckServerIdentity(
+  hostname: string,
+  cert: import('node:tls').PeerCertificate,
+): Error | undefined {
+  logger.info(
+    { hostname, issuer: cert.issuer, subject: cert.subject },
+    'IMAP TLS peer certificate',
+  );
   return tls.checkServerIdentity(hostname, cert);
 }
 
@@ -27,27 +32,45 @@ interface ImapTickPayload {
 }
 
 // Classify a reply using Claude Haiku and return intent category
-async function classifyReplyBody(body: string): Promise<{ category: string; confidence: number; suggested_action: string }> {
+async function classifyReplyBody(
+  body: string,
+): Promise<{ category: string; confidence: number; suggested_action: string }> {
   try {
     const apiKey = (config as Record<string, unknown>)['ANTHROPIC_API_KEY'] as string | undefined;
     if (!apiKey) return { category: 'unknown', confidence: 0, suggested_action: 'reply' };
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 256,
-        messages: [{ role: 'user', content: `Classify this cold email reply into one category. Return JSON only.\n\nCategories: interested, not_interested, out_of_office, question, unsubscribe, bounced, unknown\n\nReply:\n${body.slice(0, 1000)}\n\nReturn: {"category":"...","confidence":0.0-1.0,"suggested_action":"reply|stop|pause|unsubscribe"}` }],
+        messages: [
+          {
+            role: 'user',
+            content: `Classify this cold email reply into one category. Return JSON only.\n\nCategories: interested, not_interested, out_of_office, question, unsubscribe, bounced, unknown\n\nReply:\n${body.slice(0, 1000)}\n\nReturn: {"category":"...","confidence":0.0-1.0,"suggested_action":"reply|stop|pause|unsubscribe"}`,
+          },
+        ],
       }),
     });
 
     if (!response.ok) return { category: 'unknown', confidence: 0, suggested_action: 'reply' };
-    const data = await response.json() as { content?: Array<{ text?: string }> };
+    const data = (await response.json()) as { content?: Array<{ text?: string }> };
     const raw = data.content?.[0]?.text?.trim() ?? '{}';
-    const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    const stripped = raw
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
     const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-    return JSON.parse(jsonMatch ? jsonMatch[0] : stripped) as { category: string; confidence: number; suggested_action: string };
+    return JSON.parse(jsonMatch ? jsonMatch[0] : stripped) as {
+      category: string;
+      confidence: number;
+      suggested_action: string;
+    };
   } catch {
     return { category: 'unknown', confidence: 0, suggested_action: 'reply' };
   }
@@ -60,7 +83,13 @@ async function classifyReplyBody(body: string): Promise<{ category: string; conf
 // this same reply, and a nested $transaction here would risk a deadlock /
 // undefined-behavior situation with the outer one. The caller threads its
 // own tx down instead.
-async function triggerSubsequences(tx: PrismaTx, parentSequenceId: string, email: string, triggerEvent: string, variables: Record<string, unknown>): Promise<void> {
+async function triggerSubsequences(
+  tx: PrismaTx,
+  parentSequenceId: string,
+  email: string,
+  triggerEvent: string,
+  variables: Record<string, unknown>,
+): Promise<void> {
   const subsequences = await tx.sequence.findMany({
     where: { parentSequenceId, triggerEvent },
     include: { steps: { orderBy: { stepOrder: 'asc' } } },
@@ -75,9 +104,20 @@ async function triggerSubsequences(tx: PrismaTx, parentSequenceId: string, email
     const delay = (sub.triggerDelayDays ?? 0) * 24 * 60 * 60 * 1000;
     const nextSendAt = sub.steps.length > 0 ? new Date(Date.now() + delay) : null;
 
-    await tx.sequenceEnrollment.create({
-      data: { sequenceId: sub.id, email, variables: variables as never, nextSendAt, status: 'active', currentStep: 0 },
-    }).catch(() => { /* ignore if already exists */ });
+    await tx.sequenceEnrollment
+      .create({
+        data: {
+          sequenceId: sub.id,
+          email,
+          variables: variables as never,
+          nextSendAt,
+          status: 'active',
+          currentStep: 0,
+        },
+      })
+      .catch(() => {
+        /* ignore if already exists */
+      });
 
     logger.info({ subsequenceId: sub.id, email, triggerEvent }, 'Auto-enrolled in subsequence');
   }
@@ -92,8 +132,14 @@ function timeoutAfter(ms: number, label: string): Promise<never> {
 }
 
 async function pollOneMailbox(mailbox: {
-  id: string; apiKeyId: string; type: string; host: string | null; port: number | null;
-  username: string; passwordEnc: string | null; oauthTokenEnc: string | null;
+  id: string;
+  apiKeyId: string;
+  type: string;
+  host: string | null;
+  port: number | null;
+  username: string;
+  passwordEnc: string | null;
+  oauthTokenEnc: string | null;
 }): Promise<void> {
   let connection: Awaited<ReturnType<typeof import('imap-simple').connect>> | null = null;
   try {
@@ -164,148 +210,188 @@ async function pollOneMailbox(mailbox: {
     });
 
     for (const msg of messages) {
-        const rawPart = msg.parts.find((p: { which: string }) => p.which === '');
-        if (!rawPart) continue;
-        const raw = Buffer.isBuffer(rawPart.body) ? rawPart.body : Buffer.from(String(rawPart.body ?? ''), 'utf8');
-        if (raw.length === 0) continue;
+      const rawPart = msg.parts.find((p: { which: string }) => p.which === '');
+      if (!rawPart) continue;
+      const raw = Buffer.isBuffer(rawPart.body)
+        ? rawPart.body
+        : Buffer.from(String(rawPart.body ?? ''), 'utf8');
+      if (raw.length === 0) continue;
 
-        const parsedMail = await simpleParser(raw);
+      const parsedMail = await simpleParser(raw);
 
-        const inReplyTo = (parsedMail.inReplyTo ?? '').replace(/[<>]/g, '');
-        const messageId = (parsedMail.messageId ?? '').replace(/[<>]/g, '');
-        const fromEmail = parsedMail.from?.value?.[0]?.address ?? '';
-        const subject = parsedMail.subject ?? '';
-        // mailparser types .html as `string | false` (false when absent) —
-        // `||`, not `??`, so that falsy-false correctly falls through to
-        // the next candidate instead of stringifying to "false".
-        const bodySnippet = (parsedMail.text || parsedMail.html || '').toString().slice(0, 500);
+      const inReplyTo = (parsedMail.inReplyTo ?? '').replace(/[<>]/g, '');
+      const messageId = (parsedMail.messageId ?? '').replace(/[<>]/g, '');
+      const fromEmail = parsedMail.from?.value?.[0]?.address ?? '';
+      const subject = parsedMail.subject ?? '';
+      // mailparser types .html as `string | false` (false when absent) —
+      // `||`, not `??`, so that falsy-false correctly falls through to
+      // the next candidate instead of stringifying to "false".
+      const bodySnippet = (parsedMail.text || parsedMail.html || '').toString().slice(0, 500);
 
-        let enrollmentId: string | null = null;
-        if (inReplyTo || fromEmail) {
-          // Scoped to THIS mailbox — without mailboxId, a reply to one
-          // tenant's cold outreach could match another tenant's active
-          // enrollment for the same address (e.g. two accounts both
-          // emailing the same person), silently pausing the wrong
-          // sequence and misattributing the reply.
-          const { enrollment, seq } = await withTenant(mailbox.apiKeyId, async (tx) => {
-            const enrollment = await tx.sequenceEnrollment.findFirst({
-              where: { email: fromEmail.toLowerCase(), status: 'active', mailboxId: mailbox.id },
-              select: { id: true, sequenceId: true, status: true, variables: true },
-            });
-
-            const seq = enrollment
-              ? await tx.sequence.findUnique({
-                  where: { id: enrollment.sequenceId },
-                  select: { stopOnReply: true, apiKeyId: true },
-                })
-              : null;
-
-            return { enrollment, seq };
+      let enrollmentId: string | null = null;
+      if (inReplyTo || fromEmail) {
+        // Scoped to THIS mailbox — without mailboxId, a reply to one
+        // tenant's cold outreach could match another tenant's active
+        // enrollment for the same address (e.g. two accounts both
+        // emailing the same person), silently pausing the wrong
+        // sequence and misattributing the reply.
+        const { enrollment, seq } = await withTenant(mailbox.apiKeyId, async (tx) => {
+          const enrollment = await tx.sequenceEnrollment.findFirst({
+            where: { email: fromEmail.toLowerCase(), status: 'active', mailboxId: mailbox.id },
+            select: { id: true, sequenceId: true, status: true, variables: true },
           });
 
-          if (enrollment) {
-            enrollmentId = enrollment.id;
+          const seq = enrollment
+            ? await tx.sequence.findUnique({
+                where: { id: enrollment.sequenceId },
+                select: { stopOnReply: true, apiKeyId: true },
+              })
+            : null;
 
-            // AI classify the reply to determine intent
-            const classification = bodySnippet
-              ? await classifyReplyBody(bodySnippet)
-              : { category: 'unknown', confidence: 0, suggested_action: 'reply' };
+          return { enrollment, seq };
+        });
 
-            logger.info({ fromEmail, category: classification.category, confidence: classification.confidence }, 'Reply classified');
+        if (enrollment) {
+          enrollmentId = enrollment.id;
 
-            // OOO auto-replies: pause the enrollment for 3 business days so the
-            // sequence resumes after the lead returns from vacation. We advance
-            // nextSendAt rather than changing status so the enrollment stays
-            // active and the lead isn't treated as having replied.
-            if (classification.category === 'out_of_office') {
-              const resumeAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
-              await withTenant(mailbox.apiKeyId, async (tx) => {
-                await tx.sequenceEnrollment.update({
+          // AI classify the reply to determine intent
+          const classification = bodySnippet
+            ? await classifyReplyBody(bodySnippet)
+            : { category: 'unknown', confidence: 0, suggested_action: 'reply' };
+
+          logger.info(
+            { fromEmail, category: classification.category, confidence: classification.confidence },
+            'Reply classified',
+          );
+
+          // OOO auto-replies: pause the enrollment for 3 business days so the
+          // sequence resumes after the lead returns from vacation. We advance
+          // nextSendAt rather than changing status so the enrollment stays
+          // active and the lead isn't treated as having replied.
+          if (classification.category === 'out_of_office') {
+            const resumeAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+            await withTenant(mailbox.apiKeyId, async (tx) => {
+              await tx.sequenceEnrollment
+                .update({
                   where: { id: enrollment.id },
                   data: { nextSendAt: resumeAt },
-                }).catch(() => {});
-                await tx.replyEvent.create({
+                })
+                .catch(() => {});
+              await tx.replyEvent
+                .create({
                   data: {
-                    mailboxId: mailbox.id, fromEmail: fromEmail.toLowerCase(),
-                    inReplyToMessageId: inReplyTo || null, messageId: messageId || null,
+                    mailboxId: mailbox.id,
+                    fromEmail: fromEmail.toLowerCase(),
+                    inReplyToMessageId: inReplyTo || null,
+                    messageId: messageId || null,
                     enrollmentId: enrollment.id,
-                    subject: subject || null, bodySnippet: bodySnippet || null,
+                    subject: subject || null,
+                    bodySnippet: bodySnippet || null,
                   },
-                }).catch(() => {});
-              });
-              logger.info({ fromEmail, resumeAt }, 'OOO detected — pausing enrollment for 3 days');
-              continue;
-            }
+                })
+                .catch(() => {});
+            });
+            logger.info({ fromEmail, resumeAt }, 'OOO detected — pausing enrollment for 3 days');
+            continue;
+          }
 
-            // Bounce and unsubscribe both mean "stop sending" regardless of the
-            // sequence's stopOnReply setting — that flag is about whether a
-            // genuine human reply pauses the sequence, not a compliance gate.
-            // Suppressing on unsubscribe intent but still leaving the
-            // enrollment 'active' (as this did before) would keep sending
-            // after an explicit opt-out whenever stopOnReply was off.
-            const isHardStop = classification.category === 'unsubscribe' || classification.category === 'bounced';
-            const enrollmentStatus = classification.category === 'bounced' ? 'bounced'
-              : classification.category === 'unsubscribe' ? 'unsubscribed'
-              : (isHardStop || seq?.stopOnReply) ? 'replied' : 'active';
+          // Bounce and unsubscribe both mean "stop sending" regardless of the
+          // sequence's stopOnReply setting — that flag is about whether a
+          // genuine human reply pauses the sequence, not a compliance gate.
+          // Suppressing on unsubscribe intent but still leaving the
+          // enrollment 'active' (as this did before) would keep sending
+          // after an explicit opt-out whenever stopOnReply was off.
+          const isHardStop =
+            classification.category === 'unsubscribe' || classification.category === 'bounced';
+          const enrollmentStatus =
+            classification.category === 'bounced'
+              ? 'bounced'
+              : classification.category === 'unsubscribe'
+                ? 'unsubscribed'
+                : isHardStop || seq?.stopOnReply
+                  ? 'replied'
+                  : 'active';
 
-            await withTenant(mailbox.apiKeyId, async (tx) => {
-              await tx.sequenceEnrollment.update({
-                where: { id: enrollment.id },
-                data: { status: enrollmentStatus, repliedAt: new Date() },
-              });
+          await withTenant(mailbox.apiKeyId, async (tx) => {
+            await tx.sequenceEnrollment.update({
+              where: { id: enrollment.id },
+              data: { status: enrollmentStatus, repliedAt: new Date() },
+            });
 
-              // Scoped to this reply's own tenant (seq.apiKeyId) — without it, a
-              // reply to one tenant's outreach would silently overwrite a
-              // DIFFERENT tenant's Lead record for the same prospect email
-              // (two accounts emailing the same person is common), corrupting
-              // that other tenant's lead status/repliedAt. If the sequence
-              // lookup above came back empty, skip rather than fall back to an
-              // unscoped update.
-              if (seq?.apiKeyId) {
-                await tx.lead.updateMany({
+            // Scoped to this reply's own tenant (seq.apiKeyId) — without it, a
+            // reply to one tenant's outreach would silently overwrite a
+            // DIFFERENT tenant's Lead record for the same prospect email
+            // (two accounts emailing the same person is common), corrupting
+            // that other tenant's lead status/repliedAt. If the sequence
+            // lookup above came back empty, skip rather than fall back to an
+            // unscoped update.
+            if (seq?.apiKeyId) {
+              await tx.lead
+                .updateMany({
                   where: { email: fromEmail.toLowerCase(), apiKeyId: seq.apiKeyId },
                   data: {
-                    status: classification.category === 'interested' ? 'interested'
-                      : classification.category === 'not_interested' ? 'not_interested'
-                      : classification.category === 'unsubscribe' ? 'unsubscribed'
-                      : classification.category === 'bounced' ? 'bounced'
-                      : 'replied',
+                    status:
+                      classification.category === 'interested'
+                        ? 'interested'
+                        : classification.category === 'not_interested'
+                          ? 'not_interested'
+                          : classification.category === 'unsubscribe'
+                            ? 'unsubscribed'
+                            : classification.category === 'bounced'
+                              ? 'bounced'
+                              : 'replied',
                     repliedAt: new Date(),
                   },
-                }).catch(() => {});
-              }
+                })
+                .catch(() => {});
+            }
 
-              // Only a genuine reply should re-enroll the lead in REPLIED-triggered
-              // subsequences — a bounce or unsubscribe isn't a signal to follow up.
-              if (!isHardStop) {
-                const vars = (enrollment.variables as Record<string, unknown>) ?? {};
-                await triggerSubsequences(tx, enrollment.sequenceId, fromEmail.toLowerCase(), 'REPLIED', vars);
-              }
+            // Only a genuine reply should re-enroll the lead in REPLIED-triggered
+            // subsequences — a bounce or unsubscribe isn't a signal to follow up.
+            if (!isHardStop) {
+              const vars = (enrollment.variables as Record<string, unknown>) ?? {};
+              await triggerSubsequences(
+                tx,
+                enrollment.sequenceId,
+                fromEmail.toLowerCase(),
+                'REPLIED',
+                vars,
+              );
+            }
+          });
 
-              // Unsubscribe or bounce (an NDR landing in the inbox — the only
-              // bounce signal a mailbox-based SMTP send ever produces, since it
-              // never goes through SES/SNS) both go on the shared suppression
-              // list so no other sequence or campaign can reach this address
-              // either. Missing the bounce case here meant an address that
-              // hard-bounced through a connected mailbox stayed fully sendable
-              // everywhere else — the exact gap this list exists to close.
-              if (classification.category === 'unsubscribe' || classification.category === 'bounced') {
-                await tx.suppression.upsert({
-                  where: { email: fromEmail.toLowerCase() },
-                  update: {},
-                  create: {
-                    email: fromEmail.toLowerCase(),
-                    reason: classification.category === 'unsubscribe' ? 'unsubscribed' : 'hard_bounce',
-                    apiKeyId: seq?.apiKeyId ?? '',
-                  },
-                }).catch(() => {});
-              }
-            });
+          // Unsubscribe or bounce (an NDR landing in the inbox — the only
+          // bounce signal a mailbox-based SMTP send ever produces, since it
+          // never goes through SES/SNS) both go on the shared suppression
+          // list so no other sequence or campaign can reach this address
+          // either. Missing the bounce case here meant an address that
+          // hard-bounced through a connected mailbox stayed fully sendable
+          // everywhere else — the exact gap this list exists to close.
+          // Pulled out of the withTenant block above and run via
+          // withRlsBypass instead: Suppression is deliberately global, so
+          // an existing row owned by a different tenant must stay visible
+          // (no-op'd via update: {}) instead of RLS-hiding it and
+          // crashing the upsert's INSERT path on the unique constraint.
+          if (classification.category === 'unsubscribe' || classification.category === 'bounced') {
+            await withRlsBypass((tx) =>
+              tx.suppression.upsert({
+                where: { email: fromEmail.toLowerCase() },
+                update: {},
+                create: {
+                  email: fromEmail.toLowerCase(),
+                  reason:
+                    classification.category === 'unsubscribe' ? 'unsubscribed' : 'hard_bounce',
+                  apiKeyId: seq?.apiKeyId ?? '',
+                },
+              }),
+            ).catch(() => {});
           }
         }
+      }
 
-        // Persist reply event
-        await withTenant(mailbox.apiKeyId, (tx) => tx.replyEvent.create({
+      // Persist reply event
+      await withTenant(mailbox.apiKeyId, (tx) =>
+        tx.replyEvent.create({
           data: {
             mailboxId: mailbox.id,
             fromEmail: fromEmail.toLowerCase(),
@@ -315,9 +401,9 @@ async function pollOneMailbox(mailbox: {
             subject: subject || null,
             bodySnippet: bodySnippet || null,
           },
-        })).catch(() => {});
-      }
-
+        }),
+      ).catch(() => {});
+    }
   } catch (err) {
     logger.error({ err, mailboxId: mailbox.id }, 'IMAP poll failed for mailbox');
     // lastErrorMsg is the same field the dashboard shows as "mailbox
@@ -332,10 +418,12 @@ async function pollOneMailbox(mailbox: {
     // this product is trying not to be. Keep it in our own logs (for
     // support/debugging) without surfacing it to the customer until the
     // underlying IMAP restriction is actually fixed.
-    await withTenant(mailbox.apiKeyId, (tx) => tx.mailbox.update({
-      where: { id: mailbox.id },
-      data: { lastCheckedAt: new Date() },
-    })).catch(() => {});
+    await withTenant(mailbox.apiKeyId, (tx) =>
+      tx.mailbox.update({
+        where: { id: mailbox.id },
+        data: { lastCheckedAt: new Date() },
+      }),
+    ).catch(() => {});
   } finally {
     // Always close, even on a mid-poll failure — an un-ended connection
     // left open on every error was a real, plausible contributor to the
@@ -344,7 +432,11 @@ async function pollOneMailbox(mailbox: {
     // make a later poll's own connect attempt hang indefinitely instead of
     // failing fast.
     if (connection) {
-      try { connection.end(); } catch { /* already closed */ }
+      try {
+        connection.end();
+      } catch {
+        /* already closed */
+      }
     }
   }
 }
@@ -357,13 +449,24 @@ async function pollMailboxes(): Promise<void> {
   // write below (replyEvent, sequenceEnrollment, lead, suppression) is
   // scoped via this row's own mailbox.id/apiKeyId. withRlsBypass, not
   // withTenant: this sweep must see every tenant's mailboxes, not just one.
-  const mailboxes = await withRlsBypass((tx) => tx.mailbox.findMany({
-    where: {
-      status: 'active',
-      OR: [{ passwordEnc: { not: null } }, { oauthTokenEnc: { not: null } }],
-    },
-    select: { id: true, apiKeyId: true, type: true, host: true, port: true, username: true, passwordEnc: true, oauthTokenEnc: true },
-  }));
+  const mailboxes = await withRlsBypass((tx) =>
+    tx.mailbox.findMany({
+      where: {
+        status: 'active',
+        OR: [{ passwordEnc: { not: null } }, { oauthTokenEnc: { not: null } }],
+      },
+      select: {
+        id: true,
+        apiKeyId: true,
+        type: true,
+        host: true,
+        port: true,
+        username: true,
+        passwordEnc: true,
+        oauthTokenEnc: true,
+      },
+    }),
+  );
 
   logger.info({ mailboxCount: mailboxes.length }, 'IMAP tick starting');
 
@@ -385,7 +488,10 @@ async function pollMailboxes(): Promise<void> {
         timeoutAfter(IMAP_MAILBOX_TIMEOUT_MS, mailbox.username),
       ]);
     } catch (err) {
-      logger.error({ err, mailboxId: mailbox.id, username: mailbox.username }, 'IMAP poll timed out or failed for mailbox — moving on');
+      logger.error(
+        { err, mailboxId: mailbox.id, username: mailbox.username },
+        'IMAP poll timed out or failed for mailbox — moving on',
+      );
     }
   }
 
@@ -416,8 +522,12 @@ export function startImapWorker(): Worker {
 }
 
 export async function scheduleImapTicks(queue: import('bullmq').Queue): Promise<void> {
-  await queue.add('tick', { tick: true }, {
-    repeat: { every: 15 * 60 * 1000 }, // every 15 minutes
-    jobId: 'imap-tick-repeat',
-  });
+  await queue.add(
+    'tick',
+    { tick: true },
+    {
+      repeat: { every: 15 * 60 * 1000 }, // every 15 minutes
+      jobId: 'imap-tick-repeat',
+    },
+  );
 }

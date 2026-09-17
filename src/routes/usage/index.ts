@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { getPlanLimit, getSendLimit, getMonitorLimit } from '../../plugins/usageMeter.js';
-import { prisma } from '../../lib/prisma.js';
+import { withTenant } from '../../lib/tenantContext.js';
 
 export async function usageRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get(
@@ -12,9 +12,12 @@ export async function usageRoutes(fastify: FastifyInstance): Promise<void> {
       const key = request.apiKey;
       const apiKeyId = key.id;
 
-      const monitorCount = await prisma.monitor.count({ where: { apiKeyId, isActive: true } });
+      const monitorCount = await withTenant(apiKeyId, (tx) =>
+        tx.monitor.count({ where: { apiKeyId, isActive: true } }),
+      );
 
-      const extraVerificationCredits = (key as { extraVerificationCredits?: number }).extraVerificationCredits ?? 0;
+      const extraVerificationCredits =
+        (key as { extraVerificationCredits?: number }).extraVerificationCredits ?? 0;
       const baseLimit = getPlanLimit(key.plan);
 
       return reply.status(200).send({

@@ -15,7 +15,6 @@
 
 import SMTPServer from 'smtp-server';
 import { simpleParser } from 'mailparser';
-import { prisma } from './lib/prisma.js';
 import { logger } from './lib/logger.js';
 import { withTenant, withRlsBypass } from './lib/tenantContext.js';
 import { hashApiKey } from './lib/crypto.js';
@@ -32,10 +31,20 @@ interface RelayUser {
 
 async function resolveApiKey(password: string): Promise<RelayUser | null> {
   const keyHash = hashApiKey(password);
-  const apiKey = await prisma.apiKey.findUnique({
-    where: { keyHash },
-    select: { id: true, isActive: true, plan: true, currentMonthSendUsage: true, monthlySendLimit: true },
-  }).catch(() => null);
+  // No apiKeyId known yet — this IS the identity-discovery lookup, same
+  // reasoning as plugins/auth.ts's resolveApiKey — withRlsBypass.
+  const apiKey = await withRlsBypass((tx) =>
+    tx.apiKey.findUnique({
+      where: { keyHash },
+      select: {
+        id: true,
+        isActive: true,
+        plan: true,
+        currentMonthSendUsage: true,
+        monthlySendLimit: true,
+      },
+    }),
+  ).catch(() => null);
 
   if (!apiKey || !apiKey.isActive) return null;
   return {
@@ -50,9 +59,9 @@ function loadTlsOptions(): { key: Buffer; cert: Buffer } | null {
   if (!config.SMTP_RELAY_TLS_KEY || !config.SMTP_RELAY_TLS_CERT) {
     logger.warn(
       'SMTP_RELAY_TLS_KEY/SMTP_RELAY_TLS_CERT not set — STARTTLS is unavailable, so no client ' +
-      'will be able to authenticate (allowInsecureAuth is off by design). The relay will still ' +
-      'accept TCP connections and answer EHLO, which is enough to smoke-test connectivity, but ' +
-      'real use requires a certificate for the hostname clients will actually connect to.',
+        'will be able to authenticate (allowInsecureAuth is off by design). The relay will still ' +
+        'accept TCP connections and answer EHLO, which is enough to smoke-test connectivity, but ' +
+        'real use requires a certificate for the hostname clients will actually connect to.',
     );
     return null;
   }
@@ -73,7 +82,10 @@ const server = new SMTPServer.SMTPServer({
   ...(tls ? { key: tls.key, cert: tls.cert } : {}),
 
   onAuth(auth, _session, callback) {
-    const password = (auth as { credentials?: { password?: string }; password?: string }).credentials?.password ?? (auth as { password?: string }).password ?? '';
+    const password =
+      (auth as { credentials?: { password?: string }; password?: string }).credentials?.password ??
+      (auth as { password?: string }).password ??
+      '';
     resolveApiKey(password)
       .then((user) => {
         if (!user) {
@@ -98,16 +110,15 @@ const server = new SMTPServer.SMTPServer({
 
       simpleParser(raw)
         .then(async (parsed) => {
-          const to = [
-            ...(parsed.to ? (Array.isArray(parsed.to) ? parsed.to : [parsed.to]) : []),
-          ].flatMap((addr) => ('value' in addr ? addr.value : [addr]))
+          const to = [...(parsed.to ? (Array.isArray(parsed.to) ? parsed.to : [parsed.to]) : [])]
+            .flatMap((addr) => ('value' in addr ? addr.value : [addr]))
             .map((a) => a.address)
             .filter((a): a is string => Boolean(a));
 
           const from = parsed.from?.value?.[0]?.address ?? `relay@continuumapi.com`;
           const fromName = parsed.from?.value?.[0]?.name ?? '';
           const subject = parsed.subject ?? '(no subject)';
-          const html = typeof parsed.html === 'string' ? parsed.html : parsed.textAsHtml ?? '';
+          const html = typeof parsed.html === 'string' ? parsed.html : (parsed.textAsHtml ?? '');
           const text = parsed.text ?? '';
           const attachments: AttachmentInput[] = (parsed.attachments ?? []).map((a) => ({
             filename: a.filename ?? 'attachment',
@@ -139,7 +150,9 @@ const server = new SMTPServer.SMTPServer({
             // withRlsBypass, not withTenant: Suppression is deliberately
             // global (see schema.prisma) — a bounce/complaint under any
             // account still blocks this relay send.
-            const suppressed = await withRlsBypass((tx) => tx.suppression.findUnique({ where: { email: recipient } }));
+            const suppressed = await withRlsBypass((tx) =>
+              tx.suppression.findUnique({ where: { email: recipient } }),
+            );
             if (suppressed) {
               logger.info({ email: recipient }, 'SMTP relay: skipping suppressed recipient');
               continue;
@@ -165,13 +178,23 @@ const server = new SMTPServer.SMTPServer({
             // find it — same reason campaigns and sequences needed this:
             // no SendMessage row means no automatic suppression and no
             // closed-loop verification correction for anything sent here.
-            await withTenant(user.apiKeyId, (tx) => tx.sendMessage.create({
-              data: {
-                apiKeyId: user.apiKeyId, from, to: recipient, subject,
-                sesMessageId, status: 'sent', sentAt: new Date(),
-              },
-            })).catch((err) => {
-              logger.warn({ err, email: recipient }, 'SMTP relay: failed to register send for bounce tracking (non-fatal)');
+            await withTenant(user.apiKeyId, (tx) =>
+              tx.sendMessage.create({
+                data: {
+                  apiKeyId: user.apiKeyId,
+                  from,
+                  to: recipient,
+                  subject,
+                  sesMessageId,
+                  status: 'sent',
+                  sentAt: new Date(),
+                },
+              }),
+            ).catch((err) => {
+              logger.warn(
+                { err, email: recipient },
+                'SMTP relay: failed to register send for bounce tracking (non-fatal)',
+              );
             });
 
             sentCount++;
@@ -197,7 +220,10 @@ server.on('error', (err: Error) => {
 });
 
 server.listen(config.SMTP_RELAY_PORT, '0.0.0.0', () => {
-  logger.info({ port: config.SMTP_RELAY_PORT, tlsConfigured: !!tls }, 'Continuum SMTP relay listening');
+  logger.info(
+    { port: config.SMTP_RELAY_PORT, tlsConfigured: !!tls },
+    'Continuum SMTP relay listening',
+  );
 });
 
 const shutdown = () => {

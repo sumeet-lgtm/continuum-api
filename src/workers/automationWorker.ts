@@ -18,20 +18,22 @@ export async function runAutomationWorker(): Promise<void> {
   // automation.apiKeyId, used below (SendMessage.apiKeyId) to scope every
   // downstream write to that row's own tenant.
   // tenant-sweep: see comment above
-  const enrollments = await withRlsBypass((tx) => tx.automationEnrollment.findMany({
-    where: {
-      status: 'active',
-      nextSendAt: { lte: now },
-    },
-    include: {
-      automation: {
-        include: {
-          steps: { orderBy: { stepOrder: 'asc' } },
+  const enrollments = await withRlsBypass((tx) =>
+    tx.automationEnrollment.findMany({
+      where: {
+        status: 'active',
+        nextSendAt: { lte: now },
+      },
+      include: {
+        automation: {
+          include: {
+            steps: { orderBy: { stepOrder: 'asc' } },
+          },
         },
       },
-    },
-    take: 200,
-  }));
+      take: 200,
+    }),
+  );
 
   logger.info({ count: enrollments.length }, 'Automation enrollments due');
 
@@ -43,88 +45,112 @@ export async function runAutomationWorker(): Promise<void> {
 
     if (!step) {
       // All steps done — mark completed
-      await withTenant(apiKeyId, (tx) => tx.automationEnrollment.update({
-        where: { id: enrollment.id },
-        data: { status: 'completed', completedAt: now },
-      }));
+      await withTenant(apiKeyId, (tx) =>
+        tx.automationEnrollment.update({
+          where: { id: enrollment.id },
+          data: { status: 'completed', completedAt: now },
+        }),
+      );
       continue;
     }
 
-    // Check suppression
-    const suppressed = await withTenant(apiKeyId, (tx) => tx.suppression.findUnique({ where: { email: enrollment.email } }));
+    // Check suppression — withRlsBypass, not withTenant: a suppression
+    // caused by any tenant's send applies globally (see send/index.ts).
+    const suppressed = await withRlsBypass((tx) =>
+      tx.suppression.findUnique({ where: { email: enrollment.email } }),
+    );
     if (suppressed) {
-      await withTenant(apiKeyId, (tx) => tx.automationEnrollment.update({
-        where: { id: enrollment.id },
-        data: { status: 'unsubscribed', completedAt: now },
-      }));
+      await withTenant(apiKeyId, (tx) =>
+        tx.automationEnrollment.update({
+          where: { id: enrollment.id },
+          data: { status: 'unsubscribed', completedAt: now },
+        }),
+      );
       continue;
     }
 
-    const variables = { email: enrollment.email, ...(enrollment.data as Record<string, unknown> ?? {}) };
+    const variables = {
+      email: enrollment.email,
+      ...((enrollment.data as Record<string, unknown>) ?? {}),
+    };
     const subject = interpolate(step.subject, variables);
     const htmlBody = interpolate(step.htmlBody, variables);
     const textBody = step.textBody ? interpolate(step.textBody, variables) : undefined;
 
-    const fromEmail = step.fromEmail ?? process.env['DEFAULT_FROM_EMAIL'] ?? 'noreply@continuumapi.com';
+    const fromEmail =
+      step.fromEmail ?? process.env['DEFAULT_FROM_EMAIL'] ?? 'noreply@continuumapi.com';
     const fromName = step.fromName ?? 'Continuum';
 
     try {
-      const sesResp = await sesClient.send(new SendEmailCommand({
-        FromEmailAddress: `${fromName} <${fromEmail}>`,
-        Destination: { ToAddresses: [enrollment.email] },
-        Content: {
-          Simple: {
-            Subject: { Data: subject, Charset: 'UTF-8' },
-            Body: {
-              Html: { Data: htmlBody, Charset: 'UTF-8' },
-              ...(textBody ? { Text: { Data: textBody, Charset: 'UTF-8' } } : {}),
+      const sesResp = await sesClient.send(
+        new SendEmailCommand({
+          FromEmailAddress: `${fromName} <${fromEmail}>`,
+          Destination: { ToAddresses: [enrollment.email] },
+          Content: {
+            Simple: {
+              Subject: { Data: subject, Charset: 'UTF-8' },
+              Body: {
+                Html: { Data: htmlBody, Charset: 'UTF-8' },
+                ...(textBody ? { Text: { Data: textBody, Charset: 'UTF-8' } } : {}),
+              },
             },
           },
-        },
-      }));
+        }),
+      );
 
       // Persist SendMessage record so open/click tracking + bounce handling works
       if (sesResp.MessageId && apiKeyId) {
         const sesMessageId = sesResp.MessageId;
-        await withTenant(apiKeyId, (tx) => tx.sendMessage.create({
-          data: {
-            apiKeyId,
-            sesMessageId,
-            from: `${fromName} <${fromEmail}>`,
-            to: enrollment.email,
-            subject,
-            status: 'sent',
-          },
-        })).catch(() => { /* non-fatal — tracking optional */ });
+        await withTenant(apiKeyId, (tx) =>
+          tx.sendMessage.create({
+            data: {
+              apiKeyId,
+              sesMessageId,
+              from: `${fromName} <${fromEmail}>`,
+              to: enrollment.email,
+              subject,
+              status: 'sent',
+            },
+          }),
+        ).catch(() => {
+          /* non-fatal — tracking optional */
+        });
       }
 
-      logger.info({ enrollmentId: enrollment.id, email: enrollment.email, stepOrder: step.stepOrder }, 'Automation step sent');
+      logger.info(
+        { enrollmentId: enrollment.id, email: enrollment.email, stepOrder: step.stepOrder },
+        'Automation step sent',
+      );
 
       // Advance to next step
       const nextStep = enrollment.automation.steps[enrollment.currentStep + 1];
-      const nextSendAt = nextStep
-        ? new Date(Date.now() + nextStep.delayHours * 3600 * 1000)
-        : null;
+      const nextSendAt = nextStep ? new Date(Date.now() + nextStep.delayHours * 3600 * 1000) : null;
 
       if (nextSendAt) {
-        await withTenant(apiKeyId, (tx) => tx.automationEnrollment.update({
-          where: { id: enrollment.id },
-          data: { currentStep: enrollment.currentStep + 1, nextSendAt },
-        }));
+        await withTenant(apiKeyId, (tx) =>
+          tx.automationEnrollment.update({
+            where: { id: enrollment.id },
+            data: { currentStep: enrollment.currentStep + 1, nextSendAt },
+          }),
+        );
       } else {
-        await withTenant(apiKeyId, (tx) => tx.automationEnrollment.update({
-          where: { id: enrollment.id },
-          data: { status: 'completed', completedAt: new Date() },
-        }));
+        await withTenant(apiKeyId, (tx) =>
+          tx.automationEnrollment.update({
+            where: { id: enrollment.id },
+            data: { status: 'completed', completedAt: new Date() },
+          }),
+        );
       }
     } catch (err) {
       logger.error({ err, enrollmentId: enrollment.id }, 'Automation step send failed');
       // Leave status as active; nextSendAt will be re-tried on next worker run
       // Bump nextSendAt by 15 minutes to avoid tight retry loop
-      await withTenant(apiKeyId, (tx) => tx.automationEnrollment.update({
-        where: { id: enrollment.id },
-        data: { nextSendAt: new Date(Date.now() + 15 * 60 * 1000) },
-      }));
+      await withTenant(apiKeyId, (tx) =>
+        tx.automationEnrollment.update({
+          where: { id: enrollment.id },
+          data: { nextSendAt: new Date(Date.now() + 15 * 60 * 1000) },
+        }),
+      );
     }
   }
 

@@ -50,7 +50,9 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
   const data = job.data;
   const log = logger.child({ sendMessageId: data.sendMessageId, bullJobId: job.id });
 
-  const msg = await withTenant(data.apiKeyId, (tx) => tx.sendMessage.findUnique({ where: { id: data.sendMessageId } }));
+  const msg = await withTenant(data.apiKeyId, (tx) =>
+    tx.sendMessage.findUnique({ where: { id: data.sendMessageId } }),
+  );
   if (!msg) {
     log.warn('SendMessage record no longer exists — skipping');
     return;
@@ -64,10 +66,12 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
   }
 
   if (!isSendTransportConfigured()) {
-    await withTenant(data.apiKeyId, (tx) => tx.sendMessage.update({
-      where: { id: data.sendMessageId },
-      data: { status: 'failed', errorMessage: new SesNotConfiguredError().message },
-    }));
+    await withTenant(data.apiKeyId, (tx) =>
+      tx.sendMessage.update({
+        where: { id: data.sendMessageId },
+        data: { status: 'failed', errorMessage: new SesNotConfiguredError().message },
+      }),
+    );
     log.error('No send transport configured — cannot send');
     return;
   }
@@ -75,58 +79,84 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
   const unsubToken = generateUnsubToken(data.to, data.apiKeyId);
   const listUnsubscribeHeader = `<https://api.continuumapi.com/v1/unsubscribe?token=${unsubToken}>`;
 
-  const apiKeyRecord = await prisma.apiKey.findUnique({
-    where: { id: data.apiKeyId },
-    select: { allowSendFallback: true },
-  });
+  const apiKeyRecord = await withTenant(data.apiKeyId, (tx) =>
+    tx.apiKey.findUnique({
+      where: { id: data.apiKeyId },
+      select: { allowSendFallback: true },
+    }),
+  );
   const allowFallback = apiKeyRecord?.allowSendFallback ?? true;
 
-  const sendResult = await sendViaTransportWithFallback({
-    to: data.to,
-    from: data.from,
-    subject: data.subject,
-    ...(data.cc && data.cc.length ? { cc: data.cc } : {}),
-    ...(data.bcc && data.bcc.length ? { bcc: data.bcc } : {}),
-    ...(data.replyTo ? { replyTo: data.replyTo } : {}),
-    ...(data.htmlBody !== undefined ? { htmlBody: data.htmlBody } : {}),
-    ...(data.textBody ? { textBody: data.textBody } : {}),
-    ...(data.attachments && data.attachments.length ? { attachments: data.attachments } : {}),
-    ...(data.headers && Object.keys(data.headers).length ? { headers: data.headers } : {}),
-    listUnsubscribeHeader,
-  }, { allowFallback, logCtx: { sendMessageId: data.sendMessageId, apiKeyId: data.apiKeyId } });
+  const sendResult = await sendViaTransportWithFallback(
+    {
+      to: data.to,
+      from: data.from,
+      subject: data.subject,
+      ...(data.cc && data.cc.length ? { cc: data.cc } : {}),
+      ...(data.bcc && data.bcc.length ? { bcc: data.bcc } : {}),
+      ...(data.replyTo ? { replyTo: data.replyTo } : {}),
+      ...(data.htmlBody !== undefined ? { htmlBody: data.htmlBody } : {}),
+      ...(data.textBody ? { textBody: data.textBody } : {}),
+      ...(data.attachments && data.attachments.length ? { attachments: data.attachments } : {}),
+      ...(data.headers && Object.keys(data.headers).length ? { headers: data.headers } : {}),
+      listUnsubscribeHeader,
+    },
+    { allowFallback, logCtx: { sendMessageId: data.sendMessageId, apiKeyId: data.apiKeyId } },
+  );
 
   const sesMessageId = sendResult.ok ? sendResult.sesMessageId : null;
   const smtp2goMessageId = sendResult.ok ? sendResult.smtp2goMessageId : null;
   const status: 'sent' | 'failed' = sendResult.ok ? 'sent' : 'failed';
   const errorMessage = sendResult.ok ? null : sendResult.errorMessage;
-  if (!sendResult.ok) log.error({ errorMessage }, 'Scheduled send failed on every configured transport');
+  if (!sendResult.ok)
+    log.error({ errorMessage }, 'Scheduled send failed on every configured transport');
 
-  await withTenant(data.apiKeyId, (tx) => tx.sendMessage.update({
-    where: { id: data.sendMessageId },
-    data: {
-      sesMessageId, smtp2goMessageId, status, errorMessage,
-      sentAt: status === 'sent' ? new Date() : null,
-    },
-  }));
+  await withTenant(data.apiKeyId, (tx) =>
+    tx.sendMessage.update({
+      where: { id: data.sendMessageId },
+      data: {
+        sesMessageId,
+        smtp2goMessageId,
+        status,
+        errorMessage,
+        sentAt: status === 'sent' ? new Date() : null,
+      },
+    }),
+  );
 
   if (status === 'sent') {
     void incrementSendUsageBy(data.apiKeyId, 1);
     const payload: EmailSentPayload = {
-      event: 'email.sent', id: data.sendMessageId, to: data.to, subject: data.subject,
-      sesMessageId, smtp2goMessageId, apiKeyId: data.apiKeyId, sentAt: new Date().toISOString(), apiVersion: '2',
+      event: 'email.sent',
+      id: data.sendMessageId,
+      to: data.to,
+      subject: data.subject,
+      sesMessageId,
+      smtp2goMessageId,
+      apiKeyId: data.apiKeyId,
+      sentAt: new Date().toISOString(),
+      apiVersion: '2',
     };
     void dispatchWebhook({
-      apiKeyId: data.apiKeyId, event: 'email.sent',
-      eventId: buildEventId('email.sent', data.sendMessageId), payload,
+      apiKeyId: data.apiKeyId,
+      event: 'email.sent',
+      eventId: buildEventId('email.sent', data.sendMessageId),
+      payload,
     });
   } else {
     const payload: EmailSendFailedPayload = {
-      event: 'email.send_failed', id: data.sendMessageId, to: data.to,
-      errorMessage, apiKeyId: data.apiKeyId, apiVersion: '2',
+      event: 'email.send_failed',
+      id: data.sendMessageId,
+      to: data.to,
+      errorMessage,
+      apiKeyId: data.apiKeyId,
+      apiVersion: '2',
     };
     void dispatchWebhook({
-      apiKeyId: data.apiKeyId, event: 'email.send_failed',
-      eventId: buildEventId('email.send_failed', data.sendMessageId), payload,
+      apiKeyId: data.apiKeyId,
+      event: 'email.send_failed',
+      eventId: buildEventId('email.send_failed', data.sendMessageId),
+      payload,
     });
   }
 
@@ -134,23 +164,25 @@ async function processScheduledSend(job: Job<SendJobPayload>): Promise<void> {
 }
 
 export function startSendWorker(): void {
-  const worker = new Worker<SendJobPayload>(
-    QUEUE_SEND,
-    processScheduledSend,
-    {
-      connection: redisConnection,
-      concurrency: 5,
-      stalledInterval: 60_000,
-      maxStalledCount: 2,
-    },
-  );
+  const worker = new Worker<SendJobPayload>(QUEUE_SEND, processScheduledSend, {
+    connection: redisConnection,
+    concurrency: 5,
+    stalledInterval: 60_000,
+    maxStalledCount: 2,
+  });
 
   worker.on('completed', (job) => {
-    logger.debug({ bullJobId: job.id, sendMessageId: job.data.sendMessageId }, 'Send job completed');
+    logger.debug(
+      { bullJobId: job.id, sendMessageId: job.data.sendMessageId },
+      'Send job completed',
+    );
   });
 
   worker.on('failed', (job, err) => {
-    logger.error({ bullJobId: job?.id, sendMessageId: job?.data.sendMessageId, err }, 'Send BullMQ job failed unexpectedly');
+    logger.error(
+      { bullJobId: job?.id, sendMessageId: job?.data.sendMessageId, err },
+      'Send BullMQ job failed unexpectedly',
+    );
   });
 
   worker.on('error', (err) => {

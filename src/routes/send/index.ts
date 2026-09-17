@@ -4,8 +4,10 @@ import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
 import { requireMonthlySendQuota, incrementSendUsageBy } from '../../plugins/usageMeter.js';
 import { verifyEmail } from '../../engine/index.js';
-import { sendViaTransportWithFallback, isSendTransportConfigured } from '../../lib/sendTransport.js';
-import { prisma } from '../../lib/prisma.js';
+import {
+  sendViaTransportWithFallback,
+  isSendTransportConfigured,
+} from '../../lib/sendTransport.js';
 import { config } from '../../config.js';
 import { dispatchWebhook, buildEventId } from '../../lib/webhooks.js';
 import { Errors } from '../../plugins/errorHandler.js';
@@ -17,7 +19,7 @@ import { processTemplate } from '../../lib/spintax.js';
 import { compileMjml } from '../../lib/mjml.js';
 import { sendQueue } from '../../lib/queue.js';
 import type { SendJobPayload } from '../../types/job.js';
-import { withTenant } from '../../lib/tenantContext.js';
+import { withTenant, withRlsBypass } from '../../lib/tenantContext.js';
 
 // ─── Input schema ─────────────────────────────────────────────────────────────
 
@@ -27,42 +29,48 @@ const attachmentSchema = z.object({
   content_type: z.string().min(1).max(100),
 });
 
-const bodySchema = z.object({
-  to: z.string().email().transform((s) => s.trim().toLowerCase()),
-  // Optional — falls back to no-reply@<verified domain> when omitted (the
-  // previous, only behavior). Campaigns already lets callers pass any
-  // from_name/from_email with no extra app-level check (SES itself is the
-  // real enforcement: an unverified sending identity fails at send time
-  // regardless of what's claimed here) — matching that existing
-  // convention rather than inventing a second, inconsistent rule for this
-  // route specifically.
-  from_name: z.string().min(1).max(200).optional(),
-  from_email: z.string().email().optional(),
-  cc: z.array(z.string().email()).max(50).optional(),
-  bcc: z.array(z.string().email()).max(50).optional(),
-  subject: z.string().min(1).max(500).optional(),
-  html_body: z.string().optional(),
-  mjml_body: z.string().optional(),
-  text_body: z.string().optional(),
-  reply_to: z.union([z.string().email(), z.array(z.string().email())]).optional(),
-  attachments: z.array(attachmentSchema).max(20).optional(),
-  headers: z.record(z.string()).optional(),
-  tags: z.record(z.string()).optional(),
-  idempotency_key: z.string().max(200).optional(),
-  scheduled_at: z.string().datetime().optional(),
-  template_id: z.string().optional(),
-  variables: z.record(z.string()).optional(),
-  domain_id: z.string().optional(),
-  verify_before_send: z.boolean().default(false),
-  track_opens: z.boolean().optional(),
-  track_clicks: z.boolean().optional(),
-  test: z.boolean().default(false),
-}).refine((v) => v.html_body || v.mjml_body || v.text_body || v.template_id, {
-  message: 'html_body, text_body, or template_id is required',
-}).refine((v) => v.subject || v.template_id, {
-  message: 'subject is required when template_id is not provided',
-  path: ['subject'],
-});
+const bodySchema = z
+  .object({
+    to: z
+      .string()
+      .email()
+      .transform((s) => s.trim().toLowerCase()),
+    // Optional — falls back to no-reply@<verified domain> when omitted (the
+    // previous, only behavior). Campaigns already lets callers pass any
+    // from_name/from_email with no extra app-level check (SES itself is the
+    // real enforcement: an unverified sending identity fails at send time
+    // regardless of what's claimed here) — matching that existing
+    // convention rather than inventing a second, inconsistent rule for this
+    // route specifically.
+    from_name: z.string().min(1).max(200).optional(),
+    from_email: z.string().email().optional(),
+    cc: z.array(z.string().email()).max(50).optional(),
+    bcc: z.array(z.string().email()).max(50).optional(),
+    subject: z.string().min(1).max(500).optional(),
+    html_body: z.string().optional(),
+    mjml_body: z.string().optional(),
+    text_body: z.string().optional(),
+    reply_to: z.union([z.string().email(), z.array(z.string().email())]).optional(),
+    attachments: z.array(attachmentSchema).max(20).optional(),
+    headers: z.record(z.string()).optional(),
+    tags: z.record(z.string()).optional(),
+    idempotency_key: z.string().max(200).optional(),
+    scheduled_at: z.string().datetime().optional(),
+    template_id: z.string().optional(),
+    variables: z.record(z.string()).optional(),
+    domain_id: z.string().optional(),
+    verify_before_send: z.boolean().default(false),
+    track_opens: z.boolean().optional(),
+    track_clicks: z.boolean().optional(),
+    test: z.boolean().default(false),
+  })
+  .refine((v) => v.html_body || v.mjml_body || v.text_body || v.template_id, {
+    message: 'html_body, text_body, or template_id is required',
+  })
+  .refine((v) => v.subject || v.template_id, {
+    message: 'subject is required when template_id is not provided',
+    path: ['subject'],
+  });
 
 async function buildEmailContent(
   input: z.infer<typeof bodySchema>,
@@ -80,13 +88,15 @@ async function buildEmailContent(
   // Template resolution
   if (input.template_id) {
     const templateId = input.template_id;
-    const tmpl = await withTenant(apiKeyId, (tx) => tx.emailTemplate.findFirst({
-      where: { id: templateId, apiKeyId },
-    }));
+    const tmpl = await withTenant(apiKeyId, (tx) =>
+      tx.emailTemplate.findFirst({
+        where: { id: templateId, apiKeyId },
+      }),
+    );
     if (!tmpl) throw Errors.notFound(`Template ${input.template_id} not found.`);
     subject = input.subject || tmpl.subject;
     htmlBody = htmlBody ?? tmpl.htmlBody;
-    textBody = textBody ?? (tmpl.textBody ?? undefined);
+    textBody = textBody ?? tmpl.textBody ?? undefined;
   }
 
   // Variable substitution + spintax + liquid
@@ -112,61 +122,122 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       }
 
       const {
-        to, cc, bcc, subject: rawSubject, reply_to, attachments, headers, tags,
-        idempotency_key, scheduled_at, domain_id, verify_before_send,
-        track_opens: requestTrackOpens, track_clicks: requestTrackClicks,
-        test: isTestMode, from_name, from_email,
+        to,
+        cc,
+        bcc,
+        subject: rawSubject,
+        reply_to,
+        attachments,
+        headers,
+        tags,
+        idempotency_key,
+        scheduled_at,
+        domain_id,
+        verify_before_send,
+        track_opens: requestTrackOpens,
+        track_clicks: requestTrackClicks,
+        test: isTestMode,
+        from_name,
+        from_email,
       } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
       // ── Idempotency check ──────────────────────────────────────────────────────
       if (idempotency_key) {
-        const existing = await withTenant(apiKeyId, (tx) => tx.sendMessage.findUnique({
-          where: { idempotencyKey: idempotency_key },
-          select: { id: true, sesMessageId: true, status: true },
-        }));
+        const existing = await withTenant(apiKeyId, (tx) =>
+          tx.sendMessage.findUnique({
+            where: { idempotencyKey: idempotency_key },
+            select: { id: true, sesMessageId: true, status: true },
+          }),
+        );
         if (existing) {
-          return reply.status(200).send({ id: existing.id, sesMessageId: existing.sesMessageId, status: existing.status, idempotent: true });
+          return reply.status(200).send({
+            id: existing.id,
+            sesMessageId: existing.sesMessageId,
+            status: existing.status,
+            idempotent: true,
+          });
         }
       }
 
       // ── Suppression check ──────────────────────────────────────────────────────
-      const suppressed = await withTenant(apiKeyId, (tx) => tx.suppression.findUnique({ where: { email: to } }));
+      // withRlsBypass, not withTenant: a hard bounce/complaint under ANY
+      // tenant's send means this address doesn't work, full stop — scoping
+      // this by apiKeyId would hide another tenant's suppression of the
+      // same address, letting sends through to a known-bad recipient.
+      const suppressed = await withRlsBypass((tx) =>
+        tx.suppression.findUnique({ where: { email: to } }),
+      );
       if (suppressed) {
-        throw Errors.forbidden(`${to} is on the suppression list (${suppressed.reason}) and cannot be sent to.`);
+        throw Errors.forbidden(
+          `${to} is on the suppression list (${suppressed.reason}) and cannot be sent to.`,
+        );
       }
 
       // ── Verification ───────────────────────────────────────────────────────────
       let verificationId: string | null = null;
       if (verify_before_send) {
-        const result = await verifyEmail({ email: to, apiKeyId, bulkJobId: undefined, sourceIp: request.ip });
+        const result = await verifyEmail({
+          email: to,
+          apiKeyId,
+          bulkJobId: undefined,
+          sourceIp: request.ip,
+        });
         verificationId = result.id.startsWith('ephemeral_') ? null : result.id;
         if (result.status === 'invalid' || result.checks.isDisposable) {
-          throw Errors.forbidden(`${to} failed verification (status: ${result.status}${result.checks.isDisposable ? ', disposable' : ''}) — refusing to send.`);
+          throw Errors.forbidden(
+            `${to} failed verification (status: ${result.status}${result.checks.isDisposable ? ', disposable' : ''}) — refusing to send.`,
+          );
         }
       } else {
         try {
-          const recent = await prisma.verification.findFirst({
-            where: { email: to, apiKeyId }, orderBy: { checkedAt: 'desc' },
-            select: { id: true, status: true, isDisposable: true },
-          });
+          const recent = await withTenant(apiKeyId, (tx) =>
+            tx.verification.findFirst({
+              where: { email: to, apiKeyId },
+              orderBy: { checkedAt: 'desc' },
+              select: { id: true, status: true, isDisposable: true },
+            }),
+          );
           if (recent) verificationId = recent.id;
           if (recent && (recent.status === 'invalid' || recent.isDisposable)) {
-            logger.warn({ to, apiKeyId, verificationId }, 'Sending to a previously-flagged address');
+            logger.warn(
+              { to, apiKeyId, verificationId },
+              'Sending to a previously-flagged address',
+            );
           }
         } catch (err) {
-          logger.warn({ err, to, apiKeyId }, 'Recent-verification lookup failed — proceeding without it');
+          logger.warn(
+            { err, to, apiKeyId },
+            'Recent-verification lookup failed — proceeding without it',
+          );
         }
       }
 
       // ── Resolve sending domain ────────────────────────────────────────────────
-      let sendingDomain: { id: string; name: string; trackOpens: boolean; trackClicks: boolean; trackingDomain: string | null } | null = null;
+      let sendingDomain: {
+        id: string;
+        name: string;
+        trackOpens: boolean;
+        trackClicks: boolean;
+        trackingDomain: string | null;
+      } | null = null;
       if (domain_id) {
-        sendingDomain = await withTenant(apiKeyId, (tx) => tx.sendingDomain.findFirst({
-          where: { id: domain_id, apiKeyId, status: 'verified' },
-          select: { id: true, name: true, trackOpens: true, trackClicks: true, trackingDomain: true },
-        }));
-        if (!sendingDomain) throw Errors.validationFailed([{ field: 'domain_id', message: 'Domain not found or not verified.' }]);
+        sendingDomain = await withTenant(apiKeyId, (tx) =>
+          tx.sendingDomain.findFirst({
+            where: { id: domain_id, apiKeyId, status: 'verified' },
+            select: {
+              id: true,
+              name: true,
+              trackOpens: true,
+              trackClicks: true,
+              trackingDomain: true,
+            },
+          }),
+        );
+        if (!sendingDomain)
+          throw Errors.validationFailed([
+            { field: 'domain_id', message: 'Domain not found or not verified.' },
+          ]);
       }
 
       // from_email/from_name take precedence over the no-reply@<domain>
@@ -175,45 +246,80 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       // unverified sending identity at send time regardless of what's
       // claimed in the request).
       const resolvedFrom = from_email
-        ? (from_name ? `${from_name} <${from_email}>` : from_email)
+        ? from_name
+          ? `${from_name} <${from_email}>`
+          : from_email
         : buildFromAddress(sendingDomain);
 
       // ── Build email content ────────────────────────────────────────────────────
-      const { subject, htmlBody: rawHtml, textBody } = await buildEmailContent(parsed.data, apiKeyId);
+      const {
+        subject,
+        htmlBody: rawHtml,
+        textBody,
+      } = await buildEmailContent(parsed.data, apiKeyId);
 
       // ── Scheduled send — queue and return early ───────────────────────────────
       if (scheduled_at) {
         const scheduledDate = new Date(scheduled_at);
         const delayMs = scheduledDate.getTime() - Date.now();
-        if (delayMs < 0) throw Errors.validationFailed([{ field: 'scheduled_at', message: 'scheduled_at must be in the future.' }]);
+        if (delayMs < 0)
+          throw Errors.validationFailed([
+            { field: 'scheduled_at', message: 'scheduled_at must be in the future.' },
+          ]);
 
-        if (!isSendTransportConfigured()) throw Errors.serviceUnavailable('Send (no transport configured)');
+        if (!isSendTransportConfigured())
+          throw Errors.serviceUnavailable('Send (no transport configured)');
 
-        const record = await withTenant(apiKeyId, (tx) => tx.sendMessage.create({
-          data: {
-            apiKeyId, to, from: resolvedFrom, subject,
-            replyTo: Array.isArray(reply_to) ? reply_to.join(', ') : (reply_to ?? null),
-            cc: cc ?? [], bcc: bcc ?? [],
-            scheduledAt: scheduledDate, status: 'scheduled',
-            domainId: domain_id ?? null,
-            idempotencyKey: idempotency_key ?? null,
-            tags: tags ?? {},
+        const record = await withTenant(apiKeyId, (tx) =>
+          tx.sendMessage.create({
+            data: {
+              apiKeyId,
+              to,
+              from: resolvedFrom,
+              subject,
+              replyTo: Array.isArray(reply_to) ? reply_to.join(', ') : (reply_to ?? null),
+              cc: cc ?? [],
+              bcc: bcc ?? [],
+              scheduledAt: scheduledDate,
+              status: 'scheduled',
+              domainId: domain_id ?? null,
+              idempotencyKey: idempotency_key ?? null,
+              tags: tags ?? {},
+            },
+            select: { id: true, createdAt: true },
+          }),
+        );
+
+        await sendQueue.add(
+          'send',
+          {
+            sendMessageId: record.id,
+            to,
+            subject,
+            htmlBody: rawHtml,
+            textBody,
+            from: resolvedFrom,
+            replyTo: reply_to,
+            cc,
+            bcc,
+            attachments,
+            headers,
+            apiKeyId,
+            domainId: domain_id,
           },
-          select: { id: true, createdAt: true },
-        }));
-
-        await sendQueue.add('send', {
-          sendMessageId: record.id, to, subject, htmlBody: rawHtml, textBody,
-          from: resolvedFrom, replyTo: reply_to,
-          cc, bcc, attachments, headers, apiKeyId, domainId: domain_id,
-        }, { delay: delayMs, jobId: record.id });
+          { delay: delayMs, jobId: record.id },
+        );
 
         return reply.status(200).send({ id: record.id, status: 'scheduled', scheduled_at });
       }
 
       // ── Test mode — simulate the send without hitting SES ─────────────────────
       if (isTestMode) {
-        const { subject: testSubject, htmlBody: testHtml, textBody: testText } = await buildEmailContent(parsed.data, apiKeyId);
+        const {
+          subject: testSubject,
+          htmlBody: testHtml,
+          textBody: testText,
+        } = await buildEmailContent(parsed.data, apiKeyId);
         const testFrom = resolvedFrom;
         return reply.status(200).send({
           id: `test_${Date.now()}`,
@@ -227,12 +333,14 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
           domain: sendingDomain?.name ?? null,
           track_opens: requestTrackOpens ?? sendingDomain?.trackOpens ?? true,
           track_clicks: requestTrackClicks ?? sendingDomain?.trackClicks ?? true,
-          message: 'Test mode: email was rendered but not sent. No SES call was made and no usage was charged.',
+          message:
+            'Test mode: email was rendered but not sent. No SES call was made and no usage was charged.',
         });
       }
 
       // ── Inject tracking ────────────────────────────────────────────────────────
-      if (!isSendTransportConfigured()) throw Errors.serviceUnavailable('Send (no transport configured)');
+      if (!isSendTransportConfigured())
+        throw Errors.serviceUnavailable('Send (no transport configured)');
 
       const from = resolvedFrom;
       const trackOpens = requestTrackOpens ?? sendingDomain?.trackOpens ?? true;
@@ -243,20 +351,27 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       // ── Create DB record first so we get the real ID for tracking tokens ────────
       let record: { id: string; createdAt: Date };
       try {
-        record = await withTenant(apiKeyId, (tx) => tx.sendMessage.create({
-          data: {
-            apiKeyId, to, from, subject,
-            replyTo: Array.isArray(reply_to) ? reply_to.join(', ') : (reply_to ?? null),
-            cc: cc ?? [], bcc: bcc ?? [],
-            sesMessageId: null, status: 'queued',
-            verificationId,
-            domainId: domain_id ?? null,
-            idempotencyKey: idempotency_key ?? null,
-            tags: tags ?? {},
-            trackingToken: (trackOpens || trackClicks) ? 'pending' : null,
-          },
-          select: { id: true, createdAt: true },
-        }));
+        record = await withTenant(apiKeyId, (tx) =>
+          tx.sendMessage.create({
+            data: {
+              apiKeyId,
+              to,
+              from,
+              subject,
+              replyTo: Array.isArray(reply_to) ? reply_to.join(', ') : (reply_to ?? null),
+              cc: cc ?? [],
+              bcc: bcc ?? [],
+              sesMessageId: null,
+              status: 'queued',
+              verificationId,
+              domainId: domain_id ?? null,
+              idempotencyKey: idempotency_key ?? null,
+              tags: tags ?? {},
+              trackingToken: trackOpens || trackClicks ? 'pending' : null,
+            },
+            select: { id: true, createdAt: true },
+          }),
+        );
       } catch (err) {
         logger.error({ err, to, apiKeyId }, 'Failed to pre-create SendMessage');
         record = { id: `ephemeral_${Date.now()}`, createdAt: new Date() };
@@ -269,24 +384,33 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         htmlBody = htmlBody.replace(/<\/body>/i, `${unsubHtml}</body>`);
         if (trackOpens || trackClicks) {
           const openToken = trackOpens ? generateOpenToken(record.id) : '';
-          const clickTokenFn = trackClicks ? (url: string) => generateClickToken(record.id, url) : (_: string) => _;
-          const trackingBase = sendingDomain?.trackingDomain ? `https://${sendingDomain.trackingDomain}` : null;
+          const clickTokenFn = trackClicks
+            ? (url: string) => generateClickToken(record.id, url)
+            : (_: string) => _;
+          const trackingBase = sendingDomain?.trackingDomain
+            ? `https://${sendingDomain.trackingDomain}`
+            : null;
           htmlBody = injectTracking(htmlBody, openToken, clickTokenFn, trackingBase);
         }
       }
 
       // ── Send (SES, falling back to SMTP2GO on failure) ────────────────────────────
-      const sendResult = await sendViaTransportWithFallback({
-        to, from, subject,
-        ...(cc && cc.length ? { cc } : {}),
-        ...(bcc && bcc.length ? { bcc } : {}),
-        ...(reply_to ? { replyTo: reply_to } : {}),
-        ...(htmlBody !== undefined ? { htmlBody } : {}),
-        ...(textBody ? { textBody } : {}),
-        ...(attachments && attachments.length ? { attachments } : {}),
-        ...(headers && Object.keys(headers).length ? { headers } : {}),
-        listUnsubscribeHeader,
-      }, { allowFallback: request.apiKey.allowSendFallback, logCtx: { to, apiKeyId } });
+      const sendResult = await sendViaTransportWithFallback(
+        {
+          to,
+          from,
+          subject,
+          ...(cc && cc.length ? { cc } : {}),
+          ...(bcc && bcc.length ? { bcc } : {}),
+          ...(reply_to ? { replyTo: reply_to } : {}),
+          ...(htmlBody !== undefined ? { htmlBody } : {}),
+          ...(textBody ? { textBody } : {}),
+          ...(attachments && attachments.length ? { attachments } : {}),
+          ...(headers && Object.keys(headers).length ? { headers } : {}),
+          listUnsubscribeHeader,
+        },
+        { allowFallback: request.apiKey.allowSendFallback, logCtx: { to, apiKeyId } },
+      );
 
       const sesMessageId = sendResult.ok ? sendResult.sesMessageId : null;
       const smtp2goMessageId = sendResult.ok ? sendResult.smtp2goMessageId : null;
@@ -301,16 +425,24 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
 
       // ── Update DB record with send result ─────────────────────────────────────────
       try {
-        await withTenant(apiKeyId, (tx) => tx.sendMessage.update({
-          where: { id: record.id },
-          data: {
-            sesMessageId, smtp2goMessageId, status, errorMessage,
-            sentAt: status === 'sent' ? new Date() : null,
-            trackingToken: (trackOpens || trackClicks) ? record.id : null,
-          },
-        }));
+        await withTenant(apiKeyId, (tx) =>
+          tx.sendMessage.update({
+            where: { id: record.id },
+            data: {
+              sesMessageId,
+              smtp2goMessageId,
+              status,
+              errorMessage,
+              sentAt: status === 'sent' ? new Date() : null,
+              trackingToken: trackOpens || trackClicks ? record.id : null,
+            },
+          }),
+        );
       } catch (err) {
-        logger.error({ err, to, apiKeyId, sesMessageId, smtp2goMessageId, status }, 'Failed to update SendMessage after send');
+        logger.error(
+          { err, to, apiKeyId, sesMessageId, smtp2goMessageId, status },
+          'Failed to update SendMessage after send',
+        );
       }
 
       if (status === 'sent') {
@@ -320,19 +452,43 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       // ── Webhooks ───────────────────────────────────────────────────────────────
       if (status === 'sent') {
         const payload: EmailSentPayload = {
-          event: 'email.sent', id: record.id, to, subject, sesMessageId, smtp2goMessageId, apiKeyId,
-          sentAt: new Date().toISOString(), apiVersion: '2',
+          event: 'email.sent',
+          id: record.id,
+          to,
+          subject,
+          sesMessageId,
+          smtp2goMessageId,
+          apiKeyId,
+          sentAt: new Date().toISOString(),
+          apiVersion: '2',
         };
-        void dispatchWebhook({ apiKeyId, event: 'email.sent', eventId: buildEventId('email.sent', record.id), payload });
+        void dispatchWebhook({
+          apiKeyId,
+          event: 'email.sent',
+          eventId: buildEventId('email.sent', record.id),
+          payload,
+        });
       } else {
         const payload: EmailSendFailedPayload = {
-          event: 'email.send_failed', id: record.id, to, errorMessage, apiKeyId, apiVersion: '2',
+          event: 'email.send_failed',
+          id: record.id,
+          to,
+          errorMessage,
+          apiKeyId,
+          apiVersion: '2',
         };
-        void dispatchWebhook({ apiKeyId, event: 'email.send_failed', eventId: buildEventId('email.send_failed', record.id), payload });
+        void dispatchWebhook({
+          apiKeyId,
+          event: 'email.send_failed',
+          eventId: buildEventId('email.send_failed', record.id),
+          payload,
+        });
       }
 
       if (status === 'failed') {
-        return reply.status(isClientFault ? 400 : 502).send({ id: record.id, status, sesMessageId, smtp2goMessageId, errorMessage });
+        return reply
+          .status(isClientFault ? 400 : 502)
+          .send({ id: record.id, status, sesMessageId, smtp2goMessageId, errorMessage });
       }
       return reply.status(200).send({ id: record.id, sesMessageId, smtp2goMessageId, status });
     },
@@ -352,15 +508,19 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         scheduled_at?: string;
       };
 
-      const msg = await withTenant(apiKeyId, (tx) => tx.sendMessage.findFirst({
-        where: { id, apiKeyId, status: 'scheduled' },
-      }));
+      const msg = await withTenant(apiKeyId, (tx) =>
+        tx.sendMessage.findFirst({
+          where: { id, apiKeyId, status: 'scheduled' },
+        }),
+      );
       if (!msg) throw Errors.notFound('Scheduled message not found or not in scheduled state.');
 
       if (body.scheduled_at !== undefined) {
         const scheduledDate = new Date(body.scheduled_at);
         if (isNaN(scheduledDate.getTime()) || scheduledDate.getTime() - Date.now() < 0) {
-          throw Errors.validationFailed([{ field: 'scheduled_at', message: 'scheduled_at must be a valid future datetime.' }]);
+          throw Errors.validationFailed([
+            { field: 'scheduled_at', message: 'scheduled_at must be a valid future datetime.' },
+          ]);
         }
       }
 
@@ -390,11 +550,13 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       if (body.subject !== undefined) dbUpdates['subject'] = body.subject;
       if (body.scheduled_at !== undefined) dbUpdates['scheduledAt'] = newScheduledAt;
 
-      const updated = await withTenant(apiKeyId, (tx) => tx.sendMessage.update({
-        where: { id },
-        data: dbUpdates as never,
-        select: { id: true, subject: true, scheduledAt: true, status: true },
-      }));
+      const updated = await withTenant(apiKeyId, (tx) =>
+        tx.sendMessage.update({
+          where: { id },
+          data: dbUpdates as never,
+          select: { id: true, subject: true, scheduledAt: true, status: true },
+        }),
+      );
 
       return reply.status(200).send({ ...updated, scheduled_at: updated.scheduledAt });
     },
@@ -408,19 +570,23 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const apiKeyId = request.apiKey.id;
 
-      const msg = await withTenant(apiKeyId, (tx) => tx.sendMessage.findFirst({
-        where: { id, apiKeyId, status: 'scheduled' },
-      }));
+      const msg = await withTenant(apiKeyId, (tx) =>
+        tx.sendMessage.findFirst({
+          where: { id, apiKeyId, status: 'scheduled' },
+        }),
+      );
       if (!msg) throw Errors.notFound('Scheduled message not found.');
 
       // Remove from BullMQ
       const job = await sendQueue.getJob(id);
       if (job) await job.remove();
 
-      await withTenant(apiKeyId, (tx) => tx.sendMessage.update({
-        where: { id },
-        data: { status: 'cancelled' },
-      }));
+      await withTenant(apiKeyId, (tx) =>
+        tx.sendMessage.update({
+          where: { id },
+          data: { status: 'cancelled' },
+        }),
+      );
 
       return reply.status(200).send({ cancelled: true, id });
     },
@@ -429,5 +595,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
 
 function buildFromAddress(domain: { name: string } | null): string {
   if (domain) return `no-reply@${domain.name}`;
-  return config.SES_FROM_DOMAIN.includes('@') ? config.SES_FROM_DOMAIN : `no-reply@${config.SES_FROM_DOMAIN}`;
+  return config.SES_FROM_DOMAIN.includes('@')
+    ? config.SES_FROM_DOMAIN
+    : `no-reply@${config.SES_FROM_DOMAIN}`;
 }
