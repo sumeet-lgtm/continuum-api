@@ -90,8 +90,8 @@ describe('deriveListSegments', () => {
 
     const result = await deriveListSegments('key-1', ['list-1']);
     expect(result.segments).toHaveLength(1);
-    expect(result.segments[0].label).toBe('Full list');
-    expect(result.segments[0].signalSummary).toMatch(/no structured/i);
+    expect(result.segments[0]?.label).toBe('Full list');
+    expect(result.segments[0]?.signalSummary).toMatch(/no structured/i);
   });
 
   it('enriches from the Lead/Account table by email when a match exists, preferring it over customFields', async () => {

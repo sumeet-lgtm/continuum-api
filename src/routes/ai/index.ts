@@ -234,10 +234,14 @@ export async function interpretLeadsQuery(query: string, apiKey: string): Promis
   const toolUse = data.content?.find((c) => c.type === 'tool_use');
   const input = (toolUse?.input ?? {}) as Partial<Record<keyof LeadsQueryParams, unknown>>;
 
+  const status = typeof input.status === 'string' && (LEAD_STATUSES as readonly string[]).includes(input.status) ? input.status : undefined;
+  const search = typeof input.search === 'string' && input.search.trim() ? input.search.trim().slice(0, 200) : undefined;
+  const tag = typeof input.tag === 'string' && input.tag.trim() ? input.tag.trim().slice(0, 50) : undefined;
+
   return {
-    status: typeof input.status === 'string' && (LEAD_STATUSES as readonly string[]).includes(input.status) ? input.status : undefined,
-    search: typeof input.search === 'string' && input.search.trim() ? input.search.trim().slice(0, 200) : undefined,
-    tag: typeof input.tag === 'string' && input.tag.trim() ? input.tag.trim().slice(0, 50) : undefined,
+    ...(status !== undefined ? { status } : {}),
+    ...(search !== undefined ? { search } : {}),
+    ...(tag !== undefined ? { tag } : {}),
     sort_by: (SORTABLE_FIELDS as readonly string[]).includes(input.sort_by as string) ? (input.sort_by as SortableField) : 'createdAt',
     sort_dir: input.sort_dir === 'asc' ? 'asc' : 'desc',
     limit: typeof input.limit === 'number' && Number.isFinite(input.limit) ? Math.max(1, Math.min(50, Math.round(input.limit))) : 10,

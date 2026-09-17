@@ -116,7 +116,7 @@ async function pushRepliesForConnection(
   const replies = await withTenant(apiKeyId, (tx) => tx.replyEvent.findMany({
     where: {
       mailboxId: { in: mailboxIds },
-      receivedAt: since ? { gt: since } : undefined,
+      ...(since ? { receivedAt: { gt: since } } : {}),
     },
     orderBy: { receivedAt: 'asc' },
     take: 200,

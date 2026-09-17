@@ -79,7 +79,7 @@ export async function verifyDomain(domain: DomainToVerify) {
 
   const justVerified = allVerified && !domain.verifiedAt;
   if (justVerified) {
-    void logAudit(null, 'sending_domain.verified', { id: domain.apiKeyId, email: 'api', ip: undefined }, [{ type: 'domain', id: domain.id, name: domain.name }], domain.apiKeyId);
+    void logAudit(null, 'sending_domain.verified', { id: domain.apiKeyId, email: 'api' }, [{ type: 'domain', id: domain.id, name: domain.name }], domain.apiKeyId);
     void dispatchWebhook({
       apiKeyId: domain.apiKeyId,
       event: 'domain.verified',

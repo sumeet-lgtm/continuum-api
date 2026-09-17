@@ -73,8 +73,9 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
 
           // Idempotency
           if (msg.idempotency_key) {
+            const idempotencyKey = msg.idempotency_key;
             const existing = await withTenant(apiKeyId, (tx) => tx.sendMessage.findUnique({
-              where: { idempotencyKey: msg.idempotency_key },
+              where: { idempotencyKey },
               select: { id: true, status: true },
             }));
             if (existing) {

@@ -79,6 +79,8 @@ const TEST_KEY_RECORD = {
   isActive: true, createdAt: new Date(), revokedAt: null,
   name: null, monthlySendLimit: 500, currentMonthSendUsage: 0, sendUsageResetAt: new Date(),
   permission: 'full_access', restrictedDomainId: null, lastUsedAt: null, extraVerificationCredits: 0, extraSendCredits: 0,
+  currentMonthFinderUsage: 0, allowedIps: [] as string[], usageAlertEnabled: true, usageAlertSentAt: null,
+  allowSendFallback: true, expiresAt: null,
 };
 
 // ─── App fixture ──────────────────────────────────────────────────────────────

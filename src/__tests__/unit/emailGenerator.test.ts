@@ -124,7 +124,7 @@ describe('generateSegmentEmail', () => {
     const segment = makeSegment({ signalSummary: 'UNIQUE_TEST_SIGNAL_MARKER_12345' });
     await generateSegmentEmail('test-key', { about: 'an offer', segment });
 
-    const firstCallBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const firstCallBody = JSON.parse(fetchMock.mock.calls[0]![1].body as string);
     expect(firstCallBody.messages[0].content).toContain('UNIQUE_TEST_SIGNAL_MARKER_12345');
     // The knowledge base itself must be the system prompt, not just a mention of it.
     expect(firstCallBody.system).toContain('CONDENSED TEST KNOWLEDGE BASE');
@@ -138,7 +138,7 @@ describe('generateSegmentEmail', () => {
 
     await generateSegmentEmail('test-key', { about: 'an offer', segment: makeSegment() });
 
-    const firstCallBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const firstCallBody = JSON.parse(fetchMock.mock.calls[0]![1].body as string);
     expect(firstCallBody.model).toBe('claude-sonnet-5');
   });
 });

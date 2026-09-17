@@ -105,6 +105,8 @@ const TEST_KEY_REC = {
   isActive: true, createdAt: new Date(), revokedAt: null,
   name: null, monthlySendLimit: 500, currentMonthSendUsage: 0, sendUsageResetAt: new Date(),
   permission: 'full_access', restrictedDomainId: null, lastUsedAt: null, extraVerificationCredits: 0, extraSendCredits: 0,
+  currentMonthFinderUsage: 0, allowedIps: [] as string[], usageAlertEnabled: true, usageAlertSentAt: null,
+  allowSendFallback: true, expiresAt: null,
 };
 const AUTH = { authorization: `Bearer ${TEST_KEY}` };
 
@@ -123,6 +125,8 @@ function makeWebhook(overrides: Record<string, unknown> = {}) {
     totalDeliveries: 0,
     successCount:    0,
     failureCount:    0,
+    consecutiveFailures: 0,
+    failureAlertSentAt: null,
     secret:          'a'.repeat(64), // 64 hex chars
     ...overrides,
   };

@@ -59,8 +59,8 @@ describe('normalizeFinderFilters', () => {
     const result = await normalizeFinderFilters({ companyIndustryIncludes: ['SaaS'] });
 
     expect(result.actorInput.companyIndustryIncludes).toBeUndefined();
-    expect(result.rejectedByField.companyIndustryIncludes.invalid).toEqual(['SaaS']);
-    expect(result.rejectedByField.companyIndustryIncludes.validSample).toContain('Computer Software');
+    expect(result.rejectedByField.companyIndustryIncludes?.invalid).toEqual(['SaaS']);
+    expect(result.rejectedByField.companyIndustryIncludes?.validSample).toContain('Computer Software');
   });
 
   it('silently drops (rather than rejects) an unmatched value for a huge enum like technologies', async () => {

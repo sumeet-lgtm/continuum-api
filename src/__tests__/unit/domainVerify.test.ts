@@ -36,7 +36,7 @@ function makeDomain(overrides: Partial<Parameters<typeof verifyDomain>[0]> = {})
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockUpdate.mockImplementation(({ data }) => Promise.resolve({ id: 'dom-1', name: 'wyberai.com', ...data } as never));
+  mockUpdate.mockImplementation(({ data }) => Promise.resolve({ id: 'dom-1', name: 'wyberai.com', ...data }) as never);
 });
 
 describe('verifyDomain', () => {

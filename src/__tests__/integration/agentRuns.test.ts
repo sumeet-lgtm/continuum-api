@@ -122,6 +122,8 @@ const TEST_KEY_REC = {
   isActive: true, createdAt: new Date(), revokedAt: null,
   name: null, monthlySendLimit: 500, currentMonthSendUsage: 0, sendUsageResetAt: new Date(),
   permission: 'full_access', restrictedDomainId: null, lastUsedAt: null, extraVerificationCredits: 0, extraSendCredits: 0,
+  currentMonthFinderUsage: 0, allowedIps: [] as string[], usageAlertEnabled: true, usageAlertSentAt: null,
+  allowSendFallback: true, expiresAt: null,
 };
 const AUTH = { authorization: `Bearer ${TEST_KEY}` };
 
@@ -143,10 +145,11 @@ function makeAgentRun(overrides: Record<string, unknown> = {}) {
     pausedAt: null,
     startedAt: null,
     completedAt: null,
+    createdByEmail: null,
     createdAt: new Date('2026-09-15T10:00:00Z'),
     cancelledAt: null,
     ...overrides,
-  };
+  } as never;
 }
 
 // ─── App fixture ──────────────────────────────────────────────────────────────
@@ -170,7 +173,7 @@ beforeEach(() => {
 describe('POST /v1/agent-runs', () => {
   beforeEach(() => {
     mockRunCount.mockResolvedValue(0);
-    mockListFind.mockResolvedValue({ id: 'list-001' });
+    mockListFind.mockResolvedValue({ id: 'list-001' } as never);
     mockRunCreate.mockResolvedValue(makeAgentRun());
   });
 
@@ -282,9 +285,9 @@ describe('GET /v1/agent-runs/:id/events', () => {
   });
 
   it('returns 200 with paginated events', async () => {
-    mockRunFindFirst.mockResolvedValue({ id: 'run-001' });
+    mockRunFindFirst.mockResolvedValue({ id: 'run-001' } as never);
     mockEventFindMany.mockResolvedValue([
-      { id: 'evt-1', eventType: 'verified', message: 'Verified 3, 3 valid', data: { valid: 3 }, createdAt: new Date() },
+      { id: 'evt-1', agentRunId: 'run-001', eventType: 'verified', message: 'Verified 3, 3 valid', data: { valid: 3 }, createdAt: new Date() },
     ]);
     mockEventCount.mockResolvedValue(1);
     const res = await app.inject({ method: 'GET', url: '/v1/agent-runs/run-001/events', headers: AUTH });
@@ -427,7 +430,7 @@ function makeNurtureAgentRun(overrides: Record<string, unknown> = {}) {
 describe('POST /v1/agent-runs — nurture pillar', () => {
   beforeEach(() => {
     mockRunCount.mockResolvedValue(0);
-    mockListFind.mockResolvedValue({ id: 'list-001' });
+    mockListFind.mockResolvedValue({ id: 'list-001' } as never);
     mockRunCreate.mockResolvedValue(makeNurtureAgentRun());
   });
 
@@ -579,7 +582,7 @@ describe('POST /v1/agent-runs — lead_finding pillar', () => {
   });
 
   it('creates successfully when sequenceId belongs to this key', async () => {
-    mockSequenceFind.mockResolvedValue({ id: 'seq-001' });
+    mockSequenceFind.mockResolvedValue({ id: 'seq-001' } as never);
     const res = await app.inject({
       method: 'POST', url: '/v1/agent-runs',
       headers: { ...AUTH, 'content-type': 'application/json' },
@@ -604,7 +607,7 @@ describe('POST /v1/agent-runs — warmup pillar', () => {
   beforeEach(() => {
     mockRunCount.mockResolvedValue(0);
     mockRunFindFirst.mockResolvedValue(null); // no existing duplicate warmup agent
-    mockMailboxFind.mockResolvedValue({ id: 'mbx-001', warmupConfig: { dailyRampUp: 2 } });
+    mockMailboxFind.mockResolvedValue({ id: 'mbx-001', warmupConfig: { dailyRampUp: 2 } } as never);
     mockRunCreate.mockResolvedValue(makeWarmupAgentRun());
   });
 
@@ -632,7 +635,7 @@ describe('POST /v1/agent-runs — warmup pillar', () => {
   });
 
   it('returns 422 when the mailbox does not have warmup enabled', async () => {
-    mockMailboxFind.mockResolvedValue({ id: 'mbx-001', warmupConfig: null });
+    mockMailboxFind.mockResolvedValue({ id: 'mbx-001', warmupConfig: null } as never);
     const res = await app.inject({
       method: 'POST', url: '/v1/agent-runs',
       headers: { ...AUTH, 'content-type': 'application/json' },
@@ -642,7 +645,7 @@ describe('POST /v1/agent-runs — warmup pillar', () => {
   });
 
   it('returns 422 when this mailbox already has an active warmup agent', async () => {
-    mockRunFindFirst.mockResolvedValue({ id: 'run-existing' });
+    mockRunFindFirst.mockResolvedValue({ id: 'run-existing' } as never);
     const res = await app.inject({
       method: 'POST', url: '/v1/agent-runs',
       headers: { ...AUTH, 'content-type': 'application/json' },
@@ -676,7 +679,7 @@ function makeOutboundAgentRun(overrides: Record<string, unknown> = {}) {
 describe('POST /v1/agent-runs — outbound pillar', () => {
   beforeEach(() => {
     mockRunCount.mockResolvedValue(0);
-    mockLeadFindMany.mockResolvedValue([{ id: 'lead-001' }, { id: 'lead-002' }]);
+    mockLeadFindMany.mockResolvedValue([{ id: 'lead-001' }, { id: 'lead-002' }] as never);
     mockRunCreate.mockResolvedValue(makeOutboundAgentRun());
   });
 
@@ -702,7 +705,7 @@ describe('POST /v1/agent-runs — outbound pillar', () => {
   });
 
   it('returns 422 when only some of the given leadIds belong to this key', async () => {
-    mockLeadFindMany.mockResolvedValue([{ id: 'lead-001' }]); // only 1 of 2 found
+    mockLeadFindMany.mockResolvedValue([{ id: 'lead-001' }] as never); // only 1 of 2 found
     const res = await app.inject({
       method: 'POST', url: '/v1/agent-runs',
       headers: { ...AUTH, 'content-type': 'application/json' },

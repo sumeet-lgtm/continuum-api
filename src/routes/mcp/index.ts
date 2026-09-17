@@ -608,7 +608,7 @@ async function callTool(
       }
       const limit = Math.min(50, Math.max(1, Number(args['limit'] ?? 20)));
       const leads = await withTenant(apiKeyId, (tx) => tx.lead.findMany({
-        where: where as NonNullable<Parameters<typeof prisma.lead.findMany>[0]>['where'],
+        where: where as Prisma.LeadWhereInput,
         select: { id: true, email: true, firstName: true, lastName: true, company: true, title: true, status: true, createdAt: true },
         orderBy: { createdAt: 'desc' },
         take: limit,

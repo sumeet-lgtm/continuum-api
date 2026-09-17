@@ -22,6 +22,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { Prisma } from '@prisma/client';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { requireAuth } from '../../plugins/auth.js';
 import { requireRateLimit } from '../../plugins/rateLimit.js';
@@ -262,7 +263,7 @@ async function executeRule(apiKeyId: string, connector: string, normalized: Norm
   if (rule.action === 'enroll_sequence' && rule.sequence_id && normalized.customer_email) {
     await withTenant(apiKeyId, (tx) => tx.sequenceEnrollment.upsert({
       where:  { sequenceId_email: { sequenceId: rule.sequence_id!, email: normalized.customer_email! } },
-      create: { sequenceId: rule.sequence_id!, email: normalized.customer_email!, status: 'active', nextSendAt: new Date(), variables: normalized.metadata as Parameters<typeof prisma.sequenceEnrollment.create>[0]['data']['variables'] },
+      create: { sequenceId: rule.sequence_id!, email: normalized.customer_email!, status: 'active', nextSendAt: new Date(), variables: normalized.metadata as Prisma.InputJsonValue },
       update: {},
     }));
     return { status: 'enrolled' };

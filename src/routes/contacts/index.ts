@@ -640,7 +640,7 @@ export async function contactRoutes(fastify: FastifyInstance): Promise<void> {
       // per-pair transaction) so RLS sees app.current_api_key_id — this is
       // still many small independent transactions, not the one big shared
       // one the comment above rules out.
-      async function upsertOne(c: { email: string; first_name?: string | null; last_name?: string | null; custom_fields?: Record<string, string> }): Promise<boolean> {
+      async function upsertOne(c: typeof contacts[number]): Promise<boolean> {
         const email = c.email.toLowerCase();
         try {
           await withTenant(apiKeyId, async (tx) => {

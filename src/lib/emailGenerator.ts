@@ -28,14 +28,14 @@ export interface GenerateCopyInput {
   /** What's being offered / the campaign's actual subject matter, in the customer's own words — e.g. "a pentesting-as-a-service tool for security teams at Series B+ companies". */
   about: string;
   sender?: {
-    name?: string;
-    company?: string;
-    product?: string;
-  };
-  tone?: 'professional' | 'casual' | 'direct' | 'technical';
+    name?: string | undefined;
+    company?: string | undefined;
+    product?: string | undefined;
+  } | undefined;
+  tone?: 'professional' | 'casual' | 'direct' | 'technical' | undefined;
   segment: CampaignSegment;
   /** Which touch this is in a multi-step sequence, e.g. "step 1 of 5 — the opening spark" or "step 4 of 5 — proof, after two prior touches with no reply". Drives the SPBC framework (knowledge base §5.2): each touch needs a genuinely different angle, not a rephrase. Omit for a single, one-off campaign email. */
-  stepContext?: string;
+  stepContext?: string | undefined;
 }
 
 export interface GeneratedEmail {

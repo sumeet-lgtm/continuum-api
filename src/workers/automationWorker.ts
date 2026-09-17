@@ -86,10 +86,11 @@ export async function runAutomationWorker(): Promise<void> {
 
       // Persist SendMessage record so open/click tracking + bounce handling works
       if (sesResp.MessageId && apiKeyId) {
+        const sesMessageId = sesResp.MessageId;
         await withTenant(apiKeyId, (tx) => tx.sendMessage.create({
           data: {
             apiKeyId,
-            sesMessageId: sesResp.MessageId,
+            sesMessageId,
             from: `${fromName} <${fromEmail}>`,
             to: enrollment.email,
             subject,

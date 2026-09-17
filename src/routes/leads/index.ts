@@ -10,7 +10,7 @@ import { config } from '../../config.js';
 // Normalize one Apify dataset row to the Continuum lead schema.
 // Handles Apollo, LinkedIn employee/search, Google Maps, and generic CSV actors.
 function mapApifyRow(row: Record<string, unknown>): {
-  email?: string; first_name?: string; last_name?: string; company?: string; title?: string;
+  email?: string | undefined; first_name?: string | undefined; last_name?: string | undefined; company?: string | undefined; title?: string | undefined;
 } {
   const str = (v: unknown): string | undefined =>
     typeof v === 'string' && v.trim() ? v.trim() : undefined;
@@ -259,6 +259,7 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
     if (!body.status || !VALID_STATUSES.includes(body.status as typeof VALID_STATUSES[number])) {
       throw Errors.validationFailed([{ field: 'status', message: `Must be one of: ${VALID_STATUSES.join(', ')}` }]);
     }
+    const status = body.status;
 
     const updated = await withTenant(apiKeyId, async (tx) => {
       const lead = await tx.lead.findFirst({ where: { id, apiKeyId } });
@@ -267,9 +268,9 @@ export async function leadRoutes(fastify: FastifyInstance): Promise<void> {
       return tx.lead.update({
         where: { id },
         data: {
-          status: body.status,
-          ...(body.status === 'unsubscribed' && { unsubscribedAt: new Date() }),
-          ...(body.status === 'replied' && { repliedAt: new Date() }),
+          status,
+          ...(status === 'unsubscribed' && { unsubscribedAt: new Date() }),
+          ...(status === 'replied' && { repliedAt: new Date() }),
         },
       });
     });
