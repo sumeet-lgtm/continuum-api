@@ -119,30 +119,60 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         // tries to INSERT a second row with the same email and dies on the
         // unique constraint instead of just linking the new workosId to the
         // existing account.
-        const existingUser =
-          (await prisma.user.findUnique({ where: { workosId: workosUser.id } })) ??
-          (await prisma.user.findUnique({ where: { email: workosUser.email } }));
+        //
+        // The teamMember lookup below only needs workosUser.email — it
+        // doesn't depend on `user` at all — so it runs concurrently with the
+        // user upsert chain instead of after it. Measured live: this whole
+        // callback was taking ~4s against Supabase's pooler (each DB round
+        // trip here runs at meaningfully higher latency than a same-region
+        // connection would), slow enough that a real login felt like it had
+        // hung. Every independent DB call in this handler that can run
+        // concurrently should, for exactly that reason — see accountData.ts's
+        // exportAccountData for the same fix applied to a harder case.
+        const userLookupPromise = (async () => {
+          const existingUser =
+            (await prisma.user.findUnique({ where: { workosId: workosUser.id } })) ??
+            (await prisma.user.findUnique({ where: { email: workosUser.email } }));
 
-        const user = existingUser
-          ? await prisma.user.update({
-              where: { id: existingUser.id },
-              data: {
-                email: workosUser.email,
-                workosId: workosUser.id,
-                firstName: workosUser.firstName ?? null,
-                lastName: workosUser.lastName ?? null,
-                ...(workosOrgId ? { orgId: workosOrgId } : {}),
-              },
-            })
-          : await prisma.user.create({
-              data: {
-                email: workosUser.email,
-                workosId: workosUser.id,
-                firstName: workosUser.firstName ?? null,
-                lastName: workosUser.lastName ?? null,
-                orgId: workosOrgId ?? null,
-              },
-            });
+          return existingUser
+            ? prisma.user.update({
+                where: { id: existingUser.id },
+                data: {
+                  email: workosUser.email,
+                  workosId: workosUser.id,
+                  firstName: workosUser.firstName ?? null,
+                  lastName: workosUser.lastName ?? null,
+                  ...(workosOrgId ? { orgId: workosOrgId } : {}),
+                },
+              })
+            : prisma.user.create({
+                data: {
+                  email: workosUser.email,
+                  workosId: workosUser.id,
+                  firstName: workosUser.firstName ?? null,
+                  lastName: workosUser.lastName ?? null,
+                  orgId: workosOrgId ?? null,
+                },
+              });
+        })();
+
+        // Check if this email belongs to a team member of another workspace.
+        // No apiKeyId is known yet at this point — this call and every other
+        // apiKey/teamMember/teamInvite call in this file is identity discovery
+        // (find which tenant this session belongs to), not an operation
+        // already scoped to one — hence withRlsBypass() throughout, not
+        // withTenant(). See tenantContext.ts.
+        const teamMembershipPromise = withRlsBypass((tx) =>
+          tx.teamMember.findFirst({
+            where: { email: workosUser.email.toLowerCase() },
+            orderBy: { joinedAt: 'asc' },
+          }),
+        );
+
+        const [user, teamMembership] = await Promise.all([
+          userLookupPromise,
+          teamMembershipPromise,
+        ]);
 
         // Capture org membership if user authenticated via an org SSO
         let orgRole: string | undefined;
@@ -181,19 +211,6 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
             // Non-fatal — proceed without org role in JWT
           }
         }
-
-        // Check if this email belongs to a team member of another workspace.
-        // No apiKeyId is known yet at this point — this call and every other
-        // apiKey/teamMember/teamInvite call in this file is identity discovery
-        // (find which tenant this session belongs to), not an operation
-        // already scoped to one — hence withRlsBypass() throughout, not
-        // withTenant(). See tenantContext.ts.
-        const teamMembership = await withRlsBypass((tx) =>
-          tx.teamMember.findFirst({
-            where: { email: workosUser.email.toLowerCase() },
-            orderBy: { joinedAt: 'asc' },
-          }),
-        );
 
         // Find or create a primary API key scoped to this user
         let apiKey = await withRlsBypass((tx) =>
