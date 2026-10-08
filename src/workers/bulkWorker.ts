@@ -649,47 +649,78 @@ async function failJob(jobId: string, apiKeyId: string, errorMessage: string): P
 
 // ─── Stall recovery ───────────────────────────────────────────────────────────
 
+const STALL_CUTOFF_MS = 30 * 60_000;
+const RECOVERY_SWEEP_INTERVAL_MS = 15 * 60_000;
+
+// BullMQ states that mean the job is still live in the queue — leave those
+// alone. Anything else (failed, completed, unknown) is a dead entry that would
+// silently block a re-add under the same jobId.
+const LIVE_QUEUE_STATES = new Set(['waiting', 'active', 'delayed', 'prioritized', 'waiting-children']);
+
 /**
- * On worker startup, find any jobs left in 'processing' state from a previous
- * crash and re-enqueue them. BullMQ's own stall detection handles queue-level
- * requeuing, but we also reset the DB status to 'pending' so the UI is consistent.
+ * Find bulk jobs the queue has lost track of and re-enqueue them. Runs on
+ * startup and then every RECOVERY_SWEEP_INTERVAL_MS. Two kinds of orphan:
+ *
+ *  - 'processing' past the cutoff: the worker died mid-job.
+ *  - 'pending' past the cutoff: never picked up because its queue entry is
+ *    gone (e.g. the Jul 2026 Upstash→Railway Redis swap dropped every queued
+ *    job) or a dead failed/completed entry under the same `bulk-<id>` jobId
+ *    made queue.add() a silent no-op. Before this, both stayed pending forever.
+ *
+ * A job whose queue entry is still live (e.g. a 29k-row job legitimately
+ * running for hours, or one waiting behind others) is skipped untouched.
  */
-async function recoverStalledJobs(): Promise<void> {
-  const cutoff = new Date(Date.now() - 30 * 60_000); // 30 minutes ago
+export async function recoverStalledJobs(): Promise<void> {
+  const cutoff = new Date(Date.now() - STALL_CUTOFF_MS);
 
   // tenant-sweep: finds every tenant's stalled jobs, by design — each is
   // re-scoped to its own apiKeyId below before being written to.
   const stalled = await withRlsBypass((tx) => tx.bulkJob.findMany({
     where: {
-      status:   'processing',
-      startedAt: { lt: cutoff },
+      OR: [
+        { status: 'processing', startedAt: { lt: cutoff } },
+        { status: 'pending',    createdAt: { lt: cutoff } },
+      ],
     },
-    select: { id: true, fileName: true, apiKeyId: true, storagePath: true },
+    select: { id: true, status: true, fileName: true, apiKeyId: true, storagePath: true },
   }));
 
   if (stalled.length === 0) return;
 
-  logger.warn({ count: stalled.length }, 'Found stalled bulk jobs — re-enqueuing');
+  const queue = new Queue<BulkJobPayload>(QUEUE_BULK, { connection: redisConnection });
+  try {
+    for (const job of stalled) {
+      try {
+        const bullJobId = `bulk-${job.id}`;
+        const existing = await queue.getJob(bullJobId);
+        if (existing) {
+          const state = await existing.getState();
+          if (LIVE_QUEUE_STATES.has(state)) continue;
+          await existing.remove();
+        }
 
-  for (const job of stalled) {
-    // Do NOT reset the counts — the worker resumes from already-processed rows,
-    // so keeping the partial progress means a reclaimed job continues instead
-    // of re-verifying (and re-charging) everything from zero.
-    await withTenant(job.apiKeyId, (tx) => tx.bulkJob.update({
-      where: { id: job.id },
-      data:  { status: 'pending', startedAt: null },
-    }));
+        // Do NOT reset the counts — the worker resumes from already-processed rows,
+        // so keeping the partial progress means a reclaimed job continues instead
+        // of re-verifying (and re-charging) everything from zero.
+        if (job.status === 'processing') {
+          await withTenant(job.apiKeyId, (tx) => tx.bulkJob.update({
+            where: { id: job.id },
+            data:  { status: 'pending', startedAt: null },
+          }));
+        }
 
-    // Re-create the BullMQ job (will no-op if it already exists due to jobId dedup)
-    const queue = new Queue<BulkJobPayload>(QUEUE_BULK, { connection: redisConnection });
-    await queue.add(
-      'process-bulk',
-      { jobId: job.id, apiKeyId: job.apiKeyId, storagePath: job.storagePath, fileName: job.fileName },
-      { jobId: `bulk-${job.id}` },
-    );
+        await queue.add(
+          'process-bulk',
+          { jobId: job.id, apiKeyId: job.apiKeyId, storagePath: job.storagePath, fileName: job.fileName },
+          { jobId: bullJobId },
+        );
+        logger.warn({ jobId: job.id, previousStatus: job.status }, 'Orphaned bulk job re-enqueued');
+      } catch (err) {
+        logger.error({ jobId: job.id, err }, 'Failed to recover bulk job — will retry next sweep');
+      }
+    }
+  } finally {
     await queue.close();
-
-    logger.info({ jobId: job.id }, 'Stalled job re-enqueued');
   }
 }
 
@@ -698,7 +729,12 @@ async function recoverStalledJobs(): Promise<void> {
 function startBulkWorker(): void {
   loadDisposableList();
 
-  void recoverStalledJobs();
+  const sweep = (): void => {
+    recoverStalledJobs().catch((err) => logger.error({ err }, 'Bulk recovery sweep failed'));
+  };
+  sweep();
+  const sweepTimer = setInterval(sweep, RECOVERY_SWEEP_INTERVAL_MS);
+  sweepTimer.unref();
 
   const worker = new Worker<BulkJobPayload>(QUEUE_BULK, processBulkJob, {
     connection:      redisConnection,
@@ -727,6 +763,7 @@ function startBulkWorker(): void {
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Bulk worker shutting down');
+    clearInterval(sweepTimer);
     await worker.close();
     await prisma.$disconnect();
     process.exit(0);
