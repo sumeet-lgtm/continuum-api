@@ -330,7 +330,12 @@ describe('POST /v1/send', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json().status).toBe('failed');
-    expect(res.json().errorMessage).toContain('not verified');
+    // Customer-facing wording: names the domain and says where to fix it, with
+    // no mention of the backup provider's own dashboard.
+    expect(res.json().errorMessage).toContain("isn't verified");
+    expect(res.json().errorMessage).toContain('unverified-domain.com');
+    expect(res.json().errorMessage).toContain('/dashboard/domains');
+    expect(res.json().errorMessage).not.toMatch(/SMTP2GO|Verified Senders/i);
   });
 
   it('increments send usage only on a successful send', async () => {

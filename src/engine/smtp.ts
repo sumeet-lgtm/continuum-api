@@ -76,7 +76,20 @@ export async function smtpProbeWithFallback(
 // verification during an outage skips straight past the dead relay
 // instead of re-discovering it's dead one more time.
 const RELAY_DOWN_KEY = 'smtp:relay_down';
-const RELAY_DOWN_TTL_SECONDS = 60;
+const RELAY_DOWN_TTL_SECONDS = 300;
+
+/** Quick TCP reachability check of the relay's host:port. Marks the relay down on failure. */
+async function relayReachable(): Promise<boolean> {
+  try {
+    const u = new URL(config.SMTP_PROBE_URL!);
+    const port = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
+    const ok = await tcpReachable(u.hostname, port, 1_500);
+    if (!ok) markRelayDown();
+    return ok;
+  } catch {
+    return true; // unparseable URL: let remoteProbe surface the real error
+  }
+}
 
 async function isRelayMarkedDown(): Promise<boolean> {
   try {
@@ -101,8 +114,15 @@ export async function smtpProbe(
   const domain = email.split('@')[1] ?? '';
   if (!domain) return notChecked('Could not extract domain from email');
 
-  const useRelay = config.SMTP_PROBE_URL && !(await isRelayMarkedDown());
-  const result = useRelay
+  // A relay is configured because this host can't reach port 25 itself (Railway
+  // blocks it), so a local probe is pointless when the relay is down: it only
+  // burns up to 2s per MX host before the paid-provider fallback. Check the
+  // relay's TCP port first (1.5s cap) instead of waiting out fetch's 10s
+  // connect timeout, and short-circuit straight to the fallback if it's gone.
+  if (config.SMTP_PROBE_URL && (await isRelayMarkedDown() || !(await relayReachable()))) {
+    return notChecked('relay_unreachable');
+  }
+  const result = config.SMTP_PROBE_URL
     ? await remoteProbe(email, mxHost)
     : await localProbe(email, domain, mxHost);
 

@@ -23,6 +23,19 @@ export type SendTransportResult =
   | { ok: true; transport: 'smtp2go'; sesMessageId: null; smtp2goMessageId: string }
   | { ok: false; errorMessage: string; isClientFault: boolean };
 
+/**
+ * Turns a raw transport rejection about an unverified sender into something a
+ * customer can act on. The raw text names our backup provider's own dashboard
+ * ("On your Sending > Verified Senders page…"), which the customer can't see.
+ * Returns null when the failure isn't that case so callers keep the raw message.
+ */
+function friendlyUnverifiedSender(rawMessage: string, from: string): string | null {
+  if (!/not verified|identities failed the check|sender domain not verified/i.test(rawMessage)) return null;
+  const addr = from.match(/<([^>]+)>/)?.[1] ?? from;
+  const domain = addr.split('@')[1]?.trim() || addr;
+  return `The sending domain "${domain}" isn't verified for your account. Add it under Domains (https://app.continuumapi.com/dashboard/domains) and publish the DNS records it shows, or leave out from_email to send from the default sender.`;
+}
+
 export function isSendTransportConfigured(): boolean {
   return isSesConfigured() || isSmtp2goConfigured();
 }
@@ -71,10 +84,12 @@ export async function sendViaTransportWithFallback(
       // domain, which BOTH transports correctly refuse) misclassified as a
       // server fault and returned a bare 502 instead of a 400 explaining
       // what to actually fix.
-      const isClientFault = (sesError as { $fault?: string } | null)?.$fault === 'client';
+      const rawMessage = err instanceof Error ? err.message : 'Unknown SMTP2GO error';
+      const friendly = friendlyUnverifiedSender(rawMessage, input.from);
+      const isClientFault = friendly !== null || (sesError as { $fault?: string } | null)?.$fault === 'client';
       return {
         ok: false,
-        errorMessage: err instanceof Error ? err.message : 'Unknown SMTP2GO error',
+        errorMessage: friendly ?? rawMessage,
         isClientFault,
       };
     }
@@ -86,6 +101,7 @@ export async function sendViaTransportWithFallback(
   const errorMessage = sesError instanceof SesNotConfiguredError
     ? sesError.message
     : (sesError instanceof Error ? sesError.message : 'No send transport configured (set AWS_* or SMTP2GO_API_KEY)');
-  const isClientFault = (sesError as { $fault?: string } | null)?.$fault === 'client';
-  return { ok: false, errorMessage, isClientFault };
+  const friendly = friendlyUnverifiedSender(errorMessage, input.from);
+  const isClientFault = friendly !== null || (sesError as { $fault?: string } | null)?.$fault === 'client';
+  return { ok: false, errorMessage: friendly ?? errorMessage, isClientFault };
 }

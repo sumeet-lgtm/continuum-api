@@ -165,10 +165,17 @@ export function welcomeEmail(keyPrefix: string, firstName?: string | null): { su
   -H "Authorization: Bearer YOUR_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"email":"someone@company.com"}'</pre>
+      ${p('Then try a send. <code style="font-family:monospace;font-size:12px">"test": true</code> renders the email without sending or charging anything:')}
+      <pre style="background:#F9FAFB;border:1px solid #E5E7EB;border-radius:6px;padding:14px;font-family:monospace;font-size:12px;color:#374151;margin:0 0 20px;overflow-x:auto">curl -X POST https://api.continuumapi.com/v1/send \\
+  -H "Authorization: Bearer YOUR_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"to":"you@example.com","subject":"Hello","html_body":"&lt;p&gt;Hi!&lt;/p&gt;","test":true}'</pre>
+      ${p('Remove <code style="font-family:monospace;font-size:12px">"test": true</code> to really send. Until you add a domain, mail goes out from Continuum\'s default sender. To send from your own address, add your domain under <a href="https://app.continuumapi.com/dashboard/domains" style="color:#374151">Domains</a> and publish the DNS records it shows.')}
       ${BTN('https://app.continuumapi.com/dashboard', 'Open Dashboard →')}
       ${DIVIDER}
       ${ROW('API endpoint', '<code style="font-family:monospace;font-size:12px">api.continuumapi.com</code>')}
-      ${ROW('Monthly verifications', '500 (free)')}
+      ${ROW('Monthly verifications', '1,000 (free)')}
+      ${ROW('Monthly sends', '1,000 (free)')}
       ${ROW('Docs', '<a href="https://continuumapi.com/docs" style="color:#374151">continuumapi.com/docs</a>')}
     `),
   };

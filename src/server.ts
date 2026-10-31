@@ -16,6 +16,7 @@ import { authPlugin } from './plugins/auth.js';
 import { rateLimitPlugin } from './plugins/rateLimit.js';
 import { errorHandler } from './plugins/errorHandler.js';
 import { healthRoutes } from './routes/health.js';
+import { rootRoutes } from './routes/root.js';
 import { verifySingleRoute } from './routes/verify/single.js';
 import { verifyPublicRoute } from './routes/verify/public.js';
 import { chatPublicRoutes } from './routes/chat/public.js';
@@ -184,6 +185,7 @@ async function buildApp(): Promise<FastifyInstance> {
 
   // ─── Routes ───────────────────────────────────────────────────────────────
   await app.register(healthRoutes);
+  await app.register(rootRoutes);
   await app.register(verifySingleRoute, { prefix: '/v1' });
   await app.register(verifyPublicRoute, { prefix: '/v1' });
   await app.register(chatPublicRoutes, { prefix: '/v1' });
@@ -258,7 +260,7 @@ async function buildApp(): Promise<FastifyInstance> {
       // so "is my latest deploy actually live" has a real answer instead of
       // inference from container uptime.
       commit: process.env['COMMIT_SHA'] ?? 'unknown',
-      docs: 'https://github.com/your-org/continuum#readme',
+      docs: 'https://continuumapi.com/docs',
       health: '/health',
     });
   });

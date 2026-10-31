@@ -105,6 +105,18 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   // Role check is sub-millisecond and runs in same tick — attribute its time to disposable slot
   const roleMs = 0;
 
+  // Deliverability (SPF/DKIM/DMARC/blacklist DNS lookups) needs only the domain,
+  // not the SMTP result, so start it now and await it after the (slow) SMTP step
+  // instead of running the two back to back.
+  const deliverabilityPromise = Promise.all([
+    checkDeliverability(domain).catch(() => ({
+      spfValid: false, spfRecord: null, dmarcValid: false, dmarcRecord: null,
+      dkimFound: false, dkimSelectors: [], blacklisted: false, blacklists: [],
+    })),
+    Promise.resolve(checkToxic(domain)),
+    Promise.resolve(checkLookalike(domain)),
+  ]);
+
   // ── 6. SMTP probe ──────────────────────────────────────────────────────────
   let smtpResult = {
     checked:     false,
@@ -164,14 +176,7 @@ export async function verifyEmail(input: EngineInput): Promise<VerificationResul
   const smtpMs = Date.now() - t3;
 
   // ── 6b. Deliverability checks (SPF/DKIM/DMARC/Blacklist) + toxic + lookalike
-  const [deliverability, toxicResult, lookalikeResult] = await Promise.all([
-    checkDeliverability(domain).catch(() => ({
-      spfValid: false, spfRecord: null, dmarcValid: false, dmarcRecord: null,
-      dkimFound: false, dkimSelectors: [], blacklisted: false, blacklists: [],
-    })),
-    Promise.resolve(checkToxic(domain)),
-    Promise.resolve(checkLookalike(domain)),
-  ]);
+  const [deliverability, toxicResult, lookalikeResult] = await deliverabilityPromise;
 
   const freeEmail = isFreeEmailProvider(domain);
   // "Did you mean" reuses the lookalike check's own near-miss detection —
