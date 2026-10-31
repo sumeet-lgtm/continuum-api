@@ -4,6 +4,15 @@ import type { Prisma } from '@prisma/client';
 export type PrismaTx = Prisma.TransactionClient;
 
 /**
+ * Prisma's interactive-transaction defaults (maxWait 2s for a pooled connection,
+ * timeout 5s) are too tight when the database is a long round trip away: under
+ * concurrent requests a transaction waiting for a connection throws, and callers
+ * like POST /v1/send then fall back to an unlogged ephemeral_ message id (the
+ * email still sends, but is missing from /v1/messages and from bounce matching).
+ */
+const TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
+
+/**
  * Runs `fn` with a Prisma client scoped to one tenant's Row-Level Security
  * context. SET LOCAL (not SET) is required here: it's transaction-scoped
  * and reverts automatically at COMMIT/ROLLBACK, which is what makes this
@@ -33,7 +42,7 @@ export async function withTenant<T>(
     }
     await tx.$executeRawUnsafe(`SET LOCAL app.current_api_key_id = '${apiKeyId}'`);
     return fn(tx);
-  });
+  }, TX_OPTIONS);
 }
 
 /**
@@ -56,7 +65,7 @@ export async function withOrgTenant<T>(
     }
     await tx.$executeRawUnsafe(`SET LOCAL app.current_org_id = '${orgId}'`);
     return fn(tx);
-  });
+  }, TX_OPTIONS);
 }
 
 /**
@@ -72,5 +81,5 @@ export async function withRlsBypass<T>(fn: (tx: PrismaTx) => Promise<T>): Promis
   return prisma.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(`SET LOCAL app.rls_bypass = 'true'`);
     return fn(tx);
-  });
+  }, TX_OPTIONS);
 }
