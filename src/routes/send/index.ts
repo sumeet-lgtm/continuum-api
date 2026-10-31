@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
@@ -367,7 +368,7 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
               domainId: domain_id ?? null,
               idempotencyKey: idempotency_key ?? null,
               tags: tags ?? {},
-              trackingToken: trackOpens || trackClicks ? 'pending' : null,
+              trackingToken: trackOpens || trackClicks ? `pending_${randomUUID()}` : null,
             },
             select: { id: true, createdAt: true },
           }),

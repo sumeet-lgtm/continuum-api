@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../../plugins/auth.js';
@@ -117,7 +118,7 @@ export async function batchSendRoute(fastify: FastifyInstance): Promise<void> {
                 status: 'queued',
                 tags: tags ?? {},
                 idempotencyKey: msg.idempotency_key ?? null,
-                trackingToken: 'pending',
+                trackingToken: `pending_${randomUUID()}`,
               },
               select: { id: true },
             }),
