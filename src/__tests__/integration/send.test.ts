@@ -247,6 +247,45 @@ describe('POST /v1/send', () => {
     expect(mockSendViaSes).not.toHaveBeenCalled();
   });
 
+  it('an idempotent replay wins over a suppression hit and never sends again', async () => {
+    // The pre-send lookups now run concurrently; the replay must still be
+    // answered first, exactly as when they ran one after another.
+    vi.mocked(prisma.sendMessage.findUnique).mockResolvedValueOnce({
+      id: 'send-prev', sesMessageId: 'ses-prev', status: 'sent',
+    } as never);
+    mockSuppressFind.mockResolvedValueOnce({
+      id: 'sup-002', email: 'bad@example.com', reason: 'hard_bounce', apiKeyId: null, createdAt: new Date(),
+    });
+
+    const res = await send({
+      to: 'bad@example.com', subject: 'Hi', text_body: 'hi', idempotency_key: 'idem-1',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ id: 'send-prev', idempotent: true });
+    expect(mockSendViaSes).not.toHaveBeenCalled();
+    expect(mockSendCreate).not.toHaveBeenCalled();
+  });
+
+  it('runs the suppression and verification-history lookups concurrently, not back to back', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const slow = <T,>(value: T) => async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 20));
+      inFlight -= 1;
+      return value;
+    };
+    mockSuppressFind.mockImplementationOnce(slow(null) as never);
+    mockVerifyFind.mockImplementationOnce(slow(null) as never);
+
+    const res = await send({ to: 'user@example.com', subject: 'Hi', text_body: 'hi' });
+
+    expect(res.statusCode).toBe(200);
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
+  });
+
   it('returns 429 once currentMonthSendUsage reaches the plan limit', async () => {
     mockFindKey.mockResolvedValue(
       makeKey({ id: 'key-quota-001', currentMonthSendUsage: 1_000, monthlySendLimit: 1_000, plan: 'free' }),

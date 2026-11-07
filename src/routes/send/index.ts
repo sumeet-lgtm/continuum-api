@@ -143,32 +143,68 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
       } = parsed.data;
       const apiKeyId = request.apiKey.id;
 
+      // ── Pre-send lookups, run concurrently ─────────────────────────────────────
+      // Idempotency, suppression, recent-verification and domain lookups are
+      // independent reads, and each is its own DB transaction (BEGIN + SET
+      // LOCAL + query + COMMIT). Run back to back they cost several seconds
+      // of pure round-trip latency; run together they cost the slowest one.
+      // Results are still consumed in the original order below so which error
+      // wins (idempotent replay, then suppression, then domain) is unchanged.
+      const needsRecentLookup = !verify_before_send;
+      const [idemRes, suppressedRes, recentRes, domainRes] = await Promise.allSettled([
+        idempotency_key
+          ? withTenant(apiKeyId, (tx) =>
+              tx.sendMessage.findUnique({
+                where: { idempotencyKey: idempotency_key },
+                select: { id: true, sesMessageId: true, status: true },
+              }),
+            )
+          : Promise.resolve(null),
+        // withRlsBypass, not withTenant: a hard bounce/complaint under ANY
+        // tenant's send means this address doesn't work, full stop — scoping
+        // this by apiKeyId would hide another tenant's suppression of the
+        // same address, letting sends through to a known-bad recipient.
+        withRlsBypass((tx) => tx.suppression.findUnique({ where: { email: to } })),
+        needsRecentLookup
+          ? withTenant(apiKeyId, (tx) =>
+              tx.verification.findFirst({
+                where: { email: to, apiKeyId },
+                orderBy: { checkedAt: 'desc' },
+                select: { id: true, status: true, isDisposable: true },
+              }),
+            )
+          : Promise.resolve(null),
+        domain_id
+          ? withTenant(apiKeyId, (tx) =>
+              tx.sendingDomain.findFirst({
+                where: { id: domain_id, apiKeyId, status: 'verified' },
+                select: {
+                  id: true,
+                  name: true,
+                  trackOpens: true,
+                  trackClicks: true,
+                  trackingDomain: true,
+                },
+              }),
+            )
+          : Promise.resolve(null),
+      ]);
+
       // ── Idempotency check ──────────────────────────────────────────────────────
-      if (idempotency_key) {
-        const existing = await withTenant(apiKeyId, (tx) =>
-          tx.sendMessage.findUnique({
-            where: { idempotencyKey: idempotency_key },
-            select: { id: true, sesMessageId: true, status: true },
-          }),
-        );
-        if (existing) {
-          return reply.status(200).send({
-            id: existing.id,
-            sesMessageId: existing.sesMessageId,
-            status: existing.status,
-            idempotent: true,
-          });
-        }
+      if (idemRes.status === 'rejected') throw idemRes.reason;
+      const existing = idemRes.value;
+      if (existing) {
+        return reply.status(200).send({
+          id: existing.id,
+          sesMessageId: existing.sesMessageId,
+          status: existing.status,
+          idempotent: true,
+        });
       }
 
       // ── Suppression check ──────────────────────────────────────────────────────
-      // withRlsBypass, not withTenant: a hard bounce/complaint under ANY
-      // tenant's send means this address doesn't work, full stop — scoping
-      // this by apiKeyId would hide another tenant's suppression of the
-      // same address, letting sends through to a known-bad recipient.
-      const suppressed = await withRlsBypass((tx) =>
-        tx.suppression.findUnique({ where: { email: to } }),
-      );
+      if (suppressedRes.status === 'rejected') throw suppressedRes.reason;
+      const suppressed = suppressedRes.value;
       if (suppressed) {
         throw Errors.forbidden(
           `${to} is on the suppression list (${suppressed.reason}) and cannot be sent to.`,
@@ -190,27 +226,16 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
             `${to} failed verification (status: ${result.status}${result.checks.isDisposable ? ', disposable' : ''}) — refusing to send.`,
           );
         }
+      } else if (recentRes.status === 'rejected') {
+        logger.warn(
+          { err: recentRes.reason, to, apiKeyId },
+          'Recent-verification lookup failed — proceeding without it',
+        );
       } else {
-        try {
-          const recent = await withTenant(apiKeyId, (tx) =>
-            tx.verification.findFirst({
-              where: { email: to, apiKeyId },
-              orderBy: { checkedAt: 'desc' },
-              select: { id: true, status: true, isDisposable: true },
-            }),
-          );
-          if (recent) verificationId = recent.id;
-          if (recent && (recent.status === 'invalid' || recent.isDisposable)) {
-            logger.warn(
-              { to, apiKeyId, verificationId },
-              'Sending to a previously-flagged address',
-            );
-          }
-        } catch (err) {
-          logger.warn(
-            { err, to, apiKeyId },
-            'Recent-verification lookup failed — proceeding without it',
-          );
+        const recent = recentRes.value;
+        if (recent) verificationId = recent.id;
+        if (recent && (recent.status === 'invalid' || recent.isDisposable)) {
+          logger.warn({ to, apiKeyId, verificationId }, 'Sending to a previously-flagged address');
         }
       }
 
@@ -223,18 +248,8 @@ export async function sendRoute(fastify: FastifyInstance): Promise<void> {
         trackingDomain: string | null;
       } | null = null;
       if (domain_id) {
-        sendingDomain = await withTenant(apiKeyId, (tx) =>
-          tx.sendingDomain.findFirst({
-            where: { id: domain_id, apiKeyId, status: 'verified' },
-            select: {
-              id: true,
-              name: true,
-              trackOpens: true,
-              trackClicks: true,
-              trackingDomain: true,
-            },
-          }),
-        );
+        if (domainRes.status === 'rejected') throw domainRes.reason;
+        sendingDomain = domainRes.value;
         if (!sendingDomain)
           throw Errors.validationFailed([
             { field: 'domain_id', message: 'Domain not found or not verified.' },
