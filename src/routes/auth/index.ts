@@ -9,7 +9,8 @@ import { sendEmail, welcomeEmail, loginAlertEmail } from '../../lib/email.js';
 import { hashApiKey } from '../../lib/crypto.js';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 import { logAudit } from '../../lib/audit.js';
-import { signOAuthState, verifyOAuthState, isAllowedRedirect } from '../../lib/oauthState.js';
+import { signOAuthState, verifyOAuthStateFull, isAllowedRedirect } from '../../lib/oauthState.js';
+import { createSsoCode, consumeSsoCode } from '../../lib/ssoCode.js';
 import { getPlanLimit, getSendLimit } from '../../plugins/usageMeter.js';
 
 let _workos: WorkOS | null = null;
@@ -43,9 +44,10 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         docs: 'Set WORKOS_API_KEY and WORKOS_CLIENT_ID environment variables.',
       });
     }
-    const { redirect_uri } = request.query as Record<string, string>;
+    const { redirect_uri, response } = request.query as Record<string, string>;
     const state = signOAuthState(
       isAllowedRedirect(redirect_uri) ? redirect_uri : config.DASHBOARD_URL,
+      response === 'code' ? 'code' : 'token',
     );
 
     const authorizationURL = getWorkOS().userManagement.getAuthorizationUrl({
@@ -87,7 +89,8 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       const { code, state } = request.query as Record<string, string>;
 
       // Only a signed, fresh, allow-listed redirect is honoured; anything else -> dashboard.
-      const redirectTarget = verifyOAuthState(state) ?? config.DASHBOARD_URL;
+      const verified = verifyOAuthStateFull(state);
+      const redirectTarget = verified?.redirect ?? config.DASHBOARD_URL;
 
       if (!code) {
         return reply.redirect(`${redirectTarget}?error=missing_code`, 302);
@@ -305,6 +308,15 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         );
 
         const separator = redirectTarget.includes('?') ? '&' : '?';
+        if (verified?.mode === 'code') {
+          // Keep the session JWT out of URLs/history/logs: hand back a single-use code instead.
+          try {
+            const otc = await createSsoCode(token);
+            return reply.redirect(`${redirectTarget}${separator}code=${encodeURIComponent(otc)}`, 302);
+          } catch (err) {
+            fastify.log.error({ err }, 'SSO code store failed — falling back to token redirect');
+          }
+        }
         return reply.redirect(
           `${redirectTarget}${separator}token=${encodeURIComponent(token)}`,
           302,
@@ -330,6 +342,20 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
           302,
         );
       }
+    },
+  );
+
+  // ─── POST /auth/exchange ────────────────────────────────────────────────────
+  // Swaps a single-use SSO code (from the sign-in redirect) for the session JWT.
+  fastify.post(
+    '/auth/exchange',
+    { preHandler: [requireIpRateLimit('auth-exchange', 30)] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { code } = (request.body ?? {}) as { code?: unknown };
+      const jwt = typeof code === 'string' ? await consumeSsoCode(code) : null;
+      if (!jwt) throw Errors.unauthorized('Invalid or expired sign-in code — please sign in again');
+      reply.header('Cache-Control', 'no-store');
+      return { token: jwt };
     },
   );
 

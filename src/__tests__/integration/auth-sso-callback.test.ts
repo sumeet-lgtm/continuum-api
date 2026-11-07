@@ -106,6 +106,19 @@ vi.mock('../../lib/email.js', () => ({
 }));
 
 const { logAuditMock } = vi.hoisted(() => ({ logAuditMock: vi.fn().mockResolvedValue(undefined) }));
+const codeStore = vi.hoisted(() => new Map<string, string>());
+vi.mock('../../lib/ssoCode.js', () => ({
+  createSsoCode: vi.fn(async (jwt: string) => {
+    const c = 'c'.repeat(43);
+    codeStore.set(c, jwt);
+    return c;
+  }),
+  consumeSsoCode: vi.fn(async (c: string) => {
+    const v = codeStore.get(c) ?? null;
+    codeStore.delete(c);
+    return v;
+  }),
+}));
 vi.mock('../../lib/audit.js', () => ({ logAudit: logAuditMock }));
 
 import { authRoutes } from '../../routes/auth/index.js';
@@ -305,6 +318,30 @@ describe('GET /auth/sso/callback', () => {
     // Tampered signature and malformed state fall back.
     expect((await get(signOAuthState('https://app.continuumapi.com/finish') + 'x')).headers.location).toMatch(dash);
     expect((await get('not-valid-base64url!!')).headers.location).toMatch(dash);
+  });
+
+  it('code mode: redirects with a single-use code (no JWT in the URL) and /auth/exchange redeems it once', async () => {
+    authenticateWithCodeMock.mockResolvedValue({ user: workosUser() });
+    findUniqueUserMock.mockResolvedValue(null);
+    createUserMock.mockResolvedValue({ id: 'user-7', email: 'newuser@wyberai.com' });
+    findFirstApiKeyMock.mockResolvedValue(null);
+    createApiKeyMock.mockResolvedValue({ id: 'key-7', keyPrefix: 'cnt_st0002', orgId: null });
+
+    const state = signOAuthState('https://app.continuumapi.com/callback', 'code');
+    const res = await app.inject({ method: 'GET', url: `/auth/sso/callback?code=abc&state=${state}` });
+    const loc = res.headers.location as string;
+    expect(loc).toMatch(/^https:\/\/app\.continuumapi\.com\/callback\?code=/);
+    expect(loc).not.toContain('token=');
+
+    const code = new URL(loc).searchParams.get('code')!;
+    const ex = await app.inject({ method: 'POST', url: '/auth/exchange', payload: { code } });
+    expect(ex.statusCode).toBe(200);
+    expect(typeof ex.json().token).toBe('string');
+
+    const replay = await app.inject({ method: 'POST', url: '/auth/exchange', payload: { code } });
+    expect(replay.statusCode).toBe(401);
+    const bad = await app.inject({ method: 'POST', url: '/auth/exchange', payload: { code: 'nope' } });
+    expect(bad.statusCode).toBe(401);
   });
 
   it('redirects to the dashboard login with an error and logs the failure when WorkOS rejects the code', async () => {

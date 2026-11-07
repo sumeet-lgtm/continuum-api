@@ -44,6 +44,7 @@ export const redis = {
   expire: (key: string, seconds: number): Promise<number> => getClient().expire(key, seconds),
   ttl: (key: string): Promise<number> => getClient().ttl(key),
   get: (key: string): Promise<string | null> => getClient().get(key),
+  getdel: (key: string): Promise<string | null> => getClient().getdel(key),
   del: (key: string): Promise<number> => getClient().del(key),
   set: (key: string, value: string, opts?: SetOptions): Promise<'OK' | null> => {
     if (opts?.nx && opts?.px !== undefined) {

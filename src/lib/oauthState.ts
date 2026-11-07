@@ -31,13 +31,17 @@ export function isAllowedRedirect(uri: unknown): uri is string {
   return allowed.includes(target.origin);
 }
 
-export function signOAuthState(redirectUri: string): string {
-  const body = Buffer.from(JSON.stringify({ r: redirectUri, t: Date.now() })).toString('base64url');
+export type OAuthResponseMode = 'token' | 'code';
+
+export function signOAuthState(redirectUri: string, mode: OAuthResponseMode = 'token'): string {
+  const body = Buffer.from(JSON.stringify({ r: redirectUri, t: Date.now(), m: mode })).toString('base64url');
   return `${body}.${mac(body).toString('base64url')}`;
 }
 
-/** Returns the redirect URI if state is authentic, fresh and allow-listed; otherwise null. */
-export function verifyOAuthState(state: string | undefined): string | null {
+/** Returns redirect + response mode if state is authentic, fresh and allow-listed; otherwise null. */
+export function verifyOAuthStateFull(
+  state: string | undefined,
+): { redirect: string; mode: OAuthResponseMode } | null {
   if (!state) return null;
   const [body, sig, extra] = state.split('.');
   if (!body || !sig || extra !== undefined) return null;
@@ -47,8 +51,13 @@ export function verifyOAuthState(state: string | undefined): string | null {
   try {
     const parsed = JSON.parse(Buffer.from(body, 'base64url').toString());
     if (typeof parsed.t !== 'number' || Date.now() - parsed.t > STATE_TTL_MS) return null;
-    return isAllowedRedirect(parsed.r) ? parsed.r : null;
+    if (!isAllowedRedirect(parsed.r)) return null;
+    return { redirect: parsed.r, mode: parsed.m === 'code' ? 'code' : 'token' };
   } catch {
     return null;
   }
+}
+
+export function verifyOAuthState(state: string | undefined): string | null {
+  return verifyOAuthStateFull(state)?.redirect ?? null;
 }
