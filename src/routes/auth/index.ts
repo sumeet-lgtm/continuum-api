@@ -9,6 +9,7 @@ import { sendEmail, welcomeEmail, loginAlertEmail } from '../../lib/email.js';
 import { hashApiKey } from '../../lib/crypto.js';
 import { requireIpRateLimit } from '../../plugins/rateLimit.js';
 import { logAudit } from '../../lib/audit.js';
+import { signOAuthState, verifyOAuthState, isAllowedRedirect } from '../../lib/oauthState.js';
 import { getPlanLimit, getSendLimit } from '../../plugins/usageMeter.js';
 
 let _workos: WorkOS | null = null;
@@ -43,9 +44,9 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       });
     }
     const { redirect_uri } = request.query as Record<string, string>;
-    const state = Buffer.from(
-      JSON.stringify({ redirect_uri: redirect_uri ?? config.DASHBOARD_URL }),
-    ).toString('base64url');
+    const state = signOAuthState(
+      isAllowedRedirect(redirect_uri) ? redirect_uri : config.DASHBOARD_URL,
+    );
 
     const authorizationURL = getWorkOS().userManagement.getAuthorizationUrl({
       provider,
@@ -85,17 +86,8 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { code, state } = request.query as Record<string, string>;
 
-      let redirectTarget = config.DASHBOARD_URL;
-      try {
-        if (state) {
-          const parsed = JSON.parse(Buffer.from(state, 'base64url').toString());
-          if (typeof parsed.redirect_uri === 'string') {
-            redirectTarget = parsed.redirect_uri;
-          }
-        }
-      } catch {
-        // malformed state — fall back to default dashboard URL
-      }
+      // Only a signed, fresh, allow-listed redirect is honoured; anything else -> dashboard.
+      const redirectTarget = verifyOAuthState(state) ?? config.DASHBOARD_URL;
 
       if (!code) {
         return reply.redirect(`${redirectTarget}?error=missing_code`, 302);

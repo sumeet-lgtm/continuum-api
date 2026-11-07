@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { signOAuthState } from '../../lib/oauthState.js';
 
 // /auth/sso/callback is the single highest-risk route in the codebase —
 // it resolves WorkOS identity into a local user + api key + session, and
@@ -282,27 +283,28 @@ describe('GET /auth/sso/callback', () => {
     );
   });
 
-  it('honors a custom redirect_uri encoded in state, and falls back cleanly on malformed state', async () => {
+  it('only honors a signed, allow-listed redirect_uri in state; everything else falls back to the dashboard', async () => {
     authenticateWithCodeMock.mockResolvedValue({ user: workosUser() });
     findUniqueUserMock.mockResolvedValue(null);
     createUserMock.mockResolvedValue({ id: 'user-6', email: 'newuser@wyberai.com' });
-    findFirstApiKeyMock.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    findFirstApiKeyMock.mockResolvedValue(null);
     createApiKeyMock.mockResolvedValue({ id: 'key-6', keyPrefix: 'cnt_st0001', orgId: null });
 
-    const state = Buffer.from(
-      JSON.stringify({ redirect_uri: 'https://custom.example.com/finish' }),
-    ).toString('base64url');
-    const res = await app.inject({
-      method: 'GET',
-      url: `/auth/sso/callback?code=abc&state=${state}`,
-    });
-    expect(res.headers.location).toMatch(/^https:\/\/custom\.example\.com\/finish\?token=/);
+    const dash = /^https:\/\/app\.continuumapi\.com\?token=/;
+    const get = (state: string) =>
+      app.inject({ method: 'GET', url: `/auth/sso/callback?code=abc&state=${state}` });
 
-    const res2 = await app.inject({
-      method: 'GET',
-      url: '/auth/sso/callback?code=abc&state=not-valid-base64url!!',
-    });
-    expect(res2.headers.location).toMatch(/^https:\/\/app\.continuumapi\.com\?token=/);
+    // Unsigned attacker-supplied state (the reported exploit) must NOT redirect off-domain.
+    const forged = Buffer.from(JSON.stringify({ redirect_uri: 'https://attacker.example/cb' })).toString('base64url');
+    expect((await get(forged)).headers.location).toMatch(dash);
+    // Signed but not allow-listed is rejected too.
+    expect((await get(signOAuthState('https://attacker.example/cb'))).headers.location).toMatch(dash);
+    // Signed + allow-listed dashboard path is honoured.
+    const ok = await get(signOAuthState('https://app.continuumapi.com/finish'));
+    expect(ok.headers.location).toMatch(/^https:\/\/app\.continuumapi\.com\/finish\?token=/);
+    // Tampered signature and malformed state fall back.
+    expect((await get(signOAuthState('https://app.continuumapi.com/finish') + 'x')).headers.location).toMatch(dash);
+    expect((await get('not-valid-base64url!!')).headers.location).toMatch(dash);
   });
 
   it('redirects to the dashboard login with an error and logs the failure when WorkOS rejects the code', async () => {
